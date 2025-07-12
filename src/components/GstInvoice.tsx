@@ -430,6 +430,14 @@ const GstInvoiceGenerator = () => {
             <div className="text-center text-gray-600">
               <p>Thank you for your business!</p>
             </div>
+
+            {/* Bank Details */}
+            <div className="mt-6 pt-4 border-t text-sm text-left">
+              <h4 className="font-semibold mb-2 text-gray-700">Bank Details:</h4>
+              <p><span className="font-medium">Account Name:</span> TSMC CREATIONS INDIA PRIVATE LIMITED</p>
+              <p><span className="font-medium">Account No:</span> 10227415981</p>
+              <p><span className="font-medium">IFSC:</span> IDFB0080138</p>
+            </div>
           </div>
         </div>
       </div>

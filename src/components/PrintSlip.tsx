@@ -22,7 +22,7 @@ export default function PrintSlip() {
     const lines = rawInput.split('\n');
     let outputHtml = '';
 
-    const fromAddress = `TSMC Creations India\n14/5 2nd Floor, Sri Saara Towers,\nBalasundaram Road, Paapanaickenpalayam,\nCoimbatore, Tamil Nadu - 641037\nPhone: 8610554711`;
+    const fromAddress = `TSMC Creations India\n14/5 2nd Floor, Sri Saara Towers,\nBalasundaram Road, Paapanaickenpalayam,\nCoimbatore, TN - 641037\nPh: 8610554711`;
 
     lines.forEach((line) => {
       const parts = line.split('\t');
@@ -45,48 +45,39 @@ export default function PrintSlip() {
       const html = `
         <div class="slip">
           <div class="slip-header">
-            <div class="ship-to" style="width: 100%; border-right: none;">
-              <div class="ship-to-label">SHIP TO:</div>
-              <div class="address">${toAddress}\n${phone ? `<span class="phone-highlight">${phone}</span>` : ''}</div>
+            <div class="ship-to-label">SHIP TO:</div>
+            <div class="address">${toAddress}\n${phone ? `<span class="phone-highlight">${phone}</span>` : ''}</div>
+          </div>
+          
+          <div class="order-details">
+            <div class="detail-row">
+              <div class="detail-label">ORDER:</div>
+              <div class="detail-value">${orderId}</div>
+            </div>
+            <div class="detail-row">
+              <div class="detail-label">WEIGHT:</div>
+              <div class="detail-value">${totalWeightKg}</div>
+            </div>
+            <div class="detail-row">
+              <div class="detail-label">DATE:</div>
+              <div class="detail-value">${date}</div>
+            </div>
+            <div class="detail-row">
+              <div class="detail-label">MODE:</div>
+              <div class="detail-value">${mode} | Qty: ${qty}</div>
             </div>
           </div>
           
-          <div class="slip-details">
-            <div class="details-left">
-              <div class="detail-row">
-                <div class="detail-label">ORDER ID:</div>
-                <div class="detail-value">${orderId}</div>
-              </div>
-              <div class="detail-row">
-                <div class="detail-label">WEIGHT:</div>
-                <div class="detail-value">${totalWeightKg} (${qty} × 450g)</div>
-              </div>
-              <div class="detail-row">
-                <div class="detail-label">DIMENSIONS:</div>
-                <div class="detail-value">-</div>
-              </div>
-              <div class="detail-row">
-                <div class="detail-label">SHIPPING DATE:</div>
-                <div class="detail-value">${date}</div>
-              </div>
-            </div>
-            <div class="details-right">
-              <div class="remarks">
-                <div class="remarks-label">REMARKS:</div>
-                <div>Mode: ${mode} | Qty: ${qty}</div>
-              </div>
+          <div class="barcode-section">
+            <div class="barcode-container">
+              <svg class="barcode" jsbarcode-format="code128" jsbarcode-value="${orderId}" jsbarcode-textmargin="5" jsbarcode-fontoptions="bold" jsbarcode-height="100" jsbarcode-width="3" jsbarcode-fontsize="16"></svg>
             </div>
           </div>
           
-          <div class="barcode-container">
-            <div class="barcode-column">
-              <svg class="barcode" jsbarcode-format="code128" jsbarcode-value="${orderId}" jsbarcode-textmargin="0" jsbarcode-fontoptions="bold"></svg>
-            </div>
-            <div class="from-column">
-              <div class="from-label" style="margin-bottom: 5px;">FROM:</div>
-              <img src="https://aurawill.in/cdn/shop/files/White-label.png?v=1741582343&width=200" style="height: 50px; object-fit: contain; margin-bottom: 10px;" alt="Aurawill Logo" />
-              <div class="address" style="font-size: 14px;">${fromAddress}</div>
-            </div>
+          <div class="from-section">
+            <div class="from-label">FROM:</div>
+            <img src="https://aurawill.in/cdn/shop/files/White-label.png?v=1741582343&width=200" class="logo" alt="Aurawill Logo" />
+            <div class="from-address" style="font-size: 12px; line-height: 1.4;">${fromAddress}</div>
           </div>
         </div>
       `;
@@ -114,142 +105,124 @@ export default function PrintSlip() {
           <title>Courier Slip Generator</title>
           <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
           <style>
+            @page {
+              size: 4in 6in portrait;
+              margin: 0;
+            }
             body {
               font-family: Arial, sans-serif;
-              padding: 20px;
-              max-width: 850px;
-              margin: auto;
-              background: #f9f9f9;
+              margin: 0;
+              padding: 0;
+              background: white;
+              width: 4in;
+              height: 6in;
             }
             .slip {
               background: white;
               border: 2px solid #000;
+              box-sizing: border-box;
+              width: 4in;
+              height: 6in;
               padding: 0;
-              margin-bottom: 30px;
-              border-radius: 10px;
-              box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+              margin: 0;
               page-break-after: always;
-              width: 800px;
               overflow: hidden;
-            }
-            .slip-header {
-              display: flex;
-              width: 100%;
-            }
-            .ship-from {
-              width: 50%;
-              border-bottom: 2px solid #000;
-              padding: 0;
               display: flex;
               flex-direction: column;
-              justify-content: space-between;
             }
-            .ship-to {
-              width: 50%;
-              border-right: 2px solid #000;
-              border-bottom: 2px solid #000;
-              padding: 0;
-              position: relative;
+            .slip-header {
+              padding: 5px;
             }
             .ship-to-label {
               background: #000;
               color: white;
-              padding: 10px 20px;
+              padding: 3px 5px;
               font-weight: bold;
-              font-size: 28px;
+              font-size: 14px;
               display: inline-block;
-              margin-bottom: 15px;
-              border-radius: 0 0 10px 0;
-            }
-            .from-label {
-              padding: 10px 20px;
-              font-weight: bold;
-              font-size: 20px;
-              color: #555;
             }
             .address {
-              padding: 10px 20px 20px 20px;
-              font-size: 18px;
-              line-height: 1.5;
-            }
-            .ship-to .address {
-              font-size: 20px;
+              padding: 5px;
+              font-size: 12px;
+              line-height: 1.2;
               font-weight: 500;
             }
-            .slip-details {
-              display: flex;
-              width: 100%;
-            }
-            .details-left {
-              width: 50%;
-              border-right: 2px solid #000;
-            }
-            .details-right {
-              width: 50%;
+            .order-details {
+              border-top: 1px solid #000;
             }
             .detail-row {
-              padding: 10px 20px;
+              padding: 3px 5px;
               display: flex;
-              border-bottom: 2px solid #000;
-            }
-            .detail-row:last-child {
-              border-bottom: none;
+              border-bottom: 1px solid #ddd;
+              font-size: 11px;
             }
             .detail-label {
               font-weight: bold;
-              width: 40%;
-              font-size: 16px;
+              width: 30%;
               color: #555;
             }
             .detail-value {
-              width: 60%;
-              font-size: 16px;
+              width: 70%;
             }
-            .remarks {
-              padding: 10px 20px;
-              min-height: 100px;
-            }
-            .remarks-label {
-              font-weight: bold;
-              font-size: 16px;
-              margin-bottom: 10px;
-              color: #555;
+            .barcode-section {
+              padding: 5px;
+              text-align: center;
+              border-top: 1px solid #000;
+              border-bottom: 1px solid #000;
+              margin: 3px 0;
+              background-color: white;
             }
             .barcode-container {
-              padding: 20px;
-              border-top: 2px solid #000;
-              display: flex;
+              background-color: white;
+              padding: 8px;
+              display: inline-block;
+              border: 1px solid #ddd;
             }
-            .barcode-column {
-              width: 55%;
-              text-align: center;
-              display: flex;
-              align-items: center;
-              justify-content: center;
+            .barcode {
+              width: 95%;
+              height: 60px;
+              background-color: white;
+              font-size: 24px;
             }
-            .from-column {
-              width: 45%;
-              text-align: left;
-              padding-left: 20px;
-              border-left: 1px solid #ddd;
+            .from-section {
+              padding: 5px;
+              border-top: 1px solid #000;
+            }
+            .from-label {
+              font-weight: bold;
+              font-size: 11px;
+              color: #555;
+              margin-bottom: 2px;
+            }
+            .logo {
+              height: 30px;
+              object-fit: contain;
+              margin-bottom: 3px;
+              display: block;
+            }
+            .from-address {
+              font-size: 12px;
+              line-height: 1.4;
             }
             .phone-highlight {
               background-color: #ffff00;
-              padding: 2px 5px;
+              padding: 1px 2px;
               font-weight: bold;
-              border-radius: 3px;
-            }
-            .barcode {
-              width: 90%;
-              max-height: 120px;
             }
             @media print {
               body {
-                background: white;
+                margin: 0;
+                padding: 0;
               }
               .slip {
                 margin: 0;
-                box-shadow: none;
+                border: 2px solid #000;
+                width: 100%;
+                height: 100%;
+                box-sizing: border-box;
+              }
+              .detail-row, .barcode-section, .from-section {
+                border-color: #000 !important;
               }
             }
           </style>
@@ -258,7 +231,14 @@ export default function PrintSlip() {
           <div id="output">${output}</div>
           <script>
             window.onload = function() {
-              JsBarcode(".barcode").init();
+              JsBarcode(".barcode", { 
+                width: 3,
+                height: 100,
+                fontSize: 16,
+                margin: 5,
+                displayValue: true,
+                textMargin: 5
+              }).init();
               setTimeout(() => {
                 window.print();
               }, 500);

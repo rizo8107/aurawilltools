@@ -1,486 +1,269 @@
-import React, { useState, useEffect } from 'react';
-import {
-  CheckCircle,
-  AlertCircle,
-  Clock,
-  Truck,
-  Edit,
-  Save,
-  X,
-  ChevronDown,
-  ChevronUp,
-  FileText,
-  Plus
-} from 'lucide-react';
-import { Order, OrderStatus, loadOrders, updateOrder, deleteOrder, orderEvents, ORDER_EVENTS } from '../services/orderService';
+import { useState, useEffect, useRef, forwardRef } from 'react';
+import { useReactToPrint } from 'react-to-print';
+import Barcode from 'react-barcode';
+import { ListOrdered, ServerCrash, Loader, Printer, Calendar, FilterX } from 'lucide-react';
 
-// Define local interfaces
-interface EditValues {
-  status?: OrderStatus;
-  notes?: string;
-  trackingNumber?: string;
+// Define the structure of a single order from the API
+export interface Order {
+  row_number: number;
+  Date: string;
+  Time: string;
+  orderNumber: string;
+  customerName: string;
+  phone: number | string;
+  address: string;
+  productName: string;
+  quantity: number;
+  price: number;
+  trackingNumber: number | string;
 }
 
-export default function OrderList() {
-  const [orders, setOrders] = useState<Order[]>([]);
-  const [editingOrder, setEditingOrder] = useState<{[key: string]: boolean}>({});
-  const [editValues, setEditValues] = useState<{[key: string]: EditValues}>({});
-  const [sortField, setSortField] = useState<keyof Order>('date');
-  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
-  const [message, setMessage] = useState('');
-  const [messageType, setMessageType] = useState<'success' | 'error' | ''>('');
-  const [showAddNoteModal, setShowAddNoteModal] = useState(false);
-  const [selectedOrderId, setSelectedOrderId] = useState<string>('');
-  const [noteText, setNoteText] = useState('');
-
-  // Load orders from Supabase on component mount
-  useEffect(() => {
-    // Fetch orders when component mounts
-    const fetchOrders = async () => {
-      try {
-        const ordersData = await loadOrders();
-        setOrders(ordersData);
-      } catch (error) {
-        console.error('Error loading orders:', error);
-        showMessage('Failed to load orders', 'error');
-      }
-    };
-    
-    fetchOrders();
-    
-    // Set up event listeners for order updates
-    const orderAddedListener = orderEvents.addEventListener(ORDER_EVENTS.ORDER_ADDED, (newOrder: Order) => {
-      setOrders(prevOrders => [newOrder, ...prevOrders]);
-      showMessage('New order added', 'success');
-    });
-    
-    const orderUpdatedListener = orderEvents.addEventListener(ORDER_EVENTS.ORDER_UPDATED, (updatedOrder: Order) => {
-      setOrders(prevOrders => {
-        return prevOrders.map(order => order.id === updatedOrder.id ? updatedOrder : order);
-      });
-    });
-    
-    const trackingUpdatedListener = orderEvents.addEventListener(ORDER_EVENTS.TRACKING_UPDATED, (updatedOrder: Order) => {
-      setOrders(prevOrders => {
-        return prevOrders.map(order => order.id === updatedOrder.id ? updatedOrder : order);
-      });
-      showMessage(`Tracking updated for order ${updatedOrder.orderNumber}`, 'success');
-    });
-    
-    // Clean up listeners on unmount
-    return () => {
-      orderAddedListener();
-      orderUpdatedListener();
-      trackingUpdatedListener();
-    };
-  }, []);
-
-  // Handle sorting
-  const handleSort = (field: keyof Order) => {
-    if (sortField === field) {
-      setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
-    } else {
-      setSortField(field);
-      setSortDirection('asc');
-    }
-  };
-
-  // Sort orders based on current sort field and direction
-  const sortedOrders = [...orders].sort((a, b) => {
-    if (a[sortField] < b[sortField]) return sortDirection === 'asc' ? -1 : 1;
-    if (a[sortField] > b[sortField]) return sortDirection === 'asc' ? 1 : -1;
-    return 0;
-  });
-
-  // Start editing an order
-  const startEditing = (orderId: string, currentStatus: string, currentNotes: string, currentTracking: string = '') => {
-    setEditingOrder(prev => ({
-      ...prev,
-      [orderId]: true
-    }));
-    setEditValues(prev => ({
-      ...prev,
-      [orderId]: {
-        status: currentStatus,
-        notes: currentNotes,
-        trackingNumber: currentTracking
-      }
-    }));
-  };
-
-  // Cancel editing
-  const cancelEditing = (orderId: string) => {
-    setEditingOrder(prev => ({
-      ...prev,
-      [orderId]: false
-    }));
-    setEditValues(prev => {
-      const newValues = { ...prev };
-      delete newValues[orderId];
-      return newValues;
-    });
-  };
-
-  // Show message with auto-hide
-  const showMessage = (text: string, type: 'success' | 'error') => {
-    setMessage(text);
-    setMessageType(type);
-    
-    setTimeout(() => {
-      setMessage('');
-      setMessageType('');
-    }, 3000);
-  };
-  
-  // Save edited values
-  const saveEdits = async (orderId: string) => {
-    const orderToUpdate = orders.find(order => order.id === orderId);
-    if (!orderToUpdate) return;
-    
-    const updatedOrder = {
-      ...orderToUpdate,
-      status: (editValues[orderId]?.status || orderToUpdate.status),
-      notes: (editValues[orderId]?.notes || orderToUpdate.notes),
-      trackingNumber: (editValues[orderId]?.trackingNumber || orderToUpdate.trackingNumber)
-    };
-    
-    try {
-      const success = await updateOrder(updatedOrder);
-      if (success) {
-        showMessage('Order updated successfully', 'success');
-        setEditingOrder(prev => ({
-          ...prev,
-          [orderId]: false
-        }));
-        
-        // Refresh orders list
-        const ordersData = await loadOrders();
-        setOrders(ordersData);
-      } else {
-        showMessage('Failed to update order', 'error');
-      }
-    } catch (error) {
-      console.error('Error updating order:', error);
-      showMessage('Error updating order', 'error');
-    }
-  };
-
-  // Handle input changes
-  const handleInputChange = (
-    orderId: string, 
-    field: 'status' | 'notes' | 'trackingNumber', 
-    value: string
-  ) => {
-    setEditValues(prev => ({
-      ...prev,
-      [orderId]: {
-        ...prev[orderId],
-        [field]: value
-      }
-    }));
-  };
-  
-  // Open add note modal
-  const openAddNoteModal = (orderId: string) => {
-    setSelectedOrderId(orderId);
-    setNoteText('');
-    setShowAddNoteModal(true);
-  };
-  
-  // Close add note modal
-  const closeAddNoteModal = () => {
-    setShowAddNoteModal(false);
-    setSelectedOrderId('');
-    setNoteText('');
-  };
-  
-  // Add note to order
-  const addNoteToOrder = async () => {
-    if (!selectedOrderId || !noteText.trim()) return;
-    
-    const orderToUpdate = orders.find(order => order.id === selectedOrderId);
-    if (!orderToUpdate) return;
-    
-    const timestamp = new Date().toLocaleString();
-    const formattedNote = `${timestamp}: ${noteText.trim()}`;
-    
-    const updatedNotes = orderToUpdate.notes 
-      ? `${orderToUpdate.notes}\n\n${formattedNote}` 
-      : formattedNote;
-    
-    try {
-      const success = await updateOrder({
-        ...orderToUpdate,
-        notes: updatedNotes
-      });
-      
-      if (success) {
-        showMessage('Note added successfully', 'success');
-        // Refresh orders list
-        const ordersData = await loadOrders();
-        setOrders(ordersData);
-        closeAddNoteModal();
-      } else {
-        showMessage('Failed to add note', 'error');
-      }
-    } catch (error) {
-      console.error('Error adding note:', error);
-      showMessage('Error adding note', 'error');
-    }
-  };
-  
-  // Remove an order
-  const removeOrder = async (orderId: string) => {
-    if (window.confirm('Are you sure you want to remove this order?')) {
-      try {
-        const success = await deleteOrder(orderId);
-        if (success) {
-          showMessage('Order removed successfully', 'success');
-          // Refresh orders list
-          const ordersData = await loadOrders();
-          setOrders(ordersData);
-        } else {
-          showMessage('Failed to remove order', 'error');
-        }
-      } catch (error) {
-        console.error('Error removing order:', error);
-        showMessage('Error removing order', 'error');
-      }
-    }
-  };
-
-  // Get status icon based on status
-  const getStatusIcon = (status: string) => {
-    switch (status) {
-      case 'processing':
-        return <Clock size={18} className="text-blue-500" />;
-      case 'in-transit':
-        return <Truck size={18} className="text-orange-500" />;
-      case 'delivered':
-        return <CheckCircle size={18} className="text-green-500" />;
-      case 'cancelled':
-        return <AlertCircle size={18} className="text-red-500" />;
-      default:
-        return <Clock size={18} className="text-gray-500" />;
-    }
-  };
+// 1. Printable Slip Component
+// This component is what will actually be printed.
+// It's designed to be roughly 4x4 inches.
+const PrintableSlip = forwardRef<HTMLDivElement, { orders: Order[] }>(({ orders }, ref) => {
+  if (!orders || orders.length === 0) {
+    return null;
+  }
 
   return (
-    <div className="w-full">
-      <div className="mb-6">
-        <h2 className="text-xl font-semibold mb-2">Order List Management</h2>
-        <p className="text-gray-600">View and update all manual orders</p>
-      </div>
+    <div ref={ref} className="printable-area">
+      {orders.map((order) => (
+        <div key={order.row_number} className="p-4 border-2 border-black w-[4in] h-[4in] flex flex-col font-sans text-sm break-after-page">
+          
+          {/* Top Section: Tracking Info */}
+          <div className="flex justify-between items-center border-b border-black pb-2 mb-2">
+            <div className="text-left">
+              <p className="font-bold text-base">TRACKING #:</p>
+              <p className="text-lg">{order.trackingNumber || 'N/A'}</p>
+            </div>
+            <div className="text-right">
+              {order.trackingNumber ? (
+                <Barcode value={String(order.trackingNumber)} height={40} width={1.5} fontSize={12} />
+              ) : (
+                <div className="w-[180px] h-[40px] border border-dashed flex items-center justify-center text-gray-400">
+                  No Tracking
+                </div>
+              )}
+            </div>
+          </div>
 
-      {message && (
-        <div className={`p-4 mb-4 rounded-md ${
-          messageType === 'success' ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'
-        }`}>
-          {messageType === 'success' ? <CheckCircle size={18} className="inline mr-2" /> : <AlertCircle size={18} className="inline mr-2" />}
-          {message}
-        </div>
-      )}
+          {/* Middle Section */}
+          <div className="flex-grow flex flex-col">
+            {/* To Address */}
+            <div className="mb-2">
+              <p className="font-bold">TO:</p>
+              <div className="pl-4">
+                <p className="font-semibold">{order.customerName}</p>
+                <p>{order.address}</p>
+                <p>Phone: {order.phone}</p>
+              </div>
+            </div>
 
-      {orders.length === 0 ? (
-        <div className="text-center py-8 bg-gray-50 rounded-lg">
-          <p className="text-gray-500">No orders found. Create a new order to get started.</p>
+            {/* Product Details */}
+            <div className="border-t border-b border-dashed py-2 my-2">
+              <table className="w-full">
+                <tbody>
+                  <tr>
+                    <td className="py-1">Product:</td>
+                    <td className="py-1 text-right font-semibold">{order.productName}</td>
+                  </tr>
+                  <tr>
+                    <td className="py-1">Quantity:</td>
+                    <td className="py-1 text-right">{order.quantity}</td>
+                  </tr>
+                  <tr>
+                    <td className="py-1 font-bold">Total:</td>
+                    <td className="py-1 text-right font-bold">₹{Number(order.price) * Number(order.quantity) || 0}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            {/* Order ID */}
+            <div className="text-center my-auto">
+              <p className="text-xs font-semibold">ORDER #</p>
+              <Barcode value={order.orderNumber} height={40} width={1.5} fontSize={12} />
+            </div>
+          </div>
+
+          {/* Bottom Section: From Address */}
+          <div className="border-t border-black pt-2 mt-auto text-xs text-center">
+            <p className="font-bold">FROM: Karigai Shree</p>
+            <p>Old busstand, Salem, Tamil Nadu, India - 636001</p>
+            <p>Ph: +91 9486054899 | Email: karigaishree@gmail.com</p>
+          </div>
         </div>
-      ) : (
+      ))}
+    </div>
+  );
+});
+
+// 2. Main Order List Component
+const OrderList = () => {
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [filteredOrders, setFilteredOrders] = useState<Order[]>([]);
+  const [status, setStatus] = useState<'loading' | 'success' | 'error'>('loading');
+  const [filterDate, setFilterDate] = useState<string>('');
+  const [ordersToPrint, setOrdersToPrint] = useState<Order[]>([]);
+
+  const printRef = useRef<HTMLDivElement>(null);
+
+  // Fetch orders from the API
+  useEffect(() => {
+    const fetchOrders = async () => {
+      setStatus('loading');
+      try {
+        const response = await fetch('/webhook/karigai_getorder');
+        if (!response.ok) throw new Error('Network response was not ok');
+        const result = await response.json();
+        // The API might return an object with a 'data' property which is the array
+        const ordersData: Order[] = Array.isArray(result) ? result : result.data || [];
+        const sortedOrders = ordersData.sort((a, b) => new Date(b.Date).getTime() - new Date(a.Date).getTime());
+        setOrders(sortedOrders);
+        setFilteredOrders(sortedOrders);
+        setStatus('success');
+      } catch (error) {
+        console.error("Failed to fetch orders:", error);
+        setStatus('error');
+      }
+    };
+    fetchOrders();
+  }, []);
+
+  // Apply date filter
+  useEffect(() => {
+    if (!filterDate) {
+      setFilteredOrders(orders);
+    } else {
+      setFilteredOrders(orders.filter(order => order.Date === filterDate));
+    }
+  }, [filterDate, orders]);
+
+  // Hook for printing
+  const handlePrint = useReactToPrint({
+    documentTitle: 'Order-Slips',
+    pageStyle: `@media print {
+      .break-after-page {
+        page-break-after: always;
+      }
+    }`
+  });
+
+  const triggerPrint = (selectedOrders: Order[]) => {
+    if (selectedOrders.length === 0) return;
+    setOrdersToPrint(selectedOrders);
+    // This timeout ensures the state is updated before printing
+        setTimeout(() => {
+      if (printRef.current) {
+        handlePrint(() => printRef.current);
+      } else {
+        console.error('Printable content not found.');
+      }
+    }, 100);
+  };
+
+  if (status === 'loading') {
+    return <div className="flex justify-center items-center p-8"><Loader className="animate-spin mr-2" /> Loading orders...</div>;
+  }
+
+  if (status === 'error') {
+    return <div className="flex justify-center items-center p-8 text-red-500"><ServerCrash className="mr-2" /> Failed to load orders. Please check the console for details.</div>;
+  }
+
+  return (
+    <div className="p-4 sm:p-6 lg:p-8">
+      <div className="bg-white rounded-2xl shadow-xl p-6 md:p-8">
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
+          <div className="flex items-center gap-4">
+            <div className="bg-indigo-100 text-indigo-600 p-3 rounded-full">
+              <ListOrdered size={24} />
+            </div>
+            <div>
+              <h1 className="text-2xl font-bold text-gray-900">Order History</h1>
+              <p className="text-gray-500">View, filter, and print past orders.</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => triggerPrint(filteredOrders)}
+              disabled={filteredOrders.length === 0}
+              className="flex items-center px-4 py-2 bg-indigo-600 text-white rounded-lg shadow-sm hover:bg-indigo-700 disabled:bg-indigo-300 transition-colors"
+            >
+              <Printer size={18} className="mr-2" />
+              Print Filtered ({filteredOrders.length})
+            </button>
+          </div>
+        </div>
+
+        {/* Filter Controls */}
+        <div className="flex items-center gap-4 mb-4 p-4 bg-gray-50 rounded-lg">
+          <label className="relative flex items-center">
+            <span className="sr-only">Filter by Date</span>
+            <Calendar size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+            <input
+              type="date"
+              value={filterDate}
+              onChange={(e) => setFilterDate(e.target.value)}
+              className="pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            />
+          </label>
+          <button
+            onClick={() => setFilterDate('')}
+            className="flex items-center px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors"
+          >
+            <FilterX size={18} className="mr-2" />
+            Clear Filter
+          </button>
+        </div>
+
+        {/* Orders Table */}
         <div className="overflow-x-auto">
-          <table className="min-w-full bg-white border border-gray-200 rounded-lg overflow-hidden">
-            <thead className="bg-gray-100">
+          <table className="min-w-full bg-white divide-y divide-gray-200">
+            <thead className="bg-gray-50">
               <tr>
-                <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 cursor-pointer" onClick={() => handleSort('orderNumber')}>
-                  <div className="flex items-center">
-                    Order ID
-                    {sortField === 'orderNumber' && (
-                      sortDirection === 'asc' ? <ChevronUp size={16} /> : <ChevronDown size={16} />
-                    )}
-                  </div>
-                </th>
-                <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 cursor-pointer" onClick={() => handleSort('date')}>
-                  <div className="flex items-center">
-                    Date
-                    {sortField === 'date' && (
-                      sortDirection === 'asc' ? <ChevronUp size={16} /> : <ChevronDown size={16} />
-                    )}
-                  </div>
-                </th>
-                <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700 cursor-pointer" onClick={() => handleSort('status')}>
-                  <div className="flex items-center">
-                    Status
-                    {sortField === 'status' && (
-                      sortDirection === 'asc' ? <ChevronUp size={16} /> : <ChevronDown size={16} />
-                    )}
-                  </div>
-                </th>
-                <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700">
-                  Tracking Number
-                </th>
-                <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700">
-                  Customer Info
-                </th>
-                <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700">
-                  Notes
-                </th>
-                <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700">
-                  Actions
-                </th>
+                {['Order #', 'Date', 'Customer', 'Product', 'Total', 'Actions'].map(header => (
+                  <th key={header} className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{header}</th>
+                ))}
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-200">
-              {sortedOrders.map((order) => (
-                <tr key={order.id} className="hover:bg-gray-50">
-                  <td className="px-4 py-3 text-sm text-gray-900">
-                    {order.orderNumber}
-                  </td>
-                  <td className="px-4 py-3 text-sm text-gray-900">
-                    {order.date}
-                  </td>
-                  <td className="px-4 py-3 text-sm">
-                    {editingOrder[order.id] ? (
-                      <select
-                        value={editValues[order.id]?.status || order.status}
-                        onChange={(e) => handleInputChange(order.id, 'status', e.target.value)}
-                        className="w-full p-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+            <tbody className="bg-white divide-y divide-gray-200">
+              {filteredOrders.length > 0 ? (
+                filteredOrders.map(order => (
+                  <tr key={order.row_number}>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{order.orderNumber}</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{order.Date}</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{order.customerName}</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{order.productName}</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">₹{((order.quantity || 0) * (order.price || 0)).toFixed(2)}</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                      <button 
+                        onClick={() => triggerPrint([order])}
+                        className="text-indigo-600 hover:text-indigo-900"
                       >
-                        <option value="processing">Processing</option>
-                        <option value="in-transit">In Transit</option>
-                        <option value="delivered">Delivered</option>
-                        <option value="cancelled">Cancelled</option>
-                      </select>
-                    ) : (
-                      <div className="flex items-center">
-                        {getStatusIcon(order.status)}
-                        <span className="ml-2 capitalize">{order.status}</span>
-                      </div>
-                    )}
-                  </td>
-                  <td className="px-4 py-3 text-sm text-gray-900">
-                    {editingOrder[order.id] ? (
-                      <input
-                        type="text"
-                        value={editValues[order.id]?.trackingNumber || order.trackingNumber || ''}
-                        onChange={(e) => handleInputChange(order.id, 'trackingNumber', e.target.value)}
-                        className="w-full p-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                        placeholder="Enter tracking number"
-                      />
-                    ) : (
-                      order.trackingNumber || '-'
-                    )}
-                  </td>
-                  <td className="px-4 py-3 text-sm text-gray-900">
-                    <div>
-                      <p className="font-medium">{order.address}</p>
-                      <p className="text-gray-600">{order.phone}</p>
-                    </div>
-                  </td>
-                  <td className="px-4 py-3 text-sm text-gray-900">
-                    {editingOrder[order.id] ? (
-                      <textarea
-                        value={editValues[order.id]?.notes || order.notes}
-                        onChange={(e) => handleInputChange(order.id, 'notes', e.target.value)}
-                        className="w-full p-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                        rows={2}
-                      />
-                    ) : (
-                      <div className="flex items-center">
-                        <div className="max-w-xs truncate whitespace-pre-wrap" title={order.notes}>
-                          {order.notes || '-'}
-                        </div>
-                        <button
-                          onClick={() => openAddNoteModal(order.id)}
-                          className="ml-2 p-1 text-gray-600 hover:text-blue-600"
-                          title="Add Note"
-                        >
-                          <Plus size={16} />
-                        </button>
-                      </div>
-                    )}
-                  </td>
-                  <td className="px-4 py-3 text-sm">
-                    <div className="flex space-x-2">
-                      {editingOrder[order.id] ? (
-                        <>
-                          <button
-                            onClick={() => saveEdits(order.id)}
-                            className="p-1 text-green-600 hover:text-green-800"
-                            title="Save"
-                          >
-                            <Save size={18} />
-                          </button>
-                          <button
-                            onClick={() => cancelEditing(order.id)}
-                            className="p-1 text-red-600 hover:text-red-800"
-                            title="Cancel"
-                          >
-                            <X size={18} />
-                          </button>
-                        </>
-                      ) : (
-                        <>
-                          <button
-                            onClick={() => startEditing(order.id, order.status, order.notes, order.trackingNumber)}
-                            className="p-1 text-blue-600 hover:text-blue-800"
-                            title="Edit"
-                          >
-                            <Edit size={18} />
-                          </button>
-                          <button
-                            onClick={() => openAddNoteModal(order.id)}
-                            className="p-1 text-gray-600 hover:text-blue-800"
-                            title="Add Note"
-                          >
-                            <FileText size={18} />
-                          </button>
-                          <button
-                            onClick={() => removeOrder(order.id)}
-                            className="p-1 text-red-600 hover:text-red-800"
-                            title="Remove Order"
-                          >
-                            <X size={18} />
-                          </button>
-                        </>
-                      )}
-                    </div>
+                        Print Slip
+                      </button>
+                    </td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td colSpan={6} className="text-center py-8 text-gray-500">
+                    No orders found for the selected date.
                   </td>
                 </tr>
-              ))}
+              )}
             </tbody>
           </table>
         </div>
-      )}
-      
-      {/* Add Note Modal */}
-      {showAddNoteModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-6 w-full max-w-md">
-            <h3 className="text-lg font-semibold mb-4">Add Note</h3>
-            <textarea
-              value={noteText}
-              onChange={(e) => setNoteText(e.target.value)}
-              className="w-full p-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-              rows={4}
-              placeholder="Enter your note here..."
-            />
-            <div className="flex justify-end mt-4 space-x-2">
-              <button
-                onClick={closeAddNoteModal}
-                className="px-4 py-2 text-gray-600 hover:text-gray-800"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={addNoteToOrder}
-                className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
-                disabled={!noteText.trim()}
-              >
-                Add Note
-              </button>
-            </div>
-          </div>
+
+        {/* Hidden component for printing */}
+        <div className="hidden">
+          <PrintableSlip ref={printRef} orders={ordersToPrint} />
         </div>
-      )}
+      </div>
     </div>
   );
-}
+};
+
+export default OrderList;

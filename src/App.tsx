@@ -4,12 +4,14 @@ import PrintSlip from './components/PrintSlip';
 import UpdateTracking from './components/UpdateTracking';
 import CreateManifest from './components/CreateManifest';
 import RepeatCampaign from './components/RepeatCampaign';
+import RepeatOrdersTable from './components/RepeatOrdersTable';
 import OrderList from './components/OrderList';
 import GstInvoiceGenerator from './components/GstInvoice';
 import Auth from './components/Auth';
-import { ArrowRight, Package, Printer, Truck, FileText, Users, List, LogOut, FileSpreadsheet } from 'lucide-react';
+import { ArrowRight, Package, Printer, Truck, FileText, Users, History, LogOut, FileSpreadsheet, RefreshCw } from 'lucide-react';
 
-type TabType = 'order' | 'printslip' | 'tracking' | 'manifest' | 'campaign' | 'orderlist' | 'gstinvoice';
+
+type TabType = 'order' | 'printslip' | 'tracking' | 'manifest' | 'campaign' | 'repeatorders' | 'orderhistory' | 'gstinvoice';
 
 function App() {
   const [activeTab, setActiveTab] = useState<TabType>('order');
@@ -29,17 +31,19 @@ function App() {
     { id: 'tracking', label: 'Update Tracking', icon: <Truck size={20} /> },
     { id: 'manifest', label: 'Create Manifest', icon: <FileText size={20} /> },
     { id: 'campaign', label: 'Repeat Campaign', icon: <Users size={20} /> },
-    { id: 'orderlist', label: 'Order List', icon: <List size={20} /> },
+    { id: 'repeatorders', label: 'Repeat Orders', icon: <RefreshCw size={20} /> },
+    { id: 'orderhistory', label: 'Order History', icon: <History size={20} /> },
     { id: 'gstinvoice', label: 'GST Invoice', icon: <FileSpreadsheet size={20} /> },
   ];
 
   const pageDescriptions: Record<TabType, string> = {
-    order: 'Please enter your order number to continue',
+    order: 'Create a new order by filling out the form below',
     printslip: 'Generate and print courier slips',
     tracking: 'Update tracking information for orders',
     manifest: 'Create and manage shipping manifests',
     campaign: 'Manage repeat customer campaigns and feedback',
-    orderlist: 'View and manage all manual orders',
+    repeatorders: 'View and manage customers with repeat orders',
+    orderhistory: 'View, filter, and print past orders.',
     gstinvoice: 'Generate GST invoices for orders',
   };
 
@@ -59,7 +63,7 @@ function App() {
       {/* Sidebar */}
       <aside className="w-64 bg-gray-800 text-white p-6 flex flex-col">
         <h1 className="text-3xl font-bold mb-8 text-center">
-          AuraWill
+          Order Form
         </h1>
         <nav className="flex-grow">
           <ul>
@@ -105,14 +109,17 @@ function App() {
             activeTab === 'order' ? 'max-w-6xl' : 
             activeTab === 'tracking' || activeTab === 'manifest' ? 'max-w-3xl' : 
             activeTab === 'campaign' ? 'max-w-5xl' : 
-            activeTab === 'gstinvoice' ? 'max-w-7xl' : 'max-w-4xl'
+            activeTab === 'gstinvoice' || activeTab === 'orderhistory' ? 'max-w-7xl' : 'max-w-4xl'
           } mx-auto`}>
             {activeTab === 'order' && <OrderForm />}
             {activeTab === 'printslip' && <PrintSlip />}
             {activeTab === 'tracking' && <UpdateTracking />}
             {activeTab === 'manifest' && <CreateManifest />}
             {activeTab === 'campaign' && <RepeatCampaign />}
-            {activeTab === 'orderlist' && <OrderList />}
+            {activeTab === 'repeatorders' && 
+              <RepeatOrdersTable />
+            }
+            {activeTab === 'orderhistory' && <OrderList />}
             {activeTab === 'gstinvoice' && <GstInvoiceGenerator />}
           </div>
         </main>

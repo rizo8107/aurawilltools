@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Search, AlertCircle, CheckCircle, Clock, Calendar, Package, DollarSign, User, Phone, Mail, ArrowRight } from 'lucide-react';
+import { Search, AlertCircle, CheckCircle, Clock, Calendar, Package, DollarSign, User, Phone, Mail, ArrowRight, Loader2, Database, RefreshCw, PackageX } from 'lucide-react';
+import { supabase } from '../supabaseClient';
 
 // Define interfaces for the response data
 interface Product {
@@ -18,7 +19,6 @@ interface CustomerData {
   last_order_date: string;
   duration_between_first_and_last_order: string;
   orders: Product[];
-  call_status?: string; 
 }
 
 interface FeedbackForm {
@@ -40,14 +40,22 @@ interface FeedbackForm {
   orderId: string;
 }
 
-
-
-interface RepeatCampaignProps {
-  initialOrderNumber?: string;
+// Define interface for Supabase orders data
+interface SupabaseOrder {
+  id: number;
+  order_number?: string;
+  customer_name?: string;
+  customer_phone?: string;
+  customer_email?: string;
+  order_date?: string;
+  total_amount?: string | number;
+  products?: string;
+  status?: string;
+  [key: string]: any; // Allow for any additional fields that might be in the database
 }
 
-export default function RepeatCampaign({ initialOrderNumber = '' }: RepeatCampaignProps) {
-  const [orderId, setOrderId] = useState(initialOrderNumber || '');
+export default function RepeatCampaign() {
+  const [orderId, setOrderId] = useState('');
   const [customerData, setCustomerData] = useState<CustomerData | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -55,12 +63,13 @@ export default function RepeatCampaign({ initialOrderNumber = '' }: RepeatCampai
   const [messageType, setMessageType] = useState<'success' | 'error' | 'info' | ''>('');
   const [callStatus, setCallStatus] = useState('');
   const [callStatusType, setCallStatusType] = useState<'success' | 'error' | 'info' | ''>('');
-  const [selectedCallStatus, setSelectedCallStatus] = useState('');
+  
+  // State for Supabase orders data
+  const [allOrders, setAllOrders] = useState<SupabaseOrder[]>([]);
+  const [loadingOrders, setLoadingOrders] = useState(false);
+  const [ordersError, setOrdersError] = useState('');
   
   // State for the feedback form
-  // Reference to track if initial search has been performed
-  const initialSearchDone = useRef(false);
-
   const [feedbackForm, setFeedbackForm] = useState<FeedbackForm>({
     firstTimeReason: '',
     reorderReason: '',
@@ -82,39 +91,44 @@ export default function RepeatCampaign({ initialOrderNumber = '' }: RepeatCampai
   
   const orderInputRef = useRef<HTMLInputElement>(null);
   
-  useEffect(() => {
-    // Check if user is authenticated
-    const authToken = localStorage.getItem('auth_token');
-    if (authToken !== 'authenticated') {
-      window.location.href = '/';
+  // Function to fetch all orders from Supabase
+  const fetchOrders = async () => {
+    setLoadingOrders(true);
+    setOrdersError('');
+    
+    try {
+      const { data, error } = await supabase
+        .from('orders_All')
+        .select('*');
+        
+      if (error) {
+        throw error;
+      }
+      
+      if (data) {
+        setAllOrders(data);
+      }
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      setOrdersError(`Failed to load orders: ${errorMessage}`);
+      console.error('Error fetching orders:', err);
+    } finally {
+      setLoadingOrders(false);
     }
-  }, []);
+  };
   
   useEffect(() => {
     // Focus the order input field when the component mounts
     if (orderInputRef.current) {
       orderInputRef.current.focus();
     }
+    
+    // Fetch all orders when component mounts
+    fetchOrders();
   }, []);
   
-  // Effect to automatically search when initialOrderNumber is provided
-  useEffect(() => {
-    // Only perform the search if initialOrderNumber is provided and not empty
-    // and we haven't already performed the initial search
-    if (initialOrderNumber && !initialSearchDone.current) {
-      initialSearchDone.current = true;
-      // Use the existing search function
-      handleOrderSearch(null);
-    }
-  }, [initialOrderNumber]); // eslint-disable-line react-hooks/exhaustive-deps
-  
-
-  
-  const handleOrderSearch = async (e: React.FormEvent | null) => {
-    // Only prevent default if e is not null (i.e., if called from form submission)
-    if (e) {
-      e.preventDefault();
-    }
+  const handleOrderSearch = async (e: React.FormEvent) => {
+    e.preventDefault();
     
     if (!orderId.trim()) {
       setError('Please enter an order ID');
@@ -146,17 +160,21 @@ export default function RepeatCampaign({ initialOrderNumber = '' }: RepeatCampai
         if (!Array.isArray(data) && typeof data === 'object') {
           setCustomerData(data);
           
-          // Pre-fill the orderId in the feedback form and set the initial call status
-          setFeedbackForm(prev => ({ ...prev, orderId: orderId }));
-          setSelectedCallStatus(data.call_status || '');
+          // Pre-fill the orderId in the feedback form
+          setFeedbackForm(prev => ({
+            ...prev,
+            orderId: orderId
+          }));
         } 
         // If it's an array with at least one item
         else if (Array.isArray(data) && data.length > 0) {
           setCustomerData(data[0]);
           
-          // Pre-fill the orderId in the feedback form and set the initial call status
-          setFeedbackForm(prev => ({ ...prev, orderId: orderId }));
-          setSelectedCallStatus(data[0].call_status || '');
+          // Pre-fill the orderId in the feedback form
+          setFeedbackForm(prev => ({
+            ...prev,
+            orderId: orderId
+          }));
         } else {
           setError('No customer data found for this order ID');
         }
@@ -177,45 +195,6 @@ export default function RepeatCampaign({ initialOrderNumber = '' }: RepeatCampai
       ...prev,
       [name]: value
     }));
-  };
-
-  const handleStatusUpdate = async (newStatus: string) => {
-    if (!customerData?.customer_email) {
-      setMessage('Customer email is not available.');
-      setMessageType('error');
-      return;
-    }
-
-    setLoading(true);
-    try {
-      const response = await fetch('https://app-supabase.9krcxo.easypanel.host/rest/v1/rpc/update_call_status', {
-        method: 'POST',
-        headers: {
-          'apikey': 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNzUwMDEyMjAwLCJleHAiOjE5MDc3Nzg2MDB9.eJ81pv114W4ZLvg0E-AbNtNZExPoLYbxGdeWTY5PVVs',
-          'Authorization': 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNzUwMDEyMjAwLCJleHAiOjE5MDc3Nzg2MDB9.eJ81pv114W4ZLvg0E-AbNtNZExPoLYbxGdeWTY5PVVs',
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ 
-          p_email: customerData.customer_email,
-          p_status: newStatus
-        })
-      });
-
-      if (!response.ok) {
-        throw new Error(`Error: ${response.status}`);
-      }
-
-      setSelectedCallStatus(newStatus);
-      setMessage('Call status updated successfully!');
-      setMessageType('success');
-
-    } catch (err) {
-      console.error('Error updating call status:', err);
-      setMessage('Failed to update call status.');
-      setMessageType('error');
-    } finally {
-      setLoading(false);
-    }
   };
 
   const handleCall = async (phoneNumber: string) => {
@@ -420,27 +399,6 @@ export default function RepeatCampaign({ initialOrderNumber = '' }: RepeatCampai
                     </button>
                   </div>
                 </div>
-                <div className="flex items-start md:col-span-2">
-                  <Phone className="w-5 h-5 text-gray-500 mr-2 mt-0.5" />
-                  <div>
-                    <p className="text-sm text-gray-500">Call Status</p>
-                    <select 
-                      value={selectedCallStatus} 
-                      onChange={(e) => handleStatusUpdate(e.target.value)}
-                      className="font-medium p-1 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 transition"
-                      disabled={loading}
-                      aria-label="Update call status"
-                    >
-                      <option value="">Not Called</option>
-                      <option value="Called">Called</option>
-                      <option value="Busy">Busy</option>
-                      <option value="Cancelled">Cancelled</option>
-                      <option value="No Response">No Response</option>
-                      <option value="Wrong Number">Wrong Number</option>
-                      <option value="Invalid Number">Invalid Number</option>
-                    </select>
-                  </div>
-                </div>
                 <div className="flex items-start">
                   <Mail className="w-5 h-5 text-gray-500 mr-2 mt-0.5" />
                   <div>
@@ -552,12 +510,12 @@ export default function RepeatCampaign({ initialOrderNumber = '' }: RepeatCampai
             <div className="bg-white rounded-lg shadow-md p-6 h-full">
               <h2 className="text-xl font-semibold mb-4">Customer Feedback Form</h2>
               <form onSubmit={submitFeedback}>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-                  <div>
-                    <label className="block text-gray-700 text-sm font-medium mb-1">
-                      For what reason did you buy the health mix for the first time?
-                    </label>
-                    <input
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+              <div>
+                <label className="block text-gray-700 text-sm font-medium mb-1">
+                  For what reason did you buy the health mix for the first time?
+                </label>
+                <input
                   type="text"
                   name="firstTimeReason"
                   value={feedbackForm.firstTimeReason}
@@ -830,10 +788,87 @@ export default function RepeatCampaign({ initialOrderNumber = '' }: RepeatCampai
               </button>
             </div>
             </form>
-            </div>
+            {/* Feedback Form */}
           </div>
         </div>
       )}
+      
+      {/* Supabase Orders Table */}
+      <div className="mt-10 bg-white rounded-lg shadow-md p-6">
+        <div className="flex items-center justify-between mb-6">
+          <h2 className="text-xl font-semibold flex items-center">
+            <Database className="w-5 h-5 mr-2 text-blue-600" />
+            All Orders
+          </h2>
+          <button 
+            onClick={fetchOrders} 
+            className="px-3 py-1 bg-blue-50 text-blue-600 rounded-md hover:bg-blue-100 flex items-center text-sm"
+            disabled={loadingOrders}
+          >
+            {loadingOrders ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-1" />}
+            Refresh
+          </button>
+        </div>
+        
+        {ordersError && (
+          <div className="mb-4 p-3 bg-red-50 text-red-700 rounded-md flex items-center">
+            <AlertCircle className="w-5 h-5 mr-2" />
+            {ordersError}
+          </div>
+        )}
+        
+        {loadingOrders ? (
+          <div className="py-8 flex flex-col items-center justify-center text-gray-500">
+            <Loader2 className="w-8 h-8 mb-2 animate-spin" />
+            <p>Loading orders...</p>
+          </div>
+        ) : allOrders.length === 0 ? (
+          <div className="py-8 text-center text-gray-500">
+            <PackageX className="w-8 h-8 mx-auto mb-2" />
+            <p>No orders found</p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full border-collapse">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="py-3 px-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider border-b">#</th>
+                  <th className="py-3 px-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider border-b">Order #</th>
+                  <th className="py-3 px-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider border-b">Customer</th>
+                  <th className="py-3 px-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider border-b">Phone</th>
+                  <th className="py-3 px-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider border-b">Email</th>
+                  <th className="py-3 px-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider border-b">Date</th>
+                  <th className="py-3 px-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider border-b">Amount</th>
+                  <th className="py-3 px-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider border-b">Status</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-200">
+                {allOrders.map((order, index) => (
+                  <tr key={order.id} className="hover:bg-gray-50">
+                    <td className="py-3 px-4 text-sm">{index + 1}</td>
+                    <td className="py-3 px-4 text-sm font-medium text-blue-600">{order.order_number || 'N/A'}</td>
+                    <td className="py-3 px-4 text-sm">{order.customer_name || 'N/A'}</td>
+                    <td className="py-3 px-4 text-sm">{order.customer_phone || 'N/A'}</td>
+                    <td className="py-3 px-4 text-sm text-gray-500 max-w-[200px] truncate">{order.customer_email || 'N/A'}</td>
+                    <td className="py-3 px-4 text-sm">{order.order_date || 'N/A'}</td>
+                    <td className="py-3 px-4 text-sm">{typeof order.total_amount === 'number' ? `$${order.total_amount.toFixed(2)}` : (order.total_amount || 'N/A')}</td>
+                    <td className="py-3 px-4 text-sm">
+                      <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                        order.status === 'completed' ? 'bg-green-100 text-green-800' :
+                        order.status === 'pending' ? 'bg-yellow-100 text-yellow-800' :
+                        order.status === 'cancelled' ? 'bg-red-100 text-red-800' :
+                        'bg-gray-100 text-gray-800'
+                      }`}>
+                        {order.status || 'N/A'}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
