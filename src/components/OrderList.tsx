@@ -114,7 +114,7 @@ const OrderList = () => {
     const fetchOrders = async () => {
       setStatus('loading');
       try {
-        const response = await fetch('/webhook/karigai_getorder');
+        const response = await fetch('https://backend-n8n.7za6uc.easypanel.host/webhook/karigai_getorder');
         if (!response.ok) throw new Error('Network response was not ok');
         const result = await response.json();
         // The API might return an object with a 'data' property which is the array

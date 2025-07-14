@@ -32,7 +32,6 @@ function App() {
     { id: 'manifest', label: 'Create Manifest', icon: <FileText size={20} /> },
     { id: 'campaign', label: 'Repeat Campaign', icon: <Users size={20} /> },
     { id: 'repeatorders', label: 'Repeat Orders', icon: <RefreshCw size={20} /> },
-    { id: 'orderhistory', label: 'Order History', icon: <History size={20} /> },
     { id: 'gstinvoice', label: 'GST Invoice', icon: <FileSpreadsheet size={20} /> },
   ];
 

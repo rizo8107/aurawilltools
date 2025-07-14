@@ -8,7 +8,7 @@
     body {
       font-family: Arial, sans-serif;
       padding: 20px;
-      max-width: 850px;
+      max-width: 100%;
       margin: auto;
       background: #f9f9f9;
     }
@@ -21,13 +21,15 @@
     .slip {
       background: white;
       border: 2px solid #000;
-      padding: 0;
-      margin-bottom: 30px;
+      padding: 20px;
+      margin: 0 auto 30px auto;
       border-radius: 10px;
       box-shadow: 0 2px 6px rgba(0,0,0,0.1);
       page-break-after: always;
-      width: 800px;
+      max-width: 750px;
+      width: 100%;
       overflow: hidden;
+      height: 300px;
     }
     .slip-header {
       display: flex;
@@ -66,9 +68,9 @@
       color: #555;
     }
     .address {
-      padding: 10px 20px 20px 20px;
+      padding: 15px 30px 25px 30px;
       font-size: 18px;
-      line-height: 1.5;
+      line-height: 1.6;
     }
     .ship-to .address {
       font-size: 20px;
@@ -86,7 +88,7 @@
       width: 50%;
     }
     .detail-row {
-      padding: 10px 20px;
+      padding: 15px 30px;
       display: flex;
       border-bottom: 2px solid #000;
     }
@@ -104,8 +106,8 @@
       font-size: 16px;
     }
     .remarks {
-      padding: 10px 20px;
-      min-height: 100px;
+      padding: 15px 30px;
+      min-height: 120px;
     }
     .remarks-label {
       font-weight: bold;
@@ -114,7 +116,7 @@
       color: #555;
     }
     .barcode-container {
-      padding: 20px;
+      padding: 25px 30px;
       border-top: 2px solid #000;
       display: flex;
     }
@@ -156,10 +158,68 @@
       }
       body {
         background: white;
+        padding: 0;
+        margin: 0;
       }
       .slip {
-        margin: 0;
+        margin: 0 auto 15mm auto;
         box-shadow: none;
+        page-break-after: always;
+        width: 180mm; /* Slightly narrower than A4 to allow margins */
+        max-width: 100%;
+        border: 1px solid #000;
+        height: 260mm; /* Taller to allow for more spacing */
+      }
+      .slip:last-child {
+        page-break-after: avoid;
+      }
+      /* Add more spacing in print mode */
+      .address {
+        padding: 20px 35px 30px 35px;
+      }
+      .detail-row {
+        padding: 18px 35px;
+      }
+      .barcode-container {
+        padding: 30px 35px;
+      }
+    }
+    
+    /* Responsive styles */
+    @media screen and (max-width: 850px) {
+      .slip {
+        width: 100%;
+      }
+      .ship-to .address {
+        font-size: 16px;
+      }
+      .detail-label, .detail-value {
+        font-size: 14px;
+      }
+    }
+    
+    @media screen and (max-width: 600px) {
+      .slip-details {
+        flex-direction: column;
+      }
+      .details-left, .details-right {
+        width: 100%;
+        border-right: none;
+      }
+      .details-left {
+        border-bottom: 2px solid #000;
+      }
+      .barcode-container {
+        flex-direction: column;
+      }
+      .barcode-column, .from-column {
+        width: 100%;
+        padding: 10px 0;
+      }
+      .from-column {
+        border-left: none;
+        border-top: 1px solid #ddd;
+        padding-top: 15px;
       }
     }
   </style>
@@ -168,8 +228,11 @@
 <div id="controls">
   <label>Paste Records (one per line, tab-separated):</label>
   <textarea id="inputText">processing	09-05-2025	2012	1		Manual	Karthika Anand, 80/a2, mitta office street, krishnapuram, kadayanallur, Kadayanallur, Tamil Nadu 627759  Phone 9342579621</textarea>
-  <button onclick="generateSlips()">Generate Slips</button>
-  <button onclick="window.print()">🖨️ Print All</button>
+  <div class="button-group" style="display: flex; gap: 10px; flex-wrap: wrap;">
+    <button onclick="generateSlips()" style="flex: 1;">Generate Slips</button>
+    <button onclick="window.print()" style="flex: 1;">🖨️ Print All</button>
+    <button onclick="document.getElementById('output').innerHTML = ''" style="flex: 1;">Clear All</button>
+  </div>
 </div>
 
 <div id="output"></div>
@@ -180,6 +243,11 @@
     const lines = rawInput.split('\n');
     const output = document.getElementById('output');
     output.innerHTML = '';
+    
+    // Create a responsive container for all slips
+    const slipsContainer = document.createElement('div');
+    slipsContainer.className = 'slips-container';
+    output.appendChild(slipsContainer);
 
     const fromAddress = `TSMC Creations India\n14/5 2nd Floor, Sri Saara Towers,\nBalasundaram Road, Paapanaickenpalayam,\nCoimbatore, Tamil Nadu - 641037\nPhone: 8610554711`;
 
@@ -249,11 +317,25 @@
           </div>
         </div>
       `;
-      output.innerHTML += html;
+      // Append to the container instead of directly to output
+      const slipElement = document.createElement('div');
+      slipElement.innerHTML = html;
+      slipsContainer.appendChild(slipElement.firstElementChild);
     });
     
     // Initialize all barcodes after adding to DOM
     JsBarcode(".barcode").init();
+    
+    // Add a message about printing
+    if (document.querySelectorAll('.slip').length > 0) {
+      const printMsg = document.createElement('div');
+      printMsg.className = 'print-message';
+      printMsg.innerHTML = '<p>Slips are ready! Click the Print button above to print them.</p>';
+      printMsg.style.textAlign = 'center';
+      printMsg.style.margin = '20px 0';
+      printMsg.style.color = '#555';
+      output.appendChild(printMsg);
+    }
   }
 </script>
 
