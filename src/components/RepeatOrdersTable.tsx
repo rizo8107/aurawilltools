@@ -63,13 +63,51 @@ export default function RepeatOrdersTable() {
     }
   });
 
-  // Apply filters and pagination whenever orders or filters change
-  useEffect(() => {
+  // Function to update analytics based on filtered data
+  const updateAnalytics = useCallback((filteredData: RepeatOrder[]) => {
+    // Calculate total orders across all filtered customers
+    const totalOrders = filteredData.reduce((sum, order) => sum + order.order_count, 0);
+    
+    // Count customers by call status
+    const callStatusCounts = {
+      Called: 0,
+      Busy: 0,
+      Cancelled: 0,
+      'No Response': 0,
+      'Wrong Number': 0,
+      'Invalid Number': 0,
+      'Not Called': 0
+    };
+    
+    filteredData.forEach(order => {
+      if (order.call_status) {
+        callStatusCounts[order.call_status as keyof typeof callStatusCounts] += 1;
+      } else {
+        callStatusCounts['Not Called'] += 1;
+      }
+    });
+    
+    // Calculate average orders per customer
+    const avgOrdersPerCustomer = filteredData.length > 0 
+      ? (totalOrders / filteredData.length).toFixed(2)
+      : '0';
+    
+    // Update analytics state
+    setAnalytics({
+      totalOrders,
+      totalCustomers: filteredData.length,
+      averageOrdersPerCustomer: Number(avgOrdersPerCustomer),
+      callStatusBreakdown: callStatusCounts
+    });
+  }, []);
+  
+  // Function to apply filters to the orders
+  const applyFilters = useCallback((currentFilters = filters) => {
     let filtered = [...orders];
 
     // Search filter
-    if (filters.search) {
-      const searchTerm = filters.search.toLowerCase();
+    if (currentFilters.search) {
+      const searchTerm = currentFilters.search.toLowerCase();
       filtered = filtered.filter(order => 
         (order.email && order.email.toLowerCase().includes(searchTerm)) ||
         (order.phone && order.phone.includes(searchTerm)) ||
@@ -78,31 +116,43 @@ export default function RepeatOrdersTable() {
     }
 
     // Call status filter
-    if (filters.callStatus) {
-      filtered = filtered.filter(order => order.call_status === filters.callStatus);
+    if (currentFilters.callStatus) {
+      filtered = filtered.filter(order => order.call_status === currentFilters.callStatus);
     }
 
     // Date range filter
-    if (filters.dateRange.start && filters.dateRange.end) {
+    if (currentFilters.dateRange.start && currentFilters.dateRange.end) {
       filtered = filtered.filter(order => {
         const lastOrderDate = new Date(order.last_order);
-        return lastOrderDate >= new Date(filters.dateRange.start) && lastOrderDate <= new Date(filters.dateRange.end);
+        return lastOrderDate >= new Date(currentFilters.dateRange.start) && 
+               lastOrderDate <= new Date(currentFilters.dateRange.end);
       });
     }
 
-    // Order count filter
-    if (filters.orderCount.min) {
-      filtered = filtered.filter(order => order.order_count >= parseInt(filters.orderCount.min, 10));
+    // Order count filter - dynamically update when changed
+    if (currentFilters.orderCount.min) {
+      filtered = filtered.filter(order => order.order_count >= parseInt(currentFilters.orderCount.min, 10));
     }
-    if (filters.orderCount.max) {
-      filtered = filtered.filter(order => order.order_count <= parseInt(filters.orderCount.max, 10));
+    if (currentFilters.orderCount.max) {
+      filtered = filtered.filter(order => order.order_count <= parseInt(currentFilters.orderCount.max, 10));
     }
 
+    // Update filtered orders and pagination
     setFilteredOrders(filtered);
     setTotalPages(Math.ceil(filtered.length / itemsPerPage));
     setCurrentPage(1); // Reset to first page after filtering
+    
+    // Update analytics based on filtered data
+    updateAnalytics(filtered);
+  }, [orders, itemsPerPage, filters, updateAnalytics]);
 
-  }, [orders, filters, itemsPerPage]);
+  // Apply filters and pagination whenever orders change
+  useEffect(() => {
+    // Apply initial filters when orders change
+    if (orders.length > 0) {
+      applyFilters(filters);
+    }
+  }, [orders, applyFilters, filters]);
 
   const paginatedOrders = filteredOrders.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
 
@@ -227,25 +277,44 @@ export default function RepeatOrdersTable() {
     });
   };
 
+
+
   const handleFilterChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
-    setFilters(prev => ({ ...prev, [name]: value }));
+    setFilters(prev => {
+      const newFilters = { ...prev, [name]: value };
+      applyFilters(newFilters);
+      return newFilters;
+    });
   };
 
   const handleDateRangeChange = (e: React.ChangeEvent<HTMLInputElement>, field: 'start' | 'end') => {
     const { value } = e.target;
-    setFilters(prev => ({ 
-      ...prev, 
-      dateRange: { ...prev.dateRange, [field]: value } 
-    }));
+    setFilters(prev => {
+      const newFilters = { 
+        ...prev, 
+        dateRange: { ...prev.dateRange, [field]: value } 
+      };
+      applyFilters(newFilters);
+      return newFilters;
+    });
   };
 
   const handleOrderCountChange = (e: React.ChangeEvent<HTMLInputElement>, field: 'min' | 'max') => {
     const { value } = e.target;
-    setFilters(prev => ({ 
-      ...prev, 
-      orderCount: { ...prev.orderCount, [field]: value } 
-    }));
+    
+    // Update the filters state
+    setFilters(prev => {
+      const newFilters = { 
+        ...prev, 
+        orderCount: { ...prev.orderCount, [field]: value } 
+      };
+      
+      // Apply filters immediately
+      applyFilters(newFilters);
+      
+      return newFilters;
+    });
   };
 
   return (
