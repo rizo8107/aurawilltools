@@ -42,7 +42,7 @@ function App() {
     manifest: 'Create and manage shipping manifests',
     campaign: 'Manage repeat customer campaigns and feedback',
     repeatorders: 'View and manage customers with repeat orders',
-    orderhistory: 'View, filter, and print past orders.',
+    orderhistory: 'View, filter, and print past orders',
     gstinvoice: 'Generate GST invoices for orders',
   };
 

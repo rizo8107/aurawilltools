@@ -75,9 +75,19 @@ const OrderForm = () => {
         throw new Error(`Webhook failed with status: ${response.status}`);
       }
 
-      const data = await response.json();
-      setOrderData(data);
-      setStatus('success');
+      // Get the raw text first to check if it's valid JSON
+      const responseText = await response.text();
+      
+      try {
+        // Try to parse the text as JSON
+        const data = JSON.parse(responseText);
+        setOrderData(data);
+        setStatus('success');
+      } catch (jsonError) {
+        console.error('JSON parsing error:', jsonError);
+        console.error('Raw response:', responseText);
+        throw new Error(`Invalid JSON response: ${jsonError.message}`);
+      }
     } catch (error) {
       setStatus('error');
       if (error instanceof Error) {

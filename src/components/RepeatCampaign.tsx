@@ -228,7 +228,7 @@ export default function RepeatCampaign({ initialOrderNumber = '' }: RepeatCampai
       return;
     }
 
-    const apiUrl = `https://app.callerdesk.io/api/click_to_call_v2?calling_party_a=09363744463&calling_party_b=${phoneNumber}&deskphone=08062863034&authcode=aee60239bd42b6427d82b94bbb676a3d&call_from_did=1`;
+    const apiUrl = `https://app.callerdesk.io/api/click_to_call_v2?calling_party_a=09025500829&calling_party_b=${phoneNumber}&deskphone=08062863034&authcode=aee60239bd42b6427d82b94bbb676a3d&call_from_did=1`;
 
     try {
       const response = await fetch(apiUrl);
