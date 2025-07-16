@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { CheckCircle, AlertCircle, Loader, FilePlus2, Package } from 'lucide-react';
+import { AlertCircle, Loader, Package, MapPin, CheckCircle, XCircle, Truck } from 'lucide-react';
 
 // Define the structure of the order response
 interface OrderResponse {
@@ -32,7 +32,23 @@ interface OrderResponse {
     total_price: number;
     order_date: string;
   };
+  // Service availability fields
+  extracted_address?: string;
+  pincode?: string;
+  serviceable?: boolean;
+  matched_area?: string | null;
+  service_center?: string | null;
+  hub_center?: string | null;
+  doc_delivery?: string;
+  non_doc_delivery?: string;
+  oda_location?: string;
+  priority?: string;
+  district?: string;
+  delivery_type?: string;
+  communication?: string;
 }
+
+// Type definitions for the form
 
 // Define the submission status
 type FormStatus = 'idle' | 'submitting' | 'success' | 'error';
@@ -42,9 +58,82 @@ const OrderForm = () => {
   const [status, setStatus] = useState<FormStatus>('idle');
   const [errorMessage, setErrorMessage] = useState('');
   const [orderData, setOrderData] = useState<OrderResponse | null>(null);
+  const [trackingNumber, setTrackingNumber] = useState('');
+  const [trackingCompany, setTrackingCompany] = useState('');
+  const [trackingStatus, setTrackingStatus] = useState<FormStatus>('idle');
+  const [trackingError, setTrackingError] = useState('');
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setOrderNumber(e.target.value);
+  };
+  
+  const handleTrackingNumberChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setTrackingNumber(e.target.value);
+  };
+  
+  const handleTrackingCompanyChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setTrackingCompany(e.target.value);
+  };
+  
+  const handleTrackingSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    
+    if (!orderData) {
+      setTrackingError('No order data available');
+      return;
+    }
+    
+    if (!trackingNumber.trim()) {
+      setTrackingError('Please enter a tracking number');
+      return;
+    }
+    
+    setTrackingStatus('submitting');
+    setTrackingError('');
+    
+    try {
+      // Include all order data and add the new tracking information
+      const payload = {
+        ...orderData,
+        tracking_number: trackingNumber,
+        tracking_company: trackingCompany,
+        // Ensure print_slip is included if it exists
+        print_slip: orderData.print_slip ? {
+          ...orderData.print_slip
+        } : undefined
+      };
+      
+      const response = await fetch('https://auto-n8n.9krcxo.easypanel.host/webhook/manualsheet', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Webhook failed with status: ${response.status}`);
+      }
+      
+      // Update the local order data with the new tracking information
+      setOrderData({
+        ...orderData,
+        tracking_number: trackingNumber,
+        tracking_company: trackingCompany
+      });
+      
+      setTrackingStatus('success');
+      // Reset form fields after successful submission
+      setTrackingNumber('');
+      setTrackingCompany('');
+    } catch (error) {
+      setTrackingStatus('error');
+      if (error instanceof Error) {
+        setTrackingError(error.message);
+      } else {
+        setTrackingError('An unknown error occurred.');
+      }
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -81,12 +170,24 @@ const OrderForm = () => {
       try {
         // Try to parse the text as JSON
         const data = JSON.parse(responseText);
-        setOrderData(data);
+        
+        // Handle array response format
+        if (Array.isArray(data)) {
+          // If it's an array, take the first element that has order_id
+          const orderItem = data.find(item => item.order_id !== undefined);
+          if (orderItem) {
+            setOrderData(orderItem as OrderResponse);
+          }
+        } else {
+          // Handle single object response (backward compatibility)
+          setOrderData(data as OrderResponse);
+        }
+        
         setStatus('success');
-      } catch (jsonError) {
+      } catch (jsonError: unknown) {
         console.error('JSON parsing error:', jsonError);
         console.error('Raw response:', responseText);
-        throw new Error(`Invalid JSON response: ${jsonError.message}`);
+        throw new Error(`Invalid JSON response: ${jsonError instanceof Error ? jsonError.message : 'Unknown error'}`);
       }
     } catch (error) {
       setStatus('error');
@@ -164,12 +265,204 @@ const OrderForm = () => {
           </div>
         </form>
 
+        {/* Service Availability Display */}
+        {orderData && orderData.serviceable !== undefined && (
+          <div className="border border-gray-200 rounded-lg overflow-hidden mb-6">
+            <div className="bg-gray-50 px-6 py-4 border-b border-gray-200">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center">
+                  <MapPin className="h-5 w-5 text-gray-500 mr-2" />
+                  <h2 className="text-lg font-semibold text-gray-800">Delivery Service Availability</h2>
+                </div>
+                <span className={`px-3 py-1 rounded-full text-sm font-medium flex items-center ${orderData.serviceable ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
+                  {orderData.serviceable ? (
+                    <>
+                      <CheckCircle className="h-4 w-4 mr-1" />
+                      Serviceable
+                    </>
+                  ) : (
+                    <>
+                      <XCircle className="h-4 w-4 mr-1" />
+                      Not Serviceable
+                    </>
+                  )}
+                </span>
+              </div>
+            </div>
+            
+            <div className="p-6 grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-6">
+              <div>
+                <h3 className="text-sm font-medium text-gray-500 mb-3">Location Information</h3>
+                <div className="space-y-3">
+                  {orderData.pincode && (
+                    <div>
+                      <p className="text-sm font-medium text-gray-500">Pincode</p>
+                      <p className="text-base font-medium text-gray-900">{orderData.pincode}</p>
+                    </div>
+                  )}
+                  {orderData.matched_area && (
+                    <div>
+                      <p className="text-sm font-medium text-gray-500">Matched Area</p>
+                      <p className="text-base font-medium text-gray-900">{orderData.matched_area}</p>
+                    </div>
+                  )}
+                  {orderData.district && (
+                    <div>
+                      <p className="text-sm font-medium text-gray-500">District</p>
+                      <p className="text-base font-medium text-gray-900">{orderData.district}</p>
+                    </div>
+                  )}
+                  {orderData.delivery_type && (
+                    <div>
+                      <p className="text-sm font-medium text-gray-500">Location Type</p>
+                      <p className="text-base font-medium text-gray-900">{orderData.delivery_type}</p>
+                    </div>
+                  )}
+                  {orderData.extracted_address && (
+                    <div>
+                      <p className="text-sm font-medium text-gray-500">Extracted Address</p>
+                      <p className="text-base font-medium text-gray-900">{orderData.extracted_address}</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+              
+              <div>
+                <h3 className="text-sm font-medium text-gray-500 mb-3">Service Information</h3>
+                <div className="space-y-3">
+                  {orderData.hub_center && (
+                    <div>
+                      <p className="text-sm font-medium text-gray-500">Hub Center</p>
+                      <p className="text-base font-medium text-gray-900">{orderData.hub_center}</p>
+                    </div>
+                  )}
+                  {orderData.service_center && (
+                    <div>
+                      <p className="text-sm font-medium text-gray-500">Service Center</p>
+                      <p className="text-base font-medium text-gray-900">{orderData.service_center}</p>
+                    </div>
+                  )}
+                  {orderData.doc_delivery && (
+                    <div>
+                      <p className="text-sm font-medium text-gray-500">Document Delivery</p>
+                      <p className="text-base font-medium text-gray-900">{orderData.doc_delivery}</p>
+                    </div>
+                  )}
+                  {orderData.non_doc_delivery && (
+                    <div>
+                      <p className="text-sm font-medium text-gray-500">Non-Document Delivery</p>
+                      <p className="text-base font-medium text-gray-900">{orderData.non_doc_delivery}</p>
+                    </div>
+                  )}
+                  {orderData.oda_location && (
+                    <div>
+                      <p className="text-sm font-medium text-gray-500">ODA Location</p>
+                      <p className="text-base font-medium text-gray-900">{orderData.oda_location}</p>
+                    </div>
+                  )}
+                  {orderData.priority && (
+                    <div>
+                      <p className="text-sm font-medium text-gray-500">Priority</p>
+                      <p className="text-base font-medium text-gray-900">{orderData.priority}</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+              
+              {/* Communication section */}
+              {orderData.communication && (
+                <div className="md:col-span-2">
+                  <h3 className="text-sm font-medium text-gray-500 mb-2">Communication</h3>
+                  <div className="bg-gray-50 p-4 rounded-lg">
+                    <p className="text-sm text-gray-700">{orderData.communication}</p>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+        
+        {/* Tracking Update Form */}
+        {orderData && (
+          <div className="border border-gray-200 rounded-lg overflow-hidden mb-6">
+            <div className="bg-gray-50 px-6 py-4 border-b border-gray-200">
+              <div className="flex items-center">
+                <Truck className="h-5 w-5 text-gray-500 mr-2" />
+                <h2 className="text-lg font-semibold text-gray-800">Update Tracking Information</h2>
+              </div>
+            </div>
+            <div className="p-6">
+              <form onSubmit={handleTrackingSubmit} className="space-y-4">
+                <div>
+                  <label htmlFor="trackingNumber" className="block text-sm font-medium text-gray-700 mb-1">
+                    Tracking Number
+                  </label>
+                  <input
+                    id="trackingNumber"
+                    type="text"
+                    value={trackingNumber}
+                    onChange={handleTrackingNumberChange}
+                    className="w-full p-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    placeholder="Enter tracking number"
+                  />
+                </div>
+                
+                <div>
+                  <label htmlFor="trackingCompany" className="block text-sm font-medium text-gray-700 mb-1">
+                    Tracking Company
+                  </label>
+                  <input
+                    id="trackingCompany"
+                    type="text"
+                    value={trackingCompany}
+                    onChange={handleTrackingCompanyChange}
+                    className="w-full p-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    placeholder="Enter courier company name"
+                  />
+                </div>
+                
+                <div>
+                  <button
+                    type="submit"
+                    disabled={trackingStatus === 'submitting'}
+                    className="w-full bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:bg-blue-300 disabled:cursor-not-allowed"
+                  >
+                    {trackingStatus === 'submitting' ? (
+                      <span className="flex items-center justify-center">
+                        <Loader className="h-4 w-4 animate-spin mr-2" />
+                        Updating...
+                      </span>
+                    ) : 'Update Tracking'}
+                  </button>
+                </div>
+                
+                {trackingError && (
+                  <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-md flex items-start">
+                    <AlertCircle className="h-5 w-5 text-red-400 mr-2 mt-0.5" />
+                    <span>{trackingError}</span>
+                  </div>
+                )}
+                
+                {trackingStatus === 'success' && (
+                  <div className="bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded-md flex items-start">
+                    <CheckCircle className="h-5 w-5 text-green-400 mr-2 mt-0.5" />
+                    <span>Tracking information updated successfully!</span>
+                  </div>
+                )}
+              </form>
+            </div>
+          </div>
+        )}
+        
         {/* Order Details Display */}
         {orderData && (
           <div className="border border-gray-200 rounded-lg overflow-hidden">
             <div className="bg-gray-50 px-6 py-4 border-b border-gray-200">
               <div className="flex items-center justify-between">
-                <h2 className="text-lg font-semibold text-gray-800">Order Details</h2>
+                <div className="flex items-center">
+                  <Package className="h-5 w-5 text-gray-500 mr-2" />
+                  <h2 className="text-lg font-semibold text-gray-800">Order Details</h2>
+                </div>
                 <span className={`px-3 py-1 rounded-full text-sm font-medium ${orderData.status === 'paid' ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'}`}>
                   {orderData.status}
                 </span>
