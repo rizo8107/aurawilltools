@@ -433,10 +433,12 @@ export default function RepeatCampaign({ initialOrderNumber = '' }: RepeatCampai
                     >
                       <option value="">Not Called</option>
                       <option value="Called">Called</option>
-                      <option value="Busy">Busy</option>
+                      <option value="Call Waiting">Call Waiting</option>
                       <option value="Cancelled">Cancelled</option>
                       <option value="No Response">No Response</option>
+                      <option value="Customer Busy">Customer Busy</option>  
                       <option value="Wrong Number">Wrong Number</option>
+                      <option value="Call Later">Call Later</option>
                       <option value="Invalid Number">Invalid Number</option>
                     </select>
                   </div>
@@ -587,7 +589,7 @@ export default function RepeatCampaign({ initialOrderNumber = '' }: RepeatCampai
               
               <div>
                 <label className="block text-gray-700 text-sm font-medium mb-1">
-                  What did you like about the health mix?
+                What changes did you notice, and what did you like about the health mix?
                 </label>
                 <input
                   type="text"
@@ -633,22 +635,7 @@ export default function RepeatCampaign({ initialOrderNumber = '' }: RepeatCampai
                 />
               </div>
               
-              <div>
-                <label className="block text-gray-700 text-sm font-medium mb-1">
-                  What difference did you feel using this health mix?
-                </label>
-                <input
-                  type="text"
-                  name="perceivedDifference"
-                  value={feedbackForm.perceivedDifference}
-                  onChange={handleFeedbackChange}
-                  className="w-full p-2 border border-gray-300 rounded-lg"
-                  required
-                  aria-label="Perceived difference"
-                  title="What difference you felt using this health mix"
-                />
-              </div>
-              
+
               <div>
                 <label className="block text-gray-700 text-sm font-medium mb-1">
                   Who used this?
@@ -797,20 +784,20 @@ export default function RepeatCampaign({ initialOrderNumber = '' }: RepeatCampai
               
               <div>
                 <label className="block text-gray-700 text-sm font-medium mb-1">
-                  Review received
+                  Using in cover or in container
                 </label>
                 <select
-                  name="reviewReceived"
-                  value={feedbackForm.reviewReceived}
+                  name="usingInCoverOrContainer"
+                  value={feedbackForm.usingInCoverOrContainer}
                   onChange={handleFeedbackChange}
                   className="w-full p-2 border border-gray-300 rounded-lg"
                   required
-                  aria-label="Review received"
-                  title="Whether the review was received"
+                  aria-label="Using in cover or container"
+                  title="Whether the product was used in a cover or container"
                 >
                   <option value="">Select</option>
-                  <option value="Yes">Yes</option>
-                  <option value="No">No</option>
+                  <option value="Cover">Cover</option>
+                  <option value="Container">Container</option>
                 </select>
               </div>
             </div>
