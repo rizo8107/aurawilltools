@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { AlertCircle, Loader, Package, MapPin, CheckCircle, XCircle, Truck } from 'lucide-react';
 
 // Define the structure of the order response
@@ -62,6 +62,7 @@ const OrderForm = () => {
   const [trackingCompany, setTrackingCompany] = useState('');
   const [trackingStatus, setTrackingStatus] = useState<FormStatus>('idle');
   const [trackingError, setTrackingError] = useState('');
+  const [callerName, setCallerName] = useState<string | null>(null);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setOrderNumber(e.target.value);
@@ -75,6 +76,14 @@ const OrderForm = () => {
     setTrackingCompany(e.target.value);
   };
   
+  // Load caller name from localStorage on component mount
+  useEffect(() => {
+    const savedCaller = localStorage.getItem('caller_name');
+    if (savedCaller) {
+      setCallerName(savedCaller);
+    }
+  }, []);
+
   const handleTrackingSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
@@ -97,6 +106,8 @@ const OrderForm = () => {
         ...orderData,
         tracking_number: trackingNumber,
         tracking_company: trackingCompany,
+        // Include caller name if available
+        caller_name: callerName || 'Unknown',
         // Ensure print_slip is included if it exists
         print_slip: orderData.print_slip ? {
           ...orderData.print_slip

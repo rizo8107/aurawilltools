@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Search, AlertCircle, CheckCircle, Clock, Calendar, Package, DollarSign, User, Phone, Mail, ArrowRight } from 'lucide-react';
+import { Search, AlertCircle, CheckCircle, Clock, Calendar, Package, DollarSign, User, Phone, Mail, ArrowRight, X } from 'lucide-react';
 
 // Define interfaces for the response data
 interface Product {
@@ -46,6 +46,14 @@ interface RepeatCampaignProps {
   initialOrderNumber?: string;
 }
 
+// Define a list of callers for the dropdown
+const CALLERS = [
+  'Priya',
+  'Megha',
+  'Sri',
+  'Ram'
+];
+
 export default function RepeatCampaign({ initialOrderNumber = '' }: RepeatCampaignProps) {
   const [orderId, setOrderId] = useState(initialOrderNumber || '');
   const [customerData, setCustomerData] = useState<CustomerData | null>(null);
@@ -56,6 +64,12 @@ export default function RepeatCampaign({ initialOrderNumber = '' }: RepeatCampai
   const [callStatus, setCallStatus] = useState('');
   const [callStatusType, setCallStatusType] = useState<'success' | 'error' | 'info' | ''>('');
   const [selectedCallStatus, setSelectedCallStatus] = useState('');
+  
+  // Caller selection state
+  const [showCallerDialog, setShowCallerDialog] = useState(false);
+  const [selectedCaller, setSelectedCaller] = useState('');
+  const [callerError, setCallerError] = useState('');
+  const [storedCaller, setStoredCaller] = useState<string | null>(null);
   
   // State for the feedback form
   // Reference to track if initial search has been performed
@@ -98,17 +112,51 @@ export default function RepeatCampaign({ initialOrderNumber = '' }: RepeatCampai
   }, []);
   
   // Effect to automatically search when initialOrderNumber is provided
+  // Check for stored caller in localStorage on component mount
+  useEffect(() => {
+    const savedCaller = localStorage.getItem('caller_name');
+    if (savedCaller) {
+      setSelectedCaller(savedCaller);
+      setStoredCaller(savedCaller);
+    }
+  }, []);
+
   useEffect(() => {
     // Only perform the search if initialOrderNumber is provided and not empty
     // and we haven't already performed the initial search
     if (initialOrderNumber && !initialSearchDone.current) {
       initialSearchDone.current = true;
-      // Use the existing search function
-      handleOrderSearch(null);
+      
+      // Check if we have a caller name before searching
+      const savedCaller = localStorage.getItem('caller_name');
+      if (savedCaller) {
+        // Use the existing search function
+        handleOrderSearch(null);
+      } else {
+        // Show caller selection dialog first
+        setShowCallerDialog(true);
+      }
     }
   }, [initialOrderNumber]); // eslint-disable-line react-hooks/exhaustive-deps
   
-
+  // Handle caller selection
+  const handleCallerSelect = () => {
+    if (!selectedCaller) {
+      setCallerError('Please select your name');
+      return;
+    }
+    
+    // Store caller name in localStorage
+    localStorage.setItem('caller_name', selectedCaller);
+    setStoredCaller(selectedCaller);
+    setShowCallerDialog(false);
+    setCallerError('');
+    
+    // If there's an order ID, proceed with search
+    if (orderId.trim()) {
+      handleOrderSearch(null);
+    }
+  };
   
   const handleOrderSearch = async (e: React.FormEvent | null) => {
     // Only prevent default if e is not null (i.e., if called from form submission)
@@ -121,6 +169,12 @@ export default function RepeatCampaign({ initialOrderNumber = '' }: RepeatCampai
       return;
     }
     
+    // Check if caller is selected
+    if (!storedCaller) {
+      setShowCallerDialog(true);
+      return;
+    }
+    
     setLoading(true);
     setError('');
     
@@ -130,7 +184,10 @@ export default function RepeatCampaign({ initialOrderNumber = '' }: RepeatCampai
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ Order: orderId }),
+        body: JSON.stringify({ 
+          Order: orderId,
+          caller_name: storedCaller // Include caller name in the request
+        }),
       });
       
       if (!response.ok) {
@@ -351,6 +408,75 @@ export default function RepeatCampaign({ initialOrderNumber = '' }: RepeatCampai
            messageType === 'error' ? <AlertCircle className="w-5 h-5 mr-2" /> :
            <Clock className="w-5 h-5 mr-2" />}
           <span>{message}</span>
+        </div>
+      )}
+      
+      {/* Caller Selection Dialog */}
+      {showCallerDialog && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 w-full max-w-md">
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-xl font-semibold">Select Your Name</h2>
+              <button 
+                onClick={() => setShowCallerDialog(false)} 
+                className="text-gray-500 hover:text-gray-700"
+                aria-label="Close dialog"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            
+            <p className="text-gray-600 mb-4">
+              Please select your name to track who is handling this order.
+            </p>
+            
+            <div className="mb-4">
+              <label htmlFor="caller-select" className="block text-sm font-medium text-gray-700 mb-1">
+                Your Name
+              </label>
+              <select
+                id="caller-select"
+                value={selectedCaller}
+                onChange={(e) => setSelectedCaller(e.target.value)}
+                className="w-full p-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="">-- Select your name --</option>
+                {CALLERS.map((caller) => (
+                  <option key={caller} value={caller}>{caller}</option>
+                ))}
+              </select>
+              {callerError && (
+                <p className="text-red-500 text-sm mt-1">{callerError}</p>
+              )}
+            </div>
+            
+            <div className="flex justify-end">
+              <button
+                onClick={handleCallerSelect}
+                className="bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+              >
+                Confirm
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      
+      {/* Current Caller Display */}
+      {storedCaller && (
+        <div className="bg-blue-50 border border-blue-200 rounded-md p-3 mb-6 flex justify-between items-center">
+          <div className="flex items-center">
+            <User className="h-5 w-5 text-blue-500 mr-2" />
+            <span className="text-blue-800">Current caller: <strong>{storedCaller}</strong></span>
+          </div>
+          <button 
+            onClick={() => {
+              setShowCallerDialog(true);
+            }}
+            className="text-blue-600 hover:text-blue-800 text-sm font-medium"
+          >
+            Change
+          </button>
         </div>
       )}
       
@@ -798,6 +924,8 @@ export default function RepeatCampaign({ initialOrderNumber = '' }: RepeatCampai
                   <option value="">Select</option>
                   <option value="Cover">Cover</option>
                   <option value="Container">Container</option>
+                  <option value="Don't Know">Don't Know</option>
+                  <option value="Cover with Container">Cover with Container</option>
                 </select>
               </div>
             </div>
