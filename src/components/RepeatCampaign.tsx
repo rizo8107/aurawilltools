@@ -186,7 +186,7 @@ export default function RepeatCampaign({ initialOrderNumber = '' }: RepeatCampai
         },
         body: JSON.stringify({ 
           Order: orderId,
-          caller_name: storedCaller // Include caller name in the request
+          caller: storedCaller // Include caller name in the request with the correct parameter name
         }),
       });
       
