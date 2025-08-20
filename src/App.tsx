@@ -8,21 +8,42 @@ import RepeatOrdersTable from './components/RepeatOrdersTable';
 import OrderList from './components/OrderList';
 import GstInvoiceGenerator from './components/GstInvoice';
 import Auth from './components/Auth';
-import { ArrowRight, Package, Printer, Truck, FileText, Users, History, LogOut, FileSpreadsheet, RefreshCw } from 'lucide-react';
+import NdrDashboard from './components/NdrDashboard';
+import { ArrowRight, Package, Printer, Truck, FileText, Users, LogOut, FileSpreadsheet, RefreshCw } from 'lucide-react';
 
-
-type TabType = 'order' | 'printslip' | 'tracking' | 'manifest' | 'campaign' | 'repeatorders' | 'orderhistory' | 'gstinvoice';
+type TabType = 'order' | 'printslip' | 'tracking' | 'manifest' | 'campaign' | 'repeatorders' | 'orderhistory' | 'gstinvoice' | 'ndr';
 
 function App() {
   const [activeTab, setActiveTab] = useState<TabType>('order');
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
+  const [repeatInitialOrder, setRepeatInitialOrder] = useState<string>("");
   
-  // Check for authentication on component mount
+  // Check for authentication and preloaded repeat order on mount
   useEffect(() => {
     const authToken = localStorage.getItem('auth_token');
     if (authToken === 'authenticated') {
       setIsAuthenticated(true);
     }
+    const cachedOrder = localStorage.getItem('repeat_order_number');
+    if (cachedOrder) {
+      setRepeatInitialOrder(cachedOrder);
+    }
+  }, []);
+
+  // Listen for order open events from NDR Dashboard
+  useEffect(() => {
+    function onOpenRepeat(ev: Event) {
+      try {
+        const e = ev as CustomEvent<{ orderId?: string }>; 
+        const id = e.detail?.orderId || localStorage.getItem('repeat_order_number') || '';
+        setRepeatInitialOrder(id || '');
+        setActiveTab('campaign');
+      } catch {
+        // ignore
+      }
+    }
+    window.addEventListener('open-repeat-campaign', onOpenRepeat as EventListener);
+    return () => window.removeEventListener('open-repeat-campaign', onOpenRepeat as EventListener);
   }, []);
 
   const navigationItems = [
@@ -32,6 +53,7 @@ function App() {
     { id: 'manifest', label: 'Create Manifest', icon: <FileText size={20} /> },
     { id: 'campaign', label: 'Repeat Campaign', icon: <Users size={20} /> },
     { id: 'repeatorders', label: 'Repeat Orders', icon: <RefreshCw size={20} /> },
+    { id: 'ndr', label: 'NDR Dashboard', icon: <Truck size={20} /> },
     { id: 'gstinvoice', label: 'GST Invoice', icon: <FileSpreadsheet size={20} /> },
   ];
 
@@ -44,6 +66,7 @@ function App() {
     repeatorders: 'View and manage customers with repeat orders',
     orderhistory: 'View, filter, and print past orders',
     gstinvoice: 'Generate GST invoices for orders',
+    ndr: 'Monitor & resolve non-delivery shipments',
   };
 
   // Handle logout
@@ -108,18 +131,21 @@ function App() {
             activeTab === 'order' ? 'max-w-6xl' : 
             activeTab === 'tracking' || activeTab === 'manifest' ? 'max-w-3xl' : 
             activeTab === 'campaign' ? 'max-w-5xl' : 
-            activeTab === 'gstinvoice' || activeTab === 'orderhistory' ? 'max-w-7xl' : 'max-w-4xl'
+            activeTab === 'gstinvoice' || activeTab === 'orderhistory' || activeTab === 'ndr' ? 'max-w-7xl' : 'max-w-4xl'
           } mx-auto`}>
             {activeTab === 'order' && <OrderForm />}
             {activeTab === 'printslip' && <PrintSlip />}
             {activeTab === 'tracking' && <UpdateTracking />}
             {activeTab === 'manifest' && <CreateManifest />}
-            {activeTab === 'campaign' && <RepeatCampaign />}
+            {activeTab === 'campaign' && (
+              <RepeatCampaign initialOrderNumber={repeatInitialOrder} />
+            )}
             {activeTab === 'repeatorders' && 
               <RepeatOrdersTable />
             }
             {activeTab === 'orderhistory' && <OrderList />}
             {activeTab === 'gstinvoice' && <GstInvoiceGenerator />}
+            {activeTab === 'ndr' && <NdrDashboard />}
           </div>
         </main>
         
