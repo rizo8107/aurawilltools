@@ -9,7 +9,7 @@ import OrderList from './components/OrderList';
 import GstInvoiceGenerator from './components/GstInvoice';
 import Auth from './components/Auth';
 import NdrDashboard from './components/NdrDashboard';
-import { ArrowRight, Package, Printer, Truck, FileText, Users, LogOut, FileSpreadsheet, RefreshCw } from 'lucide-react';
+import { Package, Printer, Truck, FileText, Users, LogOut, FileSpreadsheet, RefreshCw } from 'lucide-react';
 
 type TabType = 'order' | 'printslip' | 'tracking' | 'manifest' | 'campaign' | 'repeatorders' | 'orderhistory' | 'gstinvoice' | 'ndr';
 
@@ -149,13 +149,7 @@ function App() {
           </div>
         </main>
         
-        <footer className="bg-white border-t border-gray-200 p-4 text-center text-sm text-gray-500">
-            <div className="flex items-center justify-center gap-1 mb-1">
-              <span>Proceed with confidence</span>
-              <ArrowRight size={14} />
-            </div>
-            <p>All rights reserved.</p>
-        </footer>
+        {/* Footer removed per request: removed tagline and rights text */}
       </div>
     </div>
   );
