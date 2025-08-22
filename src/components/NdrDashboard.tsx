@@ -108,11 +108,8 @@ function eddStatus(
 
 function trackingUrl(row: NdrRow): string | null {
   const awb = String(row.waybill || "").trim();
-  const c = courierName(row.courier_account);
   if (!awb) return null;
-  if (c === "Bluedart") return `https://www.bluedart.com/tracking?awb=${encodeURIComponent(awb)}`;
-  if (c === "Delhivery") return `https://www.delhivery.com/track/package/${encodeURIComponent(awb)}`;
-  return null;
+  return `https://aurawill.clickpost.ai/en?waybill=${encodeURIComponent(awb)}`;
 }
 
 function classNames(...xs: (string | false | undefined)[]) {
