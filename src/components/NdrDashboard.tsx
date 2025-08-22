@@ -80,7 +80,7 @@ function toBucket(row: NdrRow): string {
 
 function parseNotes(
   notes: string | null
-): { phone?: string; customer_issue?: string; action_taken?: string; bucket_override?: string } {
+): { phone?: string; customer_issue?: string; action_taken?: string; action_to_be_taken?: string; bucket_override?: string } {
   if (!notes) return {};
   try {
     const obj = JSON.parse(notes);
@@ -845,10 +845,12 @@ function NdrActionsPanel({ row, onQuickUpdate }: { row: NdrRow; onQuickUpdate: (
   const [emailSubject, setEmailSubject] = useState<string>("");
   const [emailBody, setEmailBody] = useState<string>("");
   const [emailCourier, setEmailCourier] = useState<string>(courierName(row.courier_account || ""));
+  // New: Action to be taken (for email), requested by user. Highlighted in UI and included in email.
+  const [actionToBeTaken, setActionToBeTaken] = useState<string>(initial.action_to_be_taken || "");
 
   async function save() {
     const chosenAction = action === "Other" ? (other.trim() || "Other") : (action || "");
-    const notes = { phone: phone || undefined, customer_issue: issue || undefined, action_taken: chosenAction || undefined } as any;
+    const notes = { phone: phone || undefined, customer_issue: issue || undefined, action_taken: chosenAction || undefined, action_to_be_taken: (actionToBeTaken || undefined) } as any;
     await onQuickUpdate({ called, remark: remark || null, corrected_phone: correctedPhone || null, corrected_address: correctedAddress || null, notes: JSON.stringify(notes) } as any);
   }
 
@@ -911,22 +913,23 @@ function NdrActionsPanel({ row, onQuickUpdate }: { row: NdrRow; onQuickUpdate: (
     const bodyText = [
       `Hello Team,`,
       ``,
-      `We are observing an address-related issue for the following shipment. Kindly assist with resolution or guide on next steps.`,
-      ``,
-      `Shipping Details`,
-      table,
+      `>>> REQUESTED ACTION (IMPORTANT) <<<`,
+      actionToBeTaken
+        ? `- ${actionToBeTaken}`
+        : `- Please correct the address and/or attempt delivery as appropriate.\n- Update the shipment status accordingly.`,
       ``,
       (correctedPhone || correctedAddress) ? `Corrections` : undefined,
       correctedPhone ? `- Corrected Phone: ${correctedPhone}` : undefined,
       correctedAddress ? `- Corrected Address: ${correctedAddress}` : undefined,
       (correctedPhone || correctedAddress) ? `` : undefined,
+      `We are observing an address-related issue for the following shipment. Kindly assist with resolution or guide on next steps.`,
+      ``,
+      `Shipping Details`,
+      table,
+      ``,
       `Notes`,
       issue ? `- Customer Issue: ${issue}` : undefined,
       remark ? `- Internal Remarks: ${remark}` : undefined,
-      ``,
-      `Requested action:`,
-      `- Please correct the address and/or attempt delivery as appropriate.`,
-      `- Update the shipment status accordingly.`,
       ``,
       `Thank you,`,
       `Support`,
@@ -955,19 +958,28 @@ function NdrActionsPanel({ row, onQuickUpdate }: { row: NdrRow; onQuickUpdate: (
         </ul>
       </div>
     ` : "";
+    const topRequestedActionHtml = `
+      <div style="margin:0 0 16px 0;padding:14px 16px;border:2px solid #F59E0B;background:#FEF3C7;border-radius:12px;">
+        <div style="font-weight:700;color:#92400E;font-size:16px;display:flex;align-items:center;gap:8px;">
+          <span>⚠️ Requested action</span>
+        </div>
+        <ul style="margin:8px 0 0 20px;padding:0;font-size:15px;color:#7C2D12;">
+          ${actionToBeTaken
+            ? `<li>${esc(actionToBeTaken)}</li>`
+            : `<li>Please correct the address and/or attempt delivery as appropriate.</li><li>Update the shipment status accordingly.</li>`}
+        </ul>
+      </div>
+    `;
     const bodyHtml = `
       <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:14px;line-height:1.6;color:#0f172a;">
         <p>Hello Team,</p>
+        ${topRequestedActionHtml}
+        ${correctionsBox}
         <p>We are observing an address-related issue for the following shipment. Kindly assist with resolution or guide on next steps.</p>
         <h3 style="margin:16px 0 8px 0;font-size:15px;">Shipping Details</h3>
         ${htmlTable}
-        ${correctionsBox}
+        
         ${(issue || remark) ? `<h3 style="margin:16px 0 8px 0;font-size:15px;">Notes</h3><ul style="margin:0 0 16px 20px;padding:0;">${notesList}</ul>` : ""}
-        <h3 style="margin:16px 0 8px 0;font-size:15px;">Requested action</h3>
-        <ul style="margin:0 0 16px 20px;padding:0;">
-          <li>Please correct the address and/or attempt delivery as appropriate.</li>
-          <li>Update the shipment status accordingly.</li>
-        </ul>
         <p>Thank you,<br/>Support</p>
         <hr style="border:none;border-top:1px solid #e2e8f0;margin:16px 0;"/>
         <p style="color:#475569;">This email was sent automatically with n8n</p>
@@ -1000,6 +1012,7 @@ function NdrActionsPanel({ row, onQuickUpdate }: { row: NdrRow; onQuickUpdate: (
       phone: phone || null,
       issue: issue || null,
       remark: remark || null,
+      requested_action: actionToBeTaken || null,
       tracking: trackingUrl(row) || null,
       called,
       timestamp: new Date().toISOString(),
@@ -1116,6 +1129,15 @@ function NdrActionsPanel({ row, onQuickUpdate }: { row: NdrRow; onQuickUpdate: (
               <button className="px-2 py-1 text-sm text-slate-500 hover:text-slate-700" title="Close" onClick={() => setShowEmail(false)}>Close</button>
             </div>
             <div className="p-5 space-y-3">
+              <label className="block text-sm">
+                Action to be taken (for email)
+                <input
+                  className="mt-1 w-full ring-2 ring-amber-300 rounded-lg px-3 py-2 bg-amber-50/40"
+                  value={actionToBeTaken}
+                  onChange={(e) => setActionToBeTaken(e.target.value)}
+                  placeholder="e.g., Please reattempt delivery tomorrow and update address landmark"
+                />
+              </label>
               <label className="block text-sm">
                 Courier partner
                 <select
