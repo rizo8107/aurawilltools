@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import RepeatCampaign from "./RepeatCampaign";
-import { Download, RefreshCw, Search, ExternalLink, Filter, Edit3, CheckCircle2, AlertTriangle, XCircle, Clock, Truck, Info, ClipboardCopy, Columns } from "lucide-react";
+import { Download, RefreshCw, Search, ExternalLink, Filter, Edit3, CheckCircle2, AlertTriangle, XCircle, Clock, Truck, Info, ClipboardCopy, Columns, Calendar } from "lucide-react";
 
 /**
  * NDR CRM Dashboard
@@ -80,7 +80,7 @@ function toBucket(row: NdrRow): string {
 
 function parseNotes(
   notes: string | null
-): { phone?: string; customer_issue?: string; action_taken?: string; action_to_be_taken?: string; bucket_override?: string } {
+): { phone?: string; customer_issue?: string; action_taken?: string; action_to_be_taken?: string; bucket_override?: string; call_status?: string } {
   if (!notes) return {};
   try {
     const obj = JSON.parse(notes);
@@ -159,6 +159,17 @@ const ACTION_OPTIONS = [
   "Left voicemail/SMS",
   "Wrong address - requested confirmation",
   "Other",
+];
+
+// Call status options requested by user
+const CALL_STATUS_OPTIONS = [
+  "Yes",
+  "No",
+  "Didn't Pick",
+  "Busy",
+  "Asked to call later",
+  "Wrong Number",
+  "Invalid Number",
 ];
 
 function Pill({ tone, label }: { tone: "ok" | "warn" | "late" | "na"; label: string }) {
@@ -270,6 +281,9 @@ export default function NdrDashboard() {
   // pagination
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
+  // date filter (YYYY-MM-DD)
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
 
   const [editorOpen, setEditorOpen] = useState(false);
   const [editing, setEditing] = useState<NdrRow | null>(null);
@@ -322,6 +336,7 @@ export default function NdrDashboard() {
           __customer_issue: notes.customer_issue || "",
           __action_taken: notes.action_taken || "",
           __bucket_override: notes.bucket_override,
+          __call_status: notes.call_status || (r.called === true ? "Yes" : r.called === false ? "No" : ""),
         } as any;
       }),
     [rows]
@@ -332,16 +347,29 @@ export default function NdrDashboard() {
     return enriched.filter((r: any) => {
       if (courier !== "All" && courierName(r.courier_account) !== courier) return false;
       if (bucket !== "All" && r.__bucket !== bucket) return false;
+      // date range filter on event_time (inclusive day bounds)
+      if (fromDate || toDate) {
+        const ev = r.event_time ? new Date(r.event_time) : null;
+        if (!ev) return false;
+        if (fromDate) {
+          const start = new Date(`${fromDate}T00:00:00`);
+          if (ev < start) return false;
+        }
+        if (toDate) {
+          const end = new Date(`${toDate}T23:59:59.999`);
+          if (ev > end) return false;
+        }
+      }
       if (!QQ) return true;
       const hay = [r.order_id, r.waybill, r.delivery_status, r.remark, r.location, r.__phone, r.__customer_issue, r.__action_taken].join(" ").toLowerCase();
       return hay.includes(QQ);
     });
-  }, [enriched, q, courier, bucket]);
+  }, [enriched, q, courier, bucket, fromDate, toDate]);
 
   // reset to first page when filters/search change
   useEffect(() => {
     setPage(1);
-  }, [q, courier, bucket]);
+  }, [q, courier, bucket, fromDate, toDate]);
 
   const totalPages = useMemo(() => Math.max(1, Math.ceil(filtered.length / pageSize)), [filtered.length, pageSize]);
   const pageRows = useMemo(() => {
@@ -417,7 +445,7 @@ export default function NdrDashboard() {
       "Current Status",
       "Courier",
       "Mobile",
-      "Called",
+      "Call Status",
       "Issue (Customer)",
       "Action Taken",
       "EDD",
@@ -432,7 +460,7 @@ export default function NdrDashboard() {
         r.delivery_status || "",
         courierName(r.courier_account),
         r.__phone,
-        r.called ? "Yes" : "No",
+        r.__call_status || (r.called ? "Yes" : (r.called === false ? "No" : "")),
         r.__customer_issue,
         r.__action_taken,
         eddStatus(r.Partner_EDD).label,
@@ -523,6 +551,37 @@ export default function NdrDashboard() {
                 <option key={b}>{b}</option>
               ))}
             </select>
+          </div>
+          <div className="flex items-center gap-2 ring-1 ring-slate-200 rounded-xl px-2 py-2">
+            <Calendar className="w-4 h-4 text-slate-400" />
+            <label className="text-xs text-slate-500">
+              From
+              <input
+                type="date"
+                value={fromDate}
+                onChange={(e) => setFromDate(e.target.value)}
+                className="ml-2 bg-transparent text-sm outline-none"
+              />
+            </label>
+            <span className="text-slate-400">–</span>
+            <label className="text-xs text-slate-500">
+              To
+              <input
+                type="date"
+                value={toDate}
+                onChange={(e) => setToDate(e.target.value)}
+                className="ml-2 bg-transparent text-sm outline-none"
+              />
+            </label>
+            {(fromDate || toDate) && (
+              <button
+                title="Clear date filter"
+                onClick={() => { setFromDate(""); setToDate(""); }}
+                className="ml-2 px-2 py-1 text-xs rounded-lg ring-1 ring-slate-200 hover:bg-slate-50"
+              >
+                Clear
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -703,7 +762,7 @@ function TableView({ rows, onEdit: _onEdit, onQuickUpdate, total, page, pageSize
             <th className="min-w-[220px]">Current status</th>
             <th>Courier</th>
             <th>Email Sent</th>
-            <th>Called</th>
+            <th>Call Status</th>
             <th>EDD</th>
           </tr>
         </thead>
@@ -767,16 +826,34 @@ function TableView({ rows, onEdit: _onEdit, onQuickUpdate, total, page, pageSize
                   )}
                 </td>
                 <td>
-                  <button
-                    onClick={async (e) => {
+                  <select
+                    value={r.__call_status || (r.called ? "Yes" : (r.called === false ? "No" : ""))}
+                    onClick={(e) => e.stopPropagation()}
+                    onChange={async (e) => {
                       e.stopPropagation();
-                      await onQuickUpdate(r.id, { called: !r.called });
+                      const newStatus = e.target.value;
+                      const newCalled = newStatus === "Yes" ? true : newStatus === "No" ? false : null;
+                      const notes = parseNotes(r.notes);
+                      notes.call_status = newStatus || undefined;
+                      try {
+                        if ((r as any).__phone) {
+                          await fetch(`${SUPABASE_URL}/rpc/update_call_status`, {
+                            method: 'POST',
+                            headers: SUPABASE_HEADERS,
+                            body: JSON.stringify({ p_phone: (r as any).__phone, p_status: newStatus }),
+                          });
+                        }
+                      } catch {}
+                      await onQuickUpdate(r.id, { called: newCalled as any, notes: JSON.stringify(notes) });
                     }}
-                    className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs ring-1 ${r.called ? "bg-emerald-50 text-emerald-700 ring-emerald-200" : "bg-slate-50 text-slate-600 ring-slate-200"}`}
-                    title={r.called ? "Called: Yes" : "Called: No"}
+                    className="ring-1 ring-slate-200 rounded-full px-2 py-1 text-xs bg-white hover:bg-slate-50"
+                    title="Update call status"
                   >
-                    {r.called ? "Yes" : "No"}
-                  </button>
+                    <option value="">Select…</option>
+                    {CALL_STATUS_OPTIONS.map(opt => (
+                      <option key={opt} value={opt}>{opt}</option>
+                    ))}
+                  </select>
                 </td>
                 <td>
                   <Pill {...(r.__edd as any)} />
