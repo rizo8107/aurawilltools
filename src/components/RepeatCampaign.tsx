@@ -37,6 +37,7 @@ interface FeedbackForm {
   willGiveReview: 'Yes' | 'No' | '';
   sharedLink: 'Yes' | 'No' | '';
   reviewReceived: 'Yes' | 'No' | '';
+  usingInCoverOrContainer: string;
   orderId: string;
 }
 
@@ -44,6 +45,7 @@ interface FeedbackForm {
 
 interface RepeatCampaignProps {
   initialOrderNumber?: string;
+  hideFeedback?: boolean;
 }
 
 // Define a list of callers for the dropdown
@@ -54,7 +56,7 @@ const CALLERS = [
   'Ram'
 ];
 
-export default function RepeatCampaign({ initialOrderNumber = '' }: RepeatCampaignProps) {
+export default function RepeatCampaign({ initialOrderNumber = '', hideFeedback = false }: RepeatCampaignProps) {
   const [orderId, setOrderId] = useState(initialOrderNumber || '');
   const [customerData, setCustomerData] = useState<CustomerData | null>(null);
   const [loading, setLoading] = useState(false);
@@ -91,6 +93,7 @@ export default function RepeatCampaign({ initialOrderNumber = '' }: RepeatCampai
     willGiveReview: '',
     sharedLink: '',
     reviewReceived: '',
+    usingInCoverOrContainer: '',
     orderId: ''
   });
   
@@ -129,15 +132,15 @@ export default function RepeatCampaign({ initialOrderNumber = '' }: RepeatCampai
       
       // Check if we have a caller name before searching
       const savedCaller = localStorage.getItem('caller_name');
-      if (savedCaller) {
-        // Use the existing search function
+      if (savedCaller || hideFeedback) {
+        // When hideFeedback is true (embedded in NDR), do not block on caller selection
         handleOrderSearch(null);
       } else {
-        // Show caller selection dialog first
+        // Show caller selection dialog first (only when not embedded)
         setShowCallerDialog(true);
       }
     }
-  }, [initialOrderNumber]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [initialOrderNumber, hideFeedback]); // eslint-disable-line react-hooks/exhaustive-deps
   
   // Handle caller selection
   const handleCallerSelect = () => {
@@ -169,8 +172,8 @@ export default function RepeatCampaign({ initialOrderNumber = '' }: RepeatCampai
       return;
     }
     
-    // Check if caller is selected
-    if (!storedCaller) {
+    // Check if caller is selected (only enforce when not embedded)
+    if (!storedCaller && !hideFeedback) {
       setShowCallerDialog(true);
       return;
     }
@@ -380,6 +383,7 @@ export default function RepeatCampaign({ initialOrderNumber = '' }: RepeatCampai
         willGiveReview: '',
         sharedLink: '',
         reviewReceived: '',
+        usingInCoverOrContainer: '',
         orderId: feedbackForm.orderId
       });
       
@@ -411,8 +415,8 @@ export default function RepeatCampaign({ initialOrderNumber = '' }: RepeatCampai
         </div>
       )}
       
-      {/* Caller Selection Dialog */}
-      {showCallerDialog && (
+      {/* Caller Selection Dialog (hidden when embedded from NDR) */}
+      {!hideFeedback && showCallerDialog && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-white rounded-lg p-6 w-full max-w-md">
             <div className="flex justify-between items-center mb-4">
@@ -462,8 +466,8 @@ export default function RepeatCampaign({ initialOrderNumber = '' }: RepeatCampai
         </div>
       )}
       
-      {/* Current Caller Display */}
-      {storedCaller && (
+      {/* Current Caller Display (hidden when embedded from NDR) */}
+      {!hideFeedback && storedCaller && (
         <div className="bg-blue-50 border border-blue-200 rounded-md p-3 mb-6 flex justify-between items-center">
           <div className="flex items-center">
             <User className="h-5 w-5 text-blue-500 mr-2" />
@@ -471,7 +475,7 @@ export default function RepeatCampaign({ initialOrderNumber = '' }: RepeatCampai
           </div>
           <button 
             onClick={() => {
-              setShowCallerDialog(true);
+              if (!hideFeedback) setShowCallerDialog(true);
             }}
             className="text-blue-600 hover:text-blue-800 text-sm font-medium"
           >
@@ -520,7 +524,7 @@ export default function RepeatCampaign({ initialOrderNumber = '' }: RepeatCampai
       {customerData && (
         <div className="flex flex-col lg:flex-row gap-6">
           {/* Left Column: Customer Info and Timeline */}
-          <div className="lg:w-1/2">
+          <div className={hideFeedback ? "w-full" : "lg:w-1/2"}>
             {/* Customer Information Card */}
             <div className="bg-white rounded-lg shadow-md p-6 mb-6">
               <h2 className="text-xl font-semibold mb-4">Customer Information</h2>
@@ -676,10 +680,11 @@ export default function RepeatCampaign({ initialOrderNumber = '' }: RepeatCampai
           </div>
           
           {/* Right Column: Feedback Form */}
-          <div className="lg:w-1/2">
-            <div className="bg-white rounded-lg shadow-md p-6 h-full">
-              <h2 className="text-xl font-semibold mb-4">Customer Feedback Form</h2>
-              <form onSubmit={submitFeedback}>
+          {!hideFeedback && (
+            <div className="lg:w-1/2">
+              <div className="bg-white rounded-lg shadow-md p-6 h-full">
+                <h2 className="text-xl font-semibold mb-4">Customer Feedback Form</h2>
+                <form onSubmit={submitFeedback}>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
                   <div>
                     <label className="block text-gray-700 text-sm font-medium mb-1">
@@ -789,7 +794,7 @@ export default function RepeatCampaign({ initialOrderNumber = '' }: RepeatCampai
                   className="w-full p-2 border border-gray-300 rounded-lg"
                   required
                   aria-label="Gender"
-                  title="User's gender"
+                  title="Users gender"
                 >
                   <option value="">Select Gender</option>
                   <option value="Male">Male</option>
@@ -797,7 +802,7 @@ export default function RepeatCampaign({ initialOrderNumber = '' }: RepeatCampai
                   <option value="Other">Other</option>
                 </select>
               </div>
-              
+
               <div>
                 <label className="block text-gray-700 text-sm font-medium mb-1">
                   Age
@@ -810,127 +815,11 @@ export default function RepeatCampaign({ initialOrderNumber = '' }: RepeatCampai
                   className="w-full p-2 border border-gray-300 rounded-lg"
                   required
                   aria-label="Age"
-                  title="User's age"
+                  title="Users age"
                 />
               </div>
-              
-              <div>
-                <label className="block text-gray-700 text-sm font-medium mb-1">
-                  Will you recommend this to others?
-                </label>
-                <select
-                  name="wouldRecommend"
-                  value={feedbackForm.wouldRecommend}
-                  onChange={handleFeedbackChange}
-                  className="w-full p-2 border border-gray-300 rounded-lg"
-                  required
-                  aria-label="Would recommend"
-                  title="Whether you would recommend this to others"
-                >
-                  <option value="">Select</option>
-                  <option value="Yes">Yes</option>
-                  <option value="No">No</option>
-                </select>
-              </div>
             </div>
-            
-            <div className="mb-4">
-              <label className="block text-gray-700 text-sm font-medium mb-1">
-                Any feedback for us or to our product
-              </label>
-              <textarea
-                name="generalFeedback"
-                value={feedbackForm.generalFeedback}
-                onChange={handleFeedbackChange}
-                className="w-full p-2 border border-gray-300 rounded-lg"
-                rows={3}
-                required
-                aria-label="General feedback"
-                title="Any feedback for us or our product"
-              ></textarea>
-            </div>
-            
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-              <div>
-                <label className="block text-gray-700 text-sm font-medium mb-1">
-                  Do you want to opt for the monthly delivery model?
-                </label>
-                <select
-                  name="monthlyDelivery"
-                  value={feedbackForm.monthlyDelivery}
-                  onChange={handleFeedbackChange}
-                  className="w-full p-2 border border-gray-300 rounded-lg"
-                  required
-                  aria-label="Monthly delivery"
-                  title="Whether you want to opt for monthly delivery"
-                >
-                  <option value="">Select</option>
-                  <option value="Yes">Yes</option>
-                  <option value="No">No</option>
-                </select>
-              </div>
-              
-              <div>
-                <label className="block text-gray-700 text-sm font-medium mb-1">
-                  Could you please give us a review, I will share the link via whatsapp?
-                </label>
-                <select
-                  name="willGiveReview"
-                  value={feedbackForm.willGiveReview}
-                  onChange={handleFeedbackChange}
-                  className="w-full p-2 border border-gray-300 rounded-lg"
-                  required
-                  aria-label="Will give review"
-                  title="Whether you would give a review"
-                >
-                  <option value="">Select</option>
-                  <option value="Yes">Yes</option>
-                  <option value="No">No</option>
-                </select>
-              </div>
-              
-              <div>
-                <label className="block text-gray-700 text-sm font-medium mb-1">
-                  Shared the link
-                </label>
-                <select
-                  name="sharedLink"
-                  value={feedbackForm.sharedLink}
-                  onChange={handleFeedbackChange}
-                  className="w-full p-2 border border-gray-300 rounded-lg"
-                  required
-                  aria-label="Shared link"
-                  title="Whether the link was shared"
-                >
-                  <option value="">Select</option>
-                  <option value="Yes">Yes</option>
-                  <option value="No">No</option>
-                </select>
-              </div>
-              
-              <div>
-                <label className="block text-gray-700 text-sm font-medium mb-1">
-                  Using in cover or in container
-                </label>
-                <select
-                  name="usingInCoverOrContainer"
-                  value={feedbackForm.usingInCoverOrContainer}
-                  onChange={handleFeedbackChange}
-                  className="w-full p-2 border border-gray-300 rounded-lg"
-                  required
-                  aria-label="Using in cover or container"
-                  title="Whether the product was used in a cover or container"
-                >
-                  <option value="">Select</option>
-                  <option value="Cover">Cover</option>
-                  <option value="Container">Container</option>
-                  <option value="Don't Know">Don't Know</option>
-                  <option value="Cover with Container">Cover with Container</option>
-                </select>
-              </div>
-            </div>
-            
-            <div className="flex justify-end">
+
               <button
                 type="submit"
                 className="bg-green-600 hover:bg-green-700 text-white px-6 py-2 rounded-lg flex items-center justify-center transition-colors"
@@ -943,10 +832,10 @@ export default function RepeatCampaign({ initialOrderNumber = '' }: RepeatCampai
                 )}
                 Submit Feedback
               </button>
-            </div>
             </form>
             </div>
           </div>
+        )}
         </div>
       )}
     </div>

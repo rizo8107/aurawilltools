@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Download, RefreshCw, Search, Phone, MessageSquare, ExternalLink, Filter, Edit3, CheckCircle2, AlertTriangle, XCircle, Clock, Truck, Info, ClipboardCopy, Columns } from "lucide-react";
+import RepeatCampaign from "./RepeatCampaign";
+import { Download, RefreshCw, Search, ExternalLink, Filter, Edit3, CheckCircle2, AlertTriangle, XCircle, Clock, Truck, Info, ClipboardCopy, Columns } from "lucide-react";
 
 /**
  * NDR CRM Dashboard
@@ -203,6 +204,9 @@ function Stat({ label, value, icon: Icon, tone }: { label: string; value: string
   );
 }
 
+// Email preview modal (inline in component for simplicity)
+// Rendered conditionally inside NdrActionsPanel return
+
 function IconButton({ title, onClick, children }: { title: string; onClick: () => void; children: React.ReactNode }) {
   return (
     <button title={title} onClick={onClick} className="inline-flex items-center gap-2 rounded-xl px-3 py-2 ring-1 ring-slate-200 hover:bg-slate-50 active:scale-[.98] transition">
@@ -275,6 +279,10 @@ export default function NdrDashboard() {
   const [otherAction, setOtherAction] = useState("");
   const [editCalled, setEditCalled] = useState(false);
   const [editStatus, setEditStatus] = useState("Open");
+  // repeat campaign drawer state
+  const [repeatOpen, setRepeatOpen] = useState(false);
+  const [repeatOrderId, setRepeatOrderId] = useState<string>("");
+  const [repeatRow, setRepeatRow] = useState<NdrRow | null>(null);
 
   async function load() {
     try {
@@ -543,6 +551,25 @@ export default function NdrDashboard() {
             onPageSizeChange={setPageSize}
             onEdit={openEditor}
             onQuickUpdate={quickUpdate}
+            onOpenRepeat={(orderId) => {
+              try {
+                const idStr = String(orderId);
+                setRepeatOrderId(idStr);
+                setRepeatOpen(true);
+              } catch (err) {
+                console.error('Failed to open embedded Repeat Campaign', err);
+              }
+            }}
+            onOpenRepeatRow={(row) => {
+              try {
+                const idStr = String(row.order_id);
+                setRepeatOrderId(idStr);
+                setRepeatRow(row);
+                setRepeatOpen(true);
+              } catch (err) {
+                console.error('Failed to open embedded Repeat Campaign', err);
+              }
+            }}
           />
         ) : (
           <KanbanView rows={filtered as any[]} onEdit={openEditor} onMove={moveToBucket} />
@@ -625,6 +652,24 @@ export default function NdrDashboard() {
           </div>
         )}
       </Drawer>
+      {/* Repeat Campaign Drawer */}
+      <Drawer open={repeatOpen} onClose={() => setRepeatOpen(false)} title={repeatOrderId ? `Repeat Campaign • Order #${repeatOrderId}` : "Repeat Campaign"}>
+        {repeatOpen && (
+          <div className="-mx-2 space-y-4">{/* slight edge breathing room */}
+            {/* Embedded NDR actions panel */}
+            {repeatRow && (
+              <NdrActionsPanel 
+                row={repeatRow} 
+                onQuickUpdate={async (updates) => {
+                  await quickUpdate(repeatRow.id, updates);
+                  setRepeatRow((prev) => (prev ? ({ ...prev, ...updates } as NdrRow) : prev));
+                }}
+              />
+            )}
+            <RepeatCampaign initialOrderNumber={repeatOrderId} hideFeedback={true} />
+          </div>
+        )}
+      </Drawer>
     </div>
   );
 }
@@ -641,20 +686,11 @@ type TableViewProps = {
   totalPages: number;
   onPageChange: (p: number) => void;
   onPageSizeChange: (n: number) => void;
+  onOpenRepeat: (orderId: number) => void;
+  onOpenRepeatRow: (row: NdrRow) => void;
 };
 
-function TableView({ rows, onEdit, onQuickUpdate, total, page, pageSize, totalPages, onPageChange, onPageSizeChange }: TableViewProps) {
-  // helper to navigate to RepeatCampaign
-  function openRepeat(orderId: number) {
-    try {
-      const idStr = String(orderId);
-      localStorage.setItem('repeat_order_number', idStr);
-      window.dispatchEvent(new CustomEvent('open-repeat-campaign', { detail: { orderId: idStr } }));
-    } catch (err) {
-      // eslint-disable-next-line no-console
-      console.error('Failed to open Repeat Campaign', err);
-    }
-  }
+function TableView({ rows, onEdit: _onEdit, onQuickUpdate, total, page, pageSize, totalPages, onPageChange, onPageSizeChange, onOpenRepeat: _onOpenRepeat, onOpenRepeatRow }: TableViewProps) {
 
   return (
     <div className="overflow-auto rounded-2xl ring-1 ring-slate-200">
@@ -666,13 +702,9 @@ function TableView({ rows, onEdit, onQuickUpdate, total, page, pageSize, totalPa
             <th className="min-w-[140px]">AWB</th>
             <th className="min-w-[220px]">Current status</th>
             <th>Courier</th>
-            <th>Mobile</th>
+            <th>Email Sent</th>
             <th>Called</th>
-            <th className="min-w-[220px] hidden md:table-cell">Issue (Customer)</th>
-            <th className="min-w-[200px]">Action taken</th>
             <th>EDD</th>
-            <th className="min-w-[220px] hidden lg:table-cell">Remarks</th>
-            <th className="min-w-[180px]">Quick</th>
           </tr>
         </thead>
         <tbody className="divide-y">
@@ -681,7 +713,7 @@ function TableView({ rows, onEdit, onQuickUpdate, total, page, pageSize, totalPa
             const tone = r.__edd?.tone as any;
             const rowTone = tone === "late" ? "bg-rose-50/40" : tone === "warn" ? "bg-amber-50/30" : "";
             return (
-              <tr key={r.id} className={`*:px-3 *:py-2 hover:bg-slate-50 ${rowTone}`}>
+              <tr key={r.id} className={`*:px-3 *:py-2 hover:bg-slate-50 ${rowTone} cursor-pointer`} onClick={() => onOpenRepeatRow(r)}>
                 <td>
                   <div className="font-medium">{fmtIST(r.event_time)}</div>
                   <div className="text-xs text-slate-500">{r.location || "—"}</div>
@@ -690,7 +722,7 @@ function TableView({ rows, onEdit, onQuickUpdate, total, page, pageSize, totalPa
                   <button
                     className="text-blue-600 hover:underline"
                     title="Open in Repeat Campaign"
-                    onClick={() => openRepeat(r.order_id)}
+                    onClick={(e) => { e.stopPropagation(); onOpenRepeatRow(r); }}
                   >
                     {r.order_id}
                   </button>
@@ -698,11 +730,11 @@ function TableView({ rows, onEdit, onQuickUpdate, total, page, pageSize, totalPa
                 <td>
                   <div className="flex items-center gap-2">
                     <span className="font-mono">{r.waybill}</span>
-                    <button title="Copy AWB" onClick={() => navigator.clipboard.writeText(String(r.waybill))} className="p-1 rounded hover:bg-slate-100">
+                    <button title="Copy AWB" onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(String(r.waybill)); }} className="p-1 rounded hover:bg-slate-100">
                       <ClipboardCopy className="w-4 h-4" />
                     </button>
                     {url && (
-                      <a href={url} target="_blank" className="p-1 rounded hover:bg-slate-100" title="Open tracking">
+                      <a href={url} target="_blank" onClick={(e) => e.stopPropagation()} className="p-1 rounded hover:bg-slate-100" title="Open tracking">
                         <ExternalLink className="w-4 h-4" />
                       </a>
                     )}
@@ -715,10 +747,29 @@ function TableView({ rows, onEdit, onQuickUpdate, total, page, pageSize, totalPa
                   </div>
                 </td>
                 <td>{courierName(r.courier_account)}</td>
-                <td>{r.__phone || "—"}</td>
+                <td>
+                  {(r as any).email_sent ? (
+                    <button
+                      className="px-2 py-1 rounded-full text-xs bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200 cursor-default"
+                      disabled
+                      title="Email already sent"
+                    >
+                      Sent
+                    </button>
+                  ) : (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); onOpenRepeatRow(r); }}
+                      className="px-2 py-1 rounded-full text-xs ring-1 ring-slate-200 hover:bg-slate-50"
+                      title="Open to compose and send email"
+                    >
+                      Send Email
+                    </button>
+                  )}
+                </td>
                 <td>
                   <button
-                    onClick={async () => {
+                    onClick={async (e) => {
+                      e.stopPropagation();
                       await onQuickUpdate(r.id, { called: !r.called });
                     }}
                     className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs ring-1 ${r.called ? "bg-emerald-50 text-emerald-700 ring-emerald-200" : "bg-slate-50 text-slate-600 ring-slate-200"}`}
@@ -727,71 +778,8 @@ function TableView({ rows, onEdit, onQuickUpdate, total, page, pageSize, totalPa
                     {r.called ? "Yes" : "No"}
                   </button>
                 </td>
-                <td className="max-w-[320px] hidden md:table-cell">
-                  <div className="truncate" title={r.__customer_issue}>
-                    {r.__customer_issue || "—"}
-                  </div>
-                </td>
-                <td className="max-w-[280px]">
-                  <select
-                    className="w-full truncate ring-1 ring-slate-200 rounded-lg px-2 py-1 text-xs bg-white"
-                    value={r.__action_taken || ""}
-                    onChange={async (e) => {
-                      const notes = parseNotes(r.notes);
-                      notes.action_taken = e.target.value;
-                      await onQuickUpdate(r.id, { notes: JSON.stringify(notes) });
-                    }}
-                  >
-                    <option value="">Select action…</option>
-                    {ACTION_OPTIONS.map((opt) => (
-                      <option key={opt} value={opt}>
-                        {opt}
-                      </option>
-                    ))}
-                  </select>
-                </td>
                 <td>
                   <Pill {...(r.__edd as any)} />
-                </td>
-                <td className="max-w-[280px] hidden lg:table-cell">
-                  <div className="truncate" title={r.remark || ""}>
-                    {r.remark || "—"}
-                  </div>
-                </td>
-                <td>
-                  <div className="flex flex-wrap gap-1">
-                    <a
-                      href={r.__phone ? `tel:${r.__phone}` : "#"}
-                      onClick={(e) => {
-                        if (!r.__phone) e.preventDefault();
-                      }}
-                      className={classNames(
-                        "inline-flex items-center gap-1 px-2 py-1 rounded-lg ring-1 text-xs",
-                        r.__phone ? "ring-slate-200 hover:bg-slate-50" : "ring-slate-100 text-slate-400 cursor-not-allowed"
-                      )}
-                    >
-                      <Phone className="w-3.5 h-3.5" />
-                      Call
-                    </a>
-                    <a
-                      href={r.__phone ? `https://wa.me/91${r.__phone.replace(/\D/g, "")}` : "#"}
-                      target="_blank"
-                      onClick={(e) => {
-                        if (!r.__phone) e.preventDefault();
-                      }}
-                      className={classNames(
-                        "inline-flex items-center gap-1 px-2 py-1 rounded-lg ring-1 text-xs",
-                        r.__phone ? "ring-slate-200 hover:bg-slate-50" : "ring-slate-100 text-slate-400 cursor-not-allowed"
-                      )}
-                    >
-                      <MessageSquare className="w-3.5 h-3.5" />
-                      WhatsApp
-                    </a>
-                    <button onClick={() => onEdit(r)} className="inline-flex items-center gap-1 px-2 py-1 rounded-lg ring-1 ring-slate-200 text-xs hover:bg-slate-50">
-                      <Edit3 className="w-3.5 h-3.5" />
-                      Update
-                    </button>
-                  </div>
                 </td>
               </tr>
             );
@@ -834,6 +822,352 @@ function TableView({ rows, onEdit, onQuickUpdate, total, page, pageSize, totalPa
                 <option key={n} value={n}>{n} / page</option>
               ))}
             </select>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---- Compact NDR actions panel (used inside Repeat drawer) ----
+function NdrActionsPanel({ row, onQuickUpdate }: { row: NdrRow; onQuickUpdate: (updates: Partial<NdrRow>) => Promise<void> }) {
+  const initial = parseNotes(row.notes);
+  const [phone, setPhone] = useState<string>(initial.phone || "");
+  const [issue, setIssue] = useState<string>(initial.customer_issue || "");
+  const isPreset = ACTION_OPTIONS.includes(String(initial.action_taken || ""));
+  const [action, setAction] = useState<string>(isPreset ? String(initial.action_taken) : (initial.action_taken ? "Other" : ""));
+  const [other, setOther] = useState<string>(!isPreset ? String(initial.action_taken || "") : "");
+  const [called, setCalled] = useState<boolean>(!!row.called);
+  const [remark, setRemark] = useState<string>(row.remark || "");
+  const [correctedPhone, setCorrectedPhone] = useState<string>((row as any).corrected_phone || "");
+  const [correctedAddress, setCorrectedAddress] = useState<string>((row as any).corrected_address || "");
+  const [showEmail, setShowEmail] = useState<boolean>(false);
+  const [emailSubject, setEmailSubject] = useState<string>("");
+  const [emailBody, setEmailBody] = useState<string>("");
+  const [emailCourier, setEmailCourier] = useState<string>(courierName(row.courier_account || ""));
+
+  async function save() {
+    const chosenAction = action === "Other" ? (other.trim() || "Other") : (action || "");
+    const notes = { phone: phone || undefined, customer_issue: issue || undefined, action_taken: chosenAction || undefined } as any;
+    await onQuickUpdate({ called, remark: remark || null, corrected_phone: correctedPhone || null, corrected_address: correctedAddress || null, notes: JSON.stringify(notes) } as any);
+  }
+
+  // Draft builder and flags for email compose
+  const isAddressIssue = /address/i.test(issue) || /address/i.test(row.delivery_status || "") || initial.bucket_override === "Address Issue" || toBucket(row) === "Address Issue";
+  // Build a simple ASCII table for better readability across mail clients
+  function buildTable(entries: Array<[string, string]>) {
+    const keyWidth = 22; // label column width
+    const sep = "+" + "-".repeat(keyWidth + 2) + "+" + "-".repeat(78) + "+"; // approx 80 chars value col
+    const header =
+      sep + "\n" +
+      "| " + "Field".padEnd(keyWidth) + " | " + "Value".padEnd(78) + "|\n" +
+      sep;
+    const rows = entries.map(([k, v]) => {
+      const val = (v ?? "—").toString();
+      return "| " + k.padEnd(keyWidth) + " | " + val.padEnd(78).slice(0, 78) + "|";
+    }).join("\n");
+    return header + "\n" + rows + "\n" + sep;
+  }
+  // Build HTML table for webhook email (rich formatting)
+  function buildHtmlTable(entries: Array<[string, string]>) {
+    const escape = (s: string) => (s ?? "").toString()
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+    const rows = entries.map(([k, v]) => `
+      <tr>
+        <td style="padding:8px 10px;border:1px solid #dbe0e6;background:#f8fafc;font-weight:600;white-space:nowrap;">${escape(k)}</td>
+        <td style="padding:8px 10px;border:1px solid #dbe0e6;">${escape(v || '—')}</td>
+      </tr>
+    `).join("");
+    return `
+      <table cellpadding="0" cellspacing="0" role="presentation" style="border-collapse:collapse;border:1px solid #dbe0e6;border-radius:8px;overflow:hidden;width:100%;max-width:680px;font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:14px;color:#0f172a;">
+        <thead>
+          <tr>
+            <th align="left" style="padding:10px;border:1px solid #dbe0e6;background:#e2e8f0;font-weight:700;">Field</th>
+            <th align="left" style="padding:10px;border:1px solid #dbe0e6;background:#e2e8f0;font-weight:700;">Value</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows}
+        </tbody>
+      </table>
+    `;
+  }
+  function getEmailDraft() {
+    const subject = `Address Issue: Order #${row.order_id} – AWB ${row.waybill}`;
+    const track = trackingUrl(row);
+    const entries: Array<[string, string]> = [
+      ["Courier Partner", emailCourier || courierName(row.courier_account || '')],
+      ["Order ID", String(row.order_id)],
+      ["AWB", String(row.waybill || '—')],
+      ["Courier", courierName(row.courier_account || '')],
+      ["Current Status", row.delivery_status || '—'],
+      ["Location (last scan)", row.location || '—'],
+      ["Customer Phone", phone || '—'],
+      ["Tracking Link", track || '—'],
+    ];
+    const table = buildTable(entries);
+    const bodyText = [
+      `Hello Team,`,
+      ``,
+      `We are observing an address-related issue for the following shipment. Kindly assist with resolution or guide on next steps.`,
+      ``,
+      `Shipping Details`,
+      table,
+      ``,
+      (correctedPhone || correctedAddress) ? `Corrections` : undefined,
+      correctedPhone ? `- Corrected Phone: ${correctedPhone}` : undefined,
+      correctedAddress ? `- Corrected Address: ${correctedAddress}` : undefined,
+      (correctedPhone || correctedAddress) ? `` : undefined,
+      `Notes`,
+      issue ? `- Customer Issue: ${issue}` : undefined,
+      remark ? `- Internal Remarks: ${remark}` : undefined,
+      ``,
+      `Requested action:`,
+      `- Please correct the address and/or attempt delivery as appropriate.`,
+      `- Update the shipment status accordingly.`,
+      ``,
+      `Thank you,`,
+      `Support`,
+      ``,
+      `--`,
+      `This email was sent automatically with n8n`,
+    ].filter(Boolean).join("\n");
+
+    // HTML body for richer formatting (used by webhook). We keep a clean, minimal style for compatibility.
+    const htmlTable = buildHtmlTable(entries);
+    const esc = (s: string) => (s ?? "").toString()
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/\n/g, "<br/>");
+    const notesList = [
+      issue ? `<li><strong>Customer Issue:</strong> ${esc(issue)}</li>` : "",
+      remark ? `<li><strong>Internal Remarks:</strong> ${esc(remark)}</li>` : "",
+    ].join("");
+    const correctionsBox = (correctedPhone || correctedAddress) ? `
+      <div style="border:1px solid #16a34a33;background:#f0fdf4;color:#166534;padding:12px 14px;border-radius:8px;margin:16px 0;">
+        <div style="font-weight:700;margin-bottom:6px;">Corrections</div>
+        <ul style="margin:0 0 0 18px;padding:0;">
+          ${correctedPhone ? `<li><strong>Corrected Phone:</strong> ${esc(correctedPhone)}</li>` : ""}
+          ${correctedAddress ? `<li><strong>Corrected Address:</strong> ${esc(correctedAddress)}</li>` : ""}
+        </ul>
+      </div>
+    ` : "";
+    const bodyHtml = `
+      <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:14px;line-height:1.6;color:#0f172a;">
+        <p>Hello Team,</p>
+        <p>We are observing an address-related issue for the following shipment. Kindly assist with resolution or guide on next steps.</p>
+        <h3 style="margin:16px 0 8px 0;font-size:15px;">Shipping Details</h3>
+        ${htmlTable}
+        ${correctionsBox}
+        ${(issue || remark) ? `<h3 style="margin:16px 0 8px 0;font-size:15px;">Notes</h3><ul style="margin:0 0 16px 20px;padding:0;">${notesList}</ul>` : ""}
+        <h3 style="margin:16px 0 8px 0;font-size:15px;">Requested action</h3>
+        <ul style="margin:0 0 16px 20px;padding:0;">
+          <li>Please correct the address and/or attempt delivery as appropriate.</li>
+          <li>Update the shipment status accordingly.</li>
+        </ul>
+        <p>Thank you,<br/>Support</p>
+        <hr style="border:none;border-top:1px solid #e2e8f0;margin:16px 0;"/>
+        <p style="color:#475569;">This email was sent automatically with n8n</p>
+      </div>
+    `;
+    return { subject, bodyText, bodyHtml };
+  }
+
+  function openEmailEditor() {
+    const { subject, bodyText } = getEmailDraft();
+    setEmailSubject(subject);
+    setEmailBody(bodyText);
+    setShowEmail(true);
+  }
+
+  async function sendMail() {
+    const draftBuilt = getEmailDraft();
+    const draft = { subject: emailSubject || draftBuilt.subject, bodyText: emailBody || draftBuilt.bodyText, bodyHtml: draftBuilt.bodyHtml };
+    const payload = {
+      order_id: row.order_id,
+      waybill: row.waybill,
+      courier_account: row.courier_account,
+      courier_partner: emailCourier || courierName(row.courier_account || ''),
+      subject: draft.subject,
+      text_body: draft.bodyText,
+      html_body: draft.bodyHtml,
+      content_type: 'text/html',
+      corrected_phone: correctedPhone || null,
+      corrected_address: correctedAddress || null,
+      phone: phone || null,
+      issue: issue || null,
+      remark: remark || null,
+      tracking: trackingUrl(row) || null,
+      called,
+      timestamp: new Date().toISOString(),
+    };
+    try {
+      const resp = await fetch('https://auto-n8n.9krcxo.easypanel.host/webhook/ndrmailer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (resp.ok) {
+        await onQuickUpdate({ corrected_phone: correctedPhone || null, corrected_address: correctedAddress || null, email_sent: true } as any);
+      }
+    } catch {}
+    // Mailto cannot send HTML; we provide plaintext fallback to user's client
+    const url = `mailto:?subject=${encodeURIComponent(draft.subject)}&body=${encodeURIComponent(draft.bodyText)}`;
+    try { window.location.href = url; } catch {}
+    setShowEmail(false);
+  }
+
+  async function copyEmail() {
+    const { subject, bodyText } = {
+      subject: emailSubject || getEmailDraft().subject,
+      bodyText: emailBody || getEmailDraft().bodyText,
+    } as { subject: string; bodyText: string };
+    const full = `Subject: ${subject}\n\n${bodyText}`;
+    try {
+      await navigator.clipboard.writeText(full);
+      alert("Email content copied to clipboard.");
+    } catch {
+      alert("Unable to copy automatically. Please select and copy manually:\n\n" + full);
+    }
+  }
+
+  return (
+    <div className="p-3 space-y-3 rounded-2xl ring-1 ring-slate-200 bg-white">
+      <div className="grid grid-cols-2 gap-3">
+        <label className="text-sm block">
+          Phone
+          <input className="mt-1 w-full ring-1 ring-slate-200 rounded-lg px-3 py-2" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="Customer phone" />
+        </label>
+        <div className="text-sm">
+          <div>Called?</div>
+          <div className="mt-1">
+            <Toggle checked={called} onChange={setCalled} />
+          </div>
+        </div>
+      </div>
+
+      <label className="text-sm block">
+        Issue from the customer
+        <textarea className="mt-1 w-full ring-1 ring-slate-200 rounded-lg px-3 py-2 min-h-[90px]" value={issue} onChange={(e) => setIssue(e.target.value)} placeholder="e.g., Asked for delivery tomorrow; landmark missing; wants address change…" />
+      </label>
+
+      <label className="text-sm block">
+        Action taken
+        <div className="mt-1 grid grid-cols-1 gap-2">
+          <select className="w-full ring-1 ring-slate-200 rounded-lg px-3 py-2" value={action} onChange={(e) => setAction(e.target.value)}>
+            <option value="">Select action…</option>
+            {ACTION_OPTIONS.map((opt) => (
+              <option key={opt} value={opt}>{opt}</option>
+            ))}
+          </select>
+          {action === "Other" && (
+            <input className="w-full ring-1 ring-slate-200 rounded-lg px-3 py-2" value={other} onChange={(e) => setOther(e.target.value)} placeholder="Describe action taken" />
+          )}
+        </div>
+      </label>
+
+      <div className="grid grid-cols-2 gap-3">
+        <label className="text-sm block">
+          Corrected phone (if any)
+          <input className="mt-1 w-full ring-1 ring-slate-200 rounded-lg px-3 py-2" value={correctedPhone} onChange={(e) => setCorrectedPhone(e.target.value)} placeholder="Updated phone number" />
+        </label>
+        <label className="text-sm block">
+          Corrected address (if any)
+          <input className="mt-1 w-full ring-1 ring-slate-200 rounded-lg px-3 py-2" value={correctedAddress} onChange={(e) => setCorrectedAddress(e.target.value)} placeholder="Updated address" />
+        </label>
+      </div>
+
+      <label className="text-sm block">
+        Remarks
+        <input className="mt-1 w-full ring-1 ring-slate-200 rounded-lg px-3 py-2" value={remark} onChange={(e) => setRemark(e.target.value)} placeholder="Internal remarks" />
+      </label>
+
+      <div className="mt-1 flex flex-wrap gap-2">
+        <button onClick={save} className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-900 text-white hover:bg-slate-800" title="Save NDR actions">
+          <CheckCircle2 className="w-4 h-4" />
+          Save
+        </button>
+        <button
+          type="button"
+          onClick={openEmailEditor}
+          className="inline-flex items-center gap-2 px-4 py-2 rounded-xl ring-1 ring-slate-200 text-sm hover:bg-slate-50"
+          title={isAddressIssue ? "Compose email to courier about address issue" : "Compose email to courier"}
+        >
+          Compose email to courier
+        </button>
+        <button
+          type="button"
+          onClick={copyEmail}
+          className="inline-flex items-center gap-2 px-4 py-2 rounded-xl ring-1 ring-slate-200 text-sm hover:bg-slate-50"
+          title="Copy the composed email content"
+        >
+          Copy email content
+        </button>
+      </div>
+
+      {showEmail && (
+        <div className="fixed inset-0 z-[100] bg-black/30 flex items-center justify-center p-4" onClick={() => setShowEmail(false)}>
+          <div className="w-full max-w-2xl bg-white rounded-2xl shadow-xl ring-1 ring-slate-200" onClick={(e) => e.stopPropagation()}>
+            <div className="px-5 py-4 border-b flex items-center justify-between">
+              <div className="font-semibold">Compose email to courier</div>
+              <button className="px-2 py-1 text-sm text-slate-500 hover:text-slate-700" title="Close" onClick={() => setShowEmail(false)}>Close</button>
+            </div>
+            <div className="p-5 space-y-3">
+              <label className="block text-sm">
+                Courier partner
+                <select
+                  className="mt-1 w-full ring-1 ring-slate-200 rounded-lg px-3 py-2"
+                  value={emailCourier}
+                  onChange={(e) => setEmailCourier(e.target.value)}
+                >
+                  {["Delhivery","Xpressbees","Bluedart","DTDC","Ecom Express","Shadowfax","Amazon","Ekart","Other"].map(c => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="block text-sm">
+                Subject
+                <input
+                  className="mt-1 w-full ring-1 ring-slate-200 rounded-lg px-3 py-2"
+                  value={emailSubject}
+                  onChange={(e) => setEmailSubject(e.target.value)}
+                  placeholder="Email subject"
+                />
+              </label>
+              <label className="block text-sm">
+                Body
+                <textarea
+                  className="mt-1 w-full ring-1 ring-slate-200 rounded-lg px-3 py-2 min-h-[240px] font-mono text-sm"
+                  value={emailBody}
+                  onChange={(e) => setEmailBody(e.target.value)}
+                  placeholder="Email body"
+                />
+              </label>
+            </div>
+            <div className="px-5 py-4 border-t flex items-center justify-between gap-2">
+              <div className="text-xs text-slate-500">Tip: You can edit the subject and body before sending.</div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={copyEmail}
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-xl ring-1 ring-slate-200 text-sm hover:bg-slate-50"
+                  title="Copy to clipboard"
+                >
+                  Copy content
+                </button>
+                <button
+                  type="button"
+                  onClick={sendMail}
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-900 text-white hover:bg-slate-800"
+                  title="Send mail and log to webhook"
+                >
+                  Send Mail
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}
