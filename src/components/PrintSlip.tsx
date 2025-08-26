@@ -159,7 +159,7 @@ export default function PrintSlip() {
             }
             .address {
               padding: 5px;
-              font-size: 40px;
+              font-size: 15px;
               line-height: 1.25;
               font-weight: 500;
             }
