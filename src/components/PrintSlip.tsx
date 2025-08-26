@@ -36,6 +36,16 @@ export default function PrintSlip() {
       const phoneMatch = toRaw.match(/Phone\s*=?\s*(\d+)/i);
       const phone = phoneMatch ? phoneMatch[1] : '';
       const toAddress = toRaw.replace(/Phone\s*=?\s*\d+/i, '').trim();
+
+      // Derive name, address, city/state from the address blob
+      const firstComma = toAddress.indexOf(',');
+      const customerName = (firstComma > -1 ? toAddress.slice(0, firstComma) : toAddress).trim();
+      const remaining = (firstComma > -1 ? toAddress.slice(firstComma + 1) : '').trim();
+      const addrParts = remaining.split(',').map(s => s.trim()).filter(Boolean);
+      // Heuristic: last part as city/state/postal if present, rest as street address lines
+      const cityState = addrParts.length > 0 ? addrParts[addrParts.length - 1] : '';
+      const streetLines = addrParts.length > 1 ? addrParts.slice(0, -1) : addrParts;
+      const country = 'India';
       
       // Calculate weight based on quantity (450g per packet)
       const singlePacketWeight = 450; // in grams
@@ -46,9 +56,15 @@ export default function PrintSlip() {
         <div class="slip">
           <div class="slip-header">
             <div class="ship-to-label">SHIP TO:</div>
-            <div class="address">${toAddress}\n${phone ? `<span class="phone-highlight">${phone}</span>` : ''}</div>
+            <div class="address">
+              ${customerName ? `<div class="to-name">${customerName}</div>` : ''}
+              ${streetLines.length ? `<div>${streetLines.join(', ')}</div>` : ''}
+              ${cityState ? `<div>${cityState}</div>` : ''}
+              <div>${country}</div>
+              ${phone ? `<div class="phone-highlight">Phone: ${phone}</div>` : ''}
+            </div>
           </div>
-          
+
           <div class="order-details">
             <div class="detail-row">
               <div class="detail-label">ORDER:</div>
@@ -138,14 +154,19 @@ export default function PrintSlip() {
               color: white;
               padding: 3px 5px;
               font-weight: bold;
-              font-size: 14px;
+              font-size: 18px;
               display: inline-block;
             }
             .address {
               padding: 5px;
-              font-size: 12px;
-              line-height: 1.2;
+              font-size: 40px;
+              line-height: 1.25;
               font-weight: 500;
+            }
+            .to-name {
+              font-size: 30px;
+              font-weight: 700;
+              margin-bottom: 2px;
             }
             .order-details {
               border-top: 1px solid #000;
@@ -201,13 +222,14 @@ export default function PrintSlip() {
               display: block;
             }
             .from-address {
-              font-size: 12px;
+              font-size: 20px;
               line-height: 1.4;
             }
             .phone-highlight {
               background-color: #ffff00;
               padding: 1px 2px;
               font-weight: bold;
+              font-size: 28px;
             }
             @media print {
               body {
