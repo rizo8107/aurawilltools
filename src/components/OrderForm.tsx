@@ -52,8 +52,16 @@ interface OrderResponse {
 
 // Define the submission status
 type FormStatus = 'idle' | 'submitting' | 'success' | 'error';
+type Mode = 'single' | 'bulk';
+
+type BulkItem = {
+  order: string;
+  status: FormStatus;
+  error?: string;
+};
 
 const OrderForm = () => {
+  const [mode, setMode] = useState<Mode>('single');
   const [orderNumber, setOrderNumber] = useState('');
   const [status, setStatus] = useState<FormStatus>('idle');
   const [errorMessage, setErrorMessage] = useState('');
@@ -63,6 +71,11 @@ const OrderForm = () => {
   const [trackingStatus, setTrackingStatus] = useState<FormStatus>('idle');
   const [trackingError, setTrackingError] = useState('');
   const [callerName, setCallerName] = useState<string | null>(null);
+
+  // Bulk mode state
+  const [bulkInput, setBulkInput] = useState('');
+  const [bulkItems, setBulkItems] = useState<BulkItem[]>([]);
+  const [bulkOverall, setBulkOverall] = useState<FormStatus>('idle');
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setOrderNumber(e.target.value);
@@ -75,7 +88,53 @@ const OrderForm = () => {
   const handleTrackingCompanyChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setTrackingCompany(e.target.value);
   };
-  
+
+  const parseBulkOrders = (text: string): string[] => {
+    return text
+      .split(/\r?\n/) // lines
+      .map(l => l.trim())
+      .filter(Boolean);
+  };
+
+  const submitSingleOrder = async (order: string): Promise<void> => {
+    const payload = { Order: order.trim() };
+    const response = await fetch('https://auto-n8n.9krcxo.easypanel.host/webhook/cbf01aea-9be4-4cba-9b1c-0a0367a6f823', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) throw new Error(`Webhook failed with status: ${response.status}`);
+    // Consume text to avoid reader locks; we don't need to render details in bulk
+    await response.text();
+  };
+
+  const handleBulkSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const orders = parseBulkOrders(bulkInput);
+    if (orders.length === 0) return;
+
+    setBulkOverall('submitting');
+    setBulkItems(orders.map(o => ({ order: o, status: 'idle' as FormStatus })));
+
+    const results: BulkItem[] = [];
+    for (const o of orders) {
+      const item: BulkItem = { order: o, status: 'submitting' as FormStatus };
+      results.push(item);
+      setBulkItems([...results, ...orders.slice(results.length).map(rem => ({ order: rem, status: 'idle' as FormStatus }))]);
+      try {
+        await submitSingleOrder(o);
+        item.status = 'success';
+      } catch (err) {
+        item.status = 'error';
+        item.error = err instanceof Error ? err.message : 'Unknown error';
+      }
+      // push state after each order to show progress
+      setBulkItems([...results, ...orders.slice(results.length).map(rem => ({ order: rem, status: 'idle' as FormStatus }))]);
+    }
+    const hasError = results.some(r => r.status === 'error');
+    setBulkOverall(hasError ? 'error' : 'success');
+  };
+
   // Load caller name from localStorage on component mount
   useEffect(() => {
     const savedCaller = localStorage.getItem('caller_name');
@@ -223,6 +282,25 @@ const OrderForm = () => {
           </div>
         </div>
 
+        {/* Mode Toggle */}
+        <div className="mb-4 inline-flex rounded-lg overflow-hidden border border-gray-200">
+          <button
+            type="button"
+            className={`px-4 py-2 text-sm font-medium ${mode === 'single' ? 'bg-indigo-600 text-white' : 'bg-white text-gray-700'}`}
+            onClick={() => setMode('single')}
+          >
+            Single
+          </button>
+          <button
+            type="button"
+            className={`px-4 py-2 text-sm font-medium border-l border-gray-200 ${mode === 'bulk' ? 'bg-indigo-600 text-white' : 'bg-white text-gray-700'}`}
+            onClick={() => setMode('bulk')}
+          >
+            Bulk
+          </button>
+        </div>
+
+        {mode === 'single' && (
         <form onSubmit={handleSubmit} className="mb-8">
           <div className="flex flex-col md:flex-row gap-4">
             <div className="flex-grow">
@@ -275,6 +353,60 @@ const OrderForm = () => {
             )}
           </div>
         </form>
+        )}
+
+        {mode === 'bulk' && (
+          <form onSubmit={handleBulkSubmit} className="mb-8">
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-1">Order Numbers</label>
+              <textarea
+                value={bulkInput}
+                onChange={(e) => setBulkInput(e.target.value)}
+                placeholder={"Enter one order number per line"}
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 h-40 font-mono"
+              />
+              <p className="text-xs text-gray-500 mt-1">Tip: Paste from Excel/Sheets. One order per line.</p>
+            </div>
+            <div className="flex items-end">
+              <button
+                type="submit"
+                disabled={bulkOverall === 'submitting' || !bulkInput.trim()}
+                className="w-full md:w-auto flex justify-center items-center px-8 py-3 border border-transparent text-base font-medium rounded-lg shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:bg-indigo-400 transition-all duration-300"
+              >
+                {bulkOverall === 'submitting' ? (
+                  <>
+                    <Loader className="animate-spin -ml-1 mr-2 h-5 w-5" />
+                    Submitting...
+                  </>
+                ) : (
+                  'Submit All'
+                )}
+              </button>
+            </div>
+
+            {/* Progress & Results */}
+            {bulkItems.length > 0 && (
+              <div className="mt-4 border border-gray-200 rounded-lg">
+                <div className="px-4 py-2 bg-gray-50 border-b">Results</div>
+                <ul className="divide-y">
+                  {bulkItems.map((bi, idx) => (
+                    <li key={idx} className="px-4 py-2 text-sm flex items-center justify-between">
+                      <span className="font-mono">{bi.order}</span>
+                      <span className={
+                        bi.status === 'success' ? 'text-green-700' : bi.status === 'error' ? 'text-red-700' : 'text-gray-500'
+                      }>
+                        {bi.status === 'submitting' && 'Processing...'}
+                        {bi.status === 'success' && '✓ Success'}
+                        {bi.status === 'error' && `✕ ${bi.error || 'Error'}`}
+                        {bi.status === 'idle' && 'Queued'}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </form>
+        )}
 
         {/* Service Availability Display */}
         {orderData && orderData.serviceable !== undefined && (
