@@ -58,6 +58,7 @@ type BulkItem = {
   order: string;
   status: FormStatus;
   error?: string;
+  serviceable?: boolean;
 };
 
 const OrderForm = () => {
@@ -96,7 +97,7 @@ const OrderForm = () => {
       .filter(Boolean);
   };
 
-  const submitSingleOrder = async (order: string): Promise<void> => {
+  const submitSingleOrder = async (order: string): Promise<boolean | null> => {
     const payload = { Order: order.trim() };
     const response = await fetch('https://auto-n8n.9krcxo.easypanel.host/webhook/cbf01aea-9be4-4cba-9b1c-0a0367a6f823', {
       method: 'POST',
@@ -104,8 +105,23 @@ const OrderForm = () => {
       body: JSON.stringify(payload),
     });
     if (!response.ok) throw new Error(`Webhook failed with status: ${response.status}`);
-    // Consume text to avoid reader locks; we don't need to render details in bulk
-    await response.text();
+    const responseText = await response.text();
+    try {
+      type ServiceableObj = { serviceable?: boolean };
+      const data: unknown = JSON.parse(responseText);
+      if (Array.isArray(data)) {
+        const arr = data as ServiceableObj[];
+        const found = arr.find((it) => typeof it?.serviceable !== 'undefined');
+        return typeof found?.serviceable === 'boolean' ? found.serviceable : null;
+      } else if (data && typeof data === 'object') {
+        const obj = data as ServiceableObj;
+        return typeof obj.serviceable === 'boolean' ? obj.serviceable : null;
+      }
+      return null;
+    } catch {
+      // If JSON parsing fails, we cannot determine serviceability in bulk
+      return null;
+    }
   };
 
   const handleBulkSubmit = async (e: React.FormEvent) => {
@@ -122,8 +138,9 @@ const OrderForm = () => {
       results.push(item);
       setBulkItems([...results, ...orders.slice(results.length).map(rem => ({ order: rem, status: 'idle' as FormStatus }))]);
       try {
-        await submitSingleOrder(o);
+        const svc = await submitSingleOrder(o);
         item.status = 'success';
+        if (svc !== null) item.serviceable = svc;
       } catch (err) {
         item.status = 'error';
         item.error = err instanceof Error ? err.message : 'Unknown error';
@@ -392,14 +409,31 @@ const OrderForm = () => {
                   {bulkItems.map((bi, idx) => (
                     <li key={idx} className="px-4 py-2 text-sm flex items-center justify-between">
                       <span className="font-mono">{bi.order}</span>
-                      <span className={
-                        bi.status === 'success' ? 'text-green-700' : bi.status === 'error' ? 'text-red-700' : 'text-gray-500'
-                      }>
-                        {bi.status === 'submitting' && 'Processing...'}
-                        {bi.status === 'success' && '✓ Success'}
-                        {bi.status === 'error' && `✕ ${bi.error || 'Error'}`}
-                        {bi.status === 'idle' && 'Queued'}
-                      </span>
+                      <div className="flex items-center gap-3">
+                        <span className={
+                          bi.status === 'success' ? 'text-green-700' : bi.status === 'error' ? 'text-red-700' : 'text-gray-500'
+                        }>
+                          {bi.status === 'submitting' && 'Processing...'}
+                          {bi.status === 'success' && '✓ Success'}
+                          {bi.status === 'error' && `✕ ${bi.error || 'Error'}`}
+                          {bi.status === 'idle' && 'Queued'}
+                        </span>
+                        {typeof bi.serviceable === 'boolean' && (
+                          <span className={`px-2 py-0.5 rounded-full text-xs font-medium flex items-center ${bi.serviceable ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
+                            {bi.serviceable ? (
+                              <>
+                                <CheckCircle className="h-3 w-3 mr-1" />
+                                Serviceable
+                              </>
+                            ) : (
+                              <>
+                                <XCircle className="h-3 w-3 mr-1" />
+                                Not Serviceable
+                              </>
+                            )}
+                          </span>
+                        )}
+                      </div>
                     </li>
                   ))}
                 </ul>
