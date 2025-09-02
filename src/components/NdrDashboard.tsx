@@ -1,4 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
+import ReactDOM from "react-dom";
+import Highcharts from "highcharts";
+import HighchartsReact from "highcharts-react-official";
 import RepeatCampaign from "./RepeatCampaign";
 import { Download, RefreshCw, Search, ExternalLink, Filter, Edit3, CheckCircle2, AlertTriangle, XCircle, Clock, Truck, Info, ClipboardCopy, Columns, Calendar } from "lucide-react";
 
@@ -20,6 +23,9 @@ const SUPABASE_HEADERS: Record<string, string> = {
     "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoic2VydmljZV9yb2xlIiwiaXNzIjoic3VwYWJhc2UiLCJpYXQiOjE3NTAwMTIyMDAsImV4cCI6MTkwNzc3ODYwMH0.Q8SZkSAk3D8_Uwjmzoh7oYUzdKr8mUSRMxDekxDY4Rw",
   "Content-Type": "application/json",
 };
+
+// Column keys used for sorting/filtering per column
+type ColumnKey = 'order' | 'awb' | 'status' | 'courier' | 'email' | 'call' | 'edd';
 
 // ---- Types -------------------------------------------------
 export type NdrRow = {
@@ -274,13 +280,24 @@ export default function NdrDashboard() {
   const [q, setQ] = useState("");
   const [courier, setCourier] = useState("All");
   const [bucket, setBucket] = useState("All");
-  const [view, setView] = useState<"table" | "kanban">("table");
+  const [view, setView] = useState<"table" | "kanban" | "analytics">("table");
   // pagination
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   // date filter (YYYY-MM-DD)
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
+
+  // Per-column multi-select filters
+  const [colFilters, setColFilters] = useState<Record<ColumnKey, string[]>>({
+    order: [],
+    awb: [],
+    status: [],
+    courier: [],
+    email: [],
+    call: [],
+    edd: [],
+  });
 
   const [editorOpen, setEditorOpen] = useState(false);
   const [editing, setEditing] = useState<NdrRow | null>(null);
@@ -294,6 +311,8 @@ export default function NdrDashboard() {
   const [repeatOpen, setRepeatOpen] = useState(false);
   const [repeatOrderId, setRepeatOrderId] = useState<string>("");
   const [repeatRow, setRepeatRow] = useState<NdrRow | null>(null);
+  // selection for export
+  const [selectedIds, setSelectedIds] = useState<number[]>([]);
 
   async function load() {
     try {
@@ -344,6 +363,20 @@ export default function NdrDashboard() {
     return enriched.filter((r: any) => {
       if (courier !== "All" && courierName(r.courier_account) !== courier) return false;
       if (bucket !== "All" && r.__bucket !== bucket) return false;
+      // per-column multi-select filters
+      if (colFilters.order.length && !colFilters.order.includes(String(r.order_id ?? ''))) return false;
+      if (colFilters.awb.length && !colFilters.awb.includes(String(r.waybill ?? ''))) return false;
+      if (colFilters.status.length && !colFilters.status.includes(String(r.delivery_status || ''))) return false;
+      if (colFilters.courier.length && !colFilters.courier.includes(String(courierName(r.courier_account)))) return false;
+      if (colFilters.email.length) {
+        const emailVal = (r as any).email_sent ? 'Yes' : 'No';
+        if (!colFilters.email.includes(emailVal)) return false;
+      }
+      if (colFilters.call.length) {
+        const callVal = String(r.__call_status || (r.called === true ? 'Yes' : r.called === false ? 'No' : '')) || '';
+        if (!colFilters.call.includes(callVal)) return false;
+      }
+      if (colFilters.edd.length && !colFilters.edd.includes(String(r.__edd?.label || '—'))) return false;
       // date range filter on event_time (inclusive day bounds)
       if (fromDate || toDate) {
         const ev = r.event_time ? new Date(r.event_time) : null;
@@ -361,12 +394,17 @@ export default function NdrDashboard() {
       const hay = [r.order_id, r.waybill, r.delivery_status, r.remark, r.location, r.__phone, r.__customer_issue, r.__action_taken].join(" ").toLowerCase();
       return hay.includes(QQ);
     });
-  }, [enriched, q, courier, bucket, fromDate, toDate]);
+  }, [enriched, q, courier, bucket, fromDate, toDate, colFilters]);
 
   // reset to first page when filters/search change
   useEffect(() => {
     setPage(1);
-  }, [q, courier, bucket, fromDate, toDate]);
+  }, [q, courier, bucket, fromDate, toDate, colFilters]);
+
+  // helper to update a single column filter
+  function updateColFilter(key: ColumnKey, values: string[]) {
+    setColFilters((prev) => ({ ...prev, [key]: values }));
+  }
 
   const totalPages = useMemo(() => Math.max(1, Math.ceil(filtered.length / pageSize)), [filtered.length, pageSize]);
   const pageRows = useMemo(() => {
@@ -375,16 +413,97 @@ export default function NdrDashboard() {
   }, [filtered, page, pageSize]);
 
   const stats = useMemo(() => {
-    const total = enriched.length;
-    const late = (enriched as any[]).filter((r) => r.__edd.tone === "late").length;
-    const today = (enriched as any[]).filter((r) => r.__edd.tone === "warn").length;
-    const cna = (enriched as any[]).filter((r) => r.__bucket === "CNA").length;
-    const addr = (enriched as any[]).filter((r) => r.__bucket === "Address Issue").length;
+    // Use the fully filtered dataset so metrics reflect all active filters,
+    // including column menu selections, toolbar filters, date range, and search.
+    const base = filtered as any[];
+    const total = base.length;
+    const late = base.filter((r) => r.__edd.tone === "late").length;
+    const today = base.filter((r) => r.__edd.tone === "warn").length;
+    const cna = base.filter((r) => r.__bucket === "CNA").length;
+    const addr = base.filter((r) => r.__bucket === "Address Issue").length;
     return { total, late, today, cna, addr };
-  }, [enriched]);
+  }, [filtered]);
+
+  // CSV exports (filtered and selected)
+  function exportCSV() {
+    const csv = buildCsvRows(filtered as any[]);
+    downloadCsv(`ndr_export_${Date.now()}.csv`, csv);
+  }
+
+  function exportSelectedCSV() {
+    const sel = new Set(selectedIds);
+    const rowsToExport = (filtered as any[]).filter((r: any) => sel.has(r.id));
+    const csv = buildCsvRows(rowsToExport);
+    downloadCsv(`ndr_selected_${Date.now()}.csv`, csv);
+  }
+
+  function clearSelection() { setSelectedIds([]); }
+
+  // Build CSV from given rows
+  function buildCsvRows(rowsToExport: any[]) {
+    const head = [
+      "Date (IST)",
+      "Order ID",
+      "AWB",
+      "Current Status",
+      "Courier",
+      "Mobile",
+      "Call Status",
+      "Issue (Customer)",
+      "Action Taken",
+      "EDD",
+      "Remarks",
+      "Location",
+    ];
+    const lines = rowsToExport.map((r: any) =>
+      [
+        fmtIST(r.event_time),
+        r.order_id,
+        r.waybill,
+        r.delivery_status || "",
+        courierName(r.courier_account),
+        r.__phone,
+        r.__call_status || (r.called ? "Yes" : (r.called === false ? "No" : "")),
+        r.__customer_issue,
+        r.__action_taken,
+        eddStatus(r.Partner_EDD).label,
+        r.remark || "",
+        r.location || "",
+      ]
+        .map((x) => `"${String(x ?? "").replace(/"/g, '""')}"`)
+        .join(",")
+    );
+    return [head.join(","), ...lines].join("\n");
+  }
+
+  function downloadCsv(filename: string, csv: string) {
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
 
   const couriers = useMemo(() => Array.from(new Set(enriched.map((r: any) => courierName(r.courier_account)))).filter(Boolean), [enriched]);
   const buckets = ["All", "Pending", "CNA", "Premises Closed", "Address Issue", "RTO", "Delivered", "Other"];
+
+  // Unique values for per-column filter dropdowns
+  const columnUniques: Record<ColumnKey, string[]> = useMemo(() => {
+    const uniq = (arr: any[]) => Array.from(new Set(arr))
+      .filter((x) => String(x ?? '').trim() !== '')
+      .map((x) => String(x));
+    return {
+      order: uniq((enriched as any[]).map((r: any) => r.order_id ?? '')),
+      awb: uniq((enriched as any[]).map((r: any) => r.waybill ?? '')),
+      status: uniq((enriched as any[]).map((r: any) => r.delivery_status || '')),
+      courier: uniq((enriched as any[]).map((r: any) => courierName(r.courier_account))),
+      email: uniq((enriched as any[]).map((r: any) => ((r.email_sent ? 'Yes' : 'No')))),
+      call: uniq((enriched as any[]).map((r: any) => (r.__call_status || (r.called === true ? 'Yes' : r.called === false ? 'No' : '')))),
+      edd: uniq((enriched as any[]).map((r: any) => (r.__edd?.label || '—'))),
+    } as Record<ColumnKey, string[]>;
+  }, [enriched]);
 
   function openEditor(row: NdrRow) {
     setEditing(row);
@@ -434,50 +553,6 @@ export default function NdrDashboard() {
     await quickUpdate(rowId, { notes: JSON.stringify(notes) });
   }
 
-  function exportCSV() {
-    const head = [
-      "Date (IST)",
-      "Order ID",
-      "AWB",
-      "Current Status",
-      "Courier",
-      "Mobile",
-      "Call Status",
-      "Issue (Customer)",
-      "Action Taken",
-      "EDD",
-      "Remarks",
-      "Location",
-    ];
-    const lines = filtered.map((r: any) =>
-      [
-        fmtIST(r.event_time),
-        r.order_id,
-        r.waybill,
-        r.delivery_status || "",
-        courierName(r.courier_account),
-        r.__phone,
-        r.__call_status || (r.called ? "Yes" : (r.called === false ? "No" : "")),
-        r.__customer_issue,
-        r.__action_taken,
-        eddStatus(r.Partner_EDD).label,
-        r.remark || "",
-        r.location || "",
-      ]
-        // CSV escape by doubling quotes per RFC 4180
-        .map((x) => `"${String(x ?? "").replace(/"/g, '""')}"`)
-        .join(",")
-    );
-    const csv = [head.join(","), ...lines].join("\n");
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `ndr_export_${Date.now()}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-  }
-
   // --- Tiny sanity tests (dev) --------------------------------
   if (typeof window !== "undefined") {
     try {
@@ -523,6 +598,7 @@ export default function NdrDashboard() {
             <div className="hidden sm:flex items-center gap-2 rounded-xl ring-1 ring-slate-200 px-1 py-1">
               <button onClick={() => setView("table")} className={classNames("px-3 py-1 rounded-lg text-sm", view === "table" ? "bg-slate-100" : "hover:bg-slate-50")}>Table</button>
               <button onClick={() => setView("kanban")} className={classNames("px-3 py-1 rounded-lg text-sm", view === "kanban" ? "bg-slate-100" : "hover:bg-slate-50")}>Kanban</button>
+              <button onClick={() => setView("analytics")} className={classNames("px-3 py-1 rounded-lg text-sm", view === "analytics" ? "bg-slate-100" : "hover:bg-slate-50")}>Analytics</button>
             </div>
           </div>
         </div>
@@ -607,6 +683,15 @@ export default function NdrDashboard() {
             onPageSizeChange={setPageSize}
             onEdit={openEditor}
             onQuickUpdate={quickUpdate}
+            columnUniques={columnUniques}
+            colFilters={colFilters}
+            onChangeColumnFilter={updateColFilter}
+            selectedIds={selectedIds}
+            onToggleRow={(id, checked) => setSelectedIds(prev => checked ? Array.from(new Set([...prev, id])) : prev.filter(x => x !== id))}
+            onToggleAll={(checked, idsOnPage) => setSelectedIds(prev => checked ? Array.from(new Set([...prev, ...idsOnPage])) : prev.filter(id => !idsOnPage.includes(id)))}
+            onExportFiltered={exportCSV}
+            onExportSelected={exportSelectedCSV}
+            onClearSelection={clearSelection}
             onOpenRepeat={(orderId) => {
               try {
                 const idStr = String(orderId);
@@ -627,8 +712,10 @@ export default function NdrDashboard() {
               }
             }}
           />
-        ) : (
+        ) : view === "kanban" ? (
           <KanbanView rows={filtered as any[]} onEdit={openEditor} onMove={moveToBucket} />
+        ) : (
+          <AnalyticsView rows={filtered as any[]} allRows={enriched as any[]} />
         )}
       </main>
 
@@ -744,35 +831,323 @@ type TableViewProps = {
   onPageSizeChange: (n: number) => void;
   onOpenRepeat: (orderId: number) => void;
   onOpenRepeatRow: (row: NdrRow) => void;
+  // column filter data
+  columnUniques: Record<ColumnKey, string[]>;
+  colFilters: Record<ColumnKey, string[]>;
+  onChangeColumnFilter: (key: ColumnKey, values: string[]) => void;
+  // selection + export
+  selectedIds: number[];
+  onToggleRow: (id: number, checked: boolean) => void;
+  onToggleAll: (checked: boolean, idsOnPage: number[]) => void;
+  onExportFiltered: () => void;
+  onExportSelected: () => void;
+  onClearSelection: () => void;
 };
 
-function TableView({ rows, onEdit: _onEdit, onQuickUpdate, total, page, pageSize, totalPages, onPageChange, onPageSizeChange, onOpenRepeat: _onOpenRepeat, onOpenRepeatRow }: TableViewProps) {
+function TableView({ rows, onEdit: _onEdit, onQuickUpdate, total, page, pageSize, totalPages, onPageChange, onPageSizeChange, onOpenRepeat: _onOpenRepeat, onOpenRepeatRow, columnUniques, colFilters, onChangeColumnFilter, selectedIds, onToggleRow, onToggleAll, onExportFiltered, onExportSelected, onClearSelection }: TableViewProps) {
+  type SortKey = 'date' | 'order' | 'awb' | 'status' | 'courier' | 'edd';
+  const [sortKey, setSortKey] = useState<SortKey>('date');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
+  const [tableFilter, setTableFilter] = useState('');
+  const [openFilter, setOpenFilter] = useState<ColumnKey | null>(null);
+  const [menuPos, setMenuPos] = useState<{ left: number; top: number } | null>(null);
+
+  const toggleSort = (key: SortKey) => {
+    setSortKey((prev) => (prev === key ? prev : key));
+    setSortDir((prev) => (sortKey === key ? (prev === 'asc' ? 'desc' : 'asc') : 'asc'));
+  };
+
+  const filteredRows = useMemo(() => {
+    const qq = tableFilter.trim().toLowerCase();
+    if (!qq) return rows;
+    return rows.filter((r) => {
+      const hay = [r.order_id, r.waybill, r.delivery_status, courierName(r.courier_account), r.location].join(' ').toLowerCase();
+      return hay.includes(qq);
+    });
+  }, [rows, tableFilter]);
+
+  const sortedRows = useMemo(() => {
+    const arr = [...filteredRows];
+    arr.sort((a, b) => {
+      const dir = sortDir === 'asc' ? 1 : -1;
+      switch (sortKey) {
+        case 'date': {
+          const va = a.event_time ? new Date(a.event_time).getTime() : 0;
+          const vb = b.event_time ? new Date(b.event_time).getTime() : 0;
+          return (va - vb) * dir;
+        }
+        case 'order': return ((a.order_id ?? 0) - (b.order_id ?? 0)) * dir;
+        case 'awb': return String(a.waybill ?? '').localeCompare(String(b.waybill ?? '')) * dir;
+        case 'status': return String(a.delivery_status ?? '').localeCompare(String(b.delivery_status ?? '')) * dir;
+        case 'courier': return String(courierName(a.courier_account) ?? '').localeCompare(String(courierName(b.courier_account) ?? '')) * dir;
+        case 'edd': {
+          const da = (a.__edd?.diff ?? Number.MAX_SAFE_INTEGER);
+          const db = (b.__edd?.diff ?? Number.MAX_SAFE_INTEGER);
+          return (da - db) * dir;
+        }
+      }
+    });
+    return arr;
+  }, [filteredRows, sortKey, sortDir]);
+
+  // selection helpers for current page
+  const pageIds = useMemo(() => sortedRows.map(r => r.id), [sortedRows]);
+  const selectedSet = useMemo(() => new Set<number>(selectedIds), [selectedIds]);
+  const allSelectedOnPage = pageIds.length > 0 && pageIds.every(id => selectedSet.has(id));
+
+  function FilterMenu({ colKey, title }: { colKey: ColumnKey; title: string }) {
+    const options = columnUniques[colKey] || [];
+    const selected = new Set(colFilters[colKey] || []);
+    const allSelected = selected.size === 0 || selected.size === options.length;
+    const toggleValue = (v: string) => {
+      const next = new Set(selected);
+      if (next.has(v)) next.delete(v); else next.add(v);
+      onChangeColumnFilter(colKey, Array.from(next));
+    };
+    const selectAll = () => onChangeColumnFilter(colKey, []);
+    const clearAll = () => onChangeColumnFilter(colKey, []);
+    return (
+      <div className="w-64 max-h-80 overflow-auto rounded-xl bg-white shadow-lg ring-1 ring-slate-200 p-2" role="dialog" aria-label={`${title} filter`}>
+        <div className="flex items-center gap-2 px-2 py-1 text-xs text-slate-600">
+          <button className="px-2 py-1 rounded ring-1 ring-slate-200 hover:bg-slate-50" onClick={selectAll} title="Select all">Select All</button>
+          <button className="px-2 py-1 rounded ring-1 ring-slate-200 hover:bg-slate-50" onClick={clearAll} title="Clear selection">Clear</button>
+        </div>
+        <div className="px-2 py-1 text-xs text-slate-500">{title}</div>
+        <ul className="space-y-1">
+          {options.map((opt) => (
+            <li key={opt} className="flex items-center gap-2 px-2 py-1 hover:bg-slate-50 rounded">
+              <input
+                id={`${colKey}-${opt}`}
+                type="checkbox"
+                checked={allSelected ? true : selected.has(opt)}
+                onChange={() => toggleValue(opt)}
+              />
+              <label htmlFor={`${colKey}-${opt}`} className="text-sm truncate" title={opt}>{opt}</label>
+            </li>
+          ))}
+        </ul>
+        <div className="flex justify-end gap-2 px-2 py-2">
+          <button className="px-3 py-1 rounded-lg ring-1 ring-slate-200" onClick={() => setOpenFilter(null)} title="Close">OK</button>
+        </div>
+      </div>
+    );
+  }
+
+  const SortHeader = ({ label, active, dir, onClick }: { label: string; active: boolean; dir: 'asc' | 'desc'; onClick: () => void }) => (
+    <button type="button" onClick={onClick} className={classNames('inline-flex items-center gap-1', active ? 'text-slate-900' : 'text-slate-600 hover:text-slate-800')}>
+      <span>{label}</span>
+      <span className="text-xs">{active ? (dir === 'asc' ? '▲' : '▼') : '↕'}</span>
+    </button>
+  );
 
   return (
     <div className="overflow-auto rounded-2xl ring-1 ring-slate-200">
+      <div className="flex items-center gap-2 p-2 border-b bg-white sticky top-0 z-10">
+        <Search className="w-4 h-4 text-slate-400" />
+        <input value={tableFilter} onChange={(e) => setTableFilter(e.target.value)} placeholder="Quick filter (current page)…" className="flex-1 bg-transparent outline-none text-sm" />
+        <div className="flex items-center gap-2">
+          <button
+            className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg ring-1 ring-slate-200 text-sm hover:bg-slate-50"
+            onClick={onExportFiltered}
+            title="Export all filtered rows"
+          >
+            <Download className="w-4 h-4" /> Export filtered
+          </button>
+          <button
+            className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg ring-1 ring-slate-200 text-sm hover:bg-slate-50 disabled:opacity-50"
+            onClick={onExportSelected}
+            disabled={selectedIds.length === 0}
+            title="Export selected rows"
+          >
+            <Download className="w-4 h-4" /> Export selected ({selectedIds.length})
+          </button>
+          {selectedIds.length > 0 && (
+            <button
+              className="px-2 py-1 rounded-lg text-xs ring-1 ring-slate-200 hover:bg-slate-50"
+              onClick={onClearSelection}
+              title="Clear selection"
+            >
+              Clear
+            </button>
+          )}
+        </div>
+      </div>
       <table className="min-w-full text-sm">
-        <thead className="bg-slate-50 text-left sticky top-0 z-10">
+        <thead className="bg-slate-50 text-left sticky top-10 z-10">
           <tr className="*:px-3 *:py-2 *:whitespace-nowrap">
-            <th className="min-w-[160px]">Date (IST)</th>
-            <th>Order ID</th>
-            <th className="min-w-[140px]">AWB</th>
-            <th className="min-w-[220px]">Current status</th>
-            <th>Courier</th>
-            <th>Email Sent</th>
-            <th>Call Status</th>
-            <th>EDD</th>
+            <th className="w-8 px-3 py-2">
+              <input
+                type="checkbox"
+                checked={allSelectedOnPage}
+                onChange={(e) => onToggleAll(e.target.checked, pageIds)}
+                aria-label="Select all on page"
+                title="Select all on page"
+              />
+            </th>
+            <th className="min-w-[160px] px-3 py-2">
+              <SortHeader label="Date (IST)" active={sortKey==='date'} dir={sortDir} onClick={() => toggleSort('date')} />
+            </th>
+
+            <th className="relative px-3 py-2">
+              <div className="flex items-center gap-2">
+                <SortHeader label="Order ID" active={sortKey==='order'} dir={sortDir} onClick={() => toggleSort('order')} />
+                <button
+                  type="button"
+                  className="p-1 rounded hover:bg-slate-100"
+                  title="Filter Order ID"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                    setMenuPos({ left: rect.right - 16, top: rect.bottom + 6 });
+                    setOpenFilter(openFilter === 'order' ? null : 'order');
+                  }}
+                  aria-label="Open Order ID filter"
+                >
+                  <Filter className="w-4 h-4 text-slate-500" />
+                </button>
+              </div>
+            </th>
+
+            <th className="relative min-w-[140px] px-3 py-2">
+              <div className="flex items-center gap-2">
+                <SortHeader label="AWB" active={sortKey==='awb'} dir={sortDir} onClick={() => toggleSort('awb')} />
+                <button
+                  type="button"
+                  className="p-1 rounded hover:bg-slate-100"
+                  title="Filter AWB"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                    setMenuPos({ left: rect.right - 16, top: rect.bottom + 6 });
+                    setOpenFilter(openFilter === 'awb' ? null : 'awb');
+                  }}
+                  aria-label="Open AWB filter"
+                >
+                  <Filter className="w-4 h-4 text-slate-500" />
+                </button>
+              </div>
+            </th>
+
+            <th className="relative min-w-[220px] px-3 py-2">
+              <div className="flex items-center gap-2">
+                <SortHeader label="Current status" active={sortKey==='status'} dir={sortDir} onClick={() => toggleSort('status')} />
+                <button
+                  type="button"
+                  className="p-1 rounded hover:bg-slate-100"
+                  title="Filter Status"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                    setMenuPos({ left: rect.right - 16, top: rect.bottom + 6 });
+                    setOpenFilter(openFilter === 'status' ? null : 'status');
+                  }}
+                  aria-label="Open Status filter"
+                >
+                  <Filter className="w-4 h-4 text-slate-500" />
+                </button>
+              </div>
+            </th>
+
+            <th className="relative px-3 py-2">
+              <div className="flex items-center gap-2">
+                <SortHeader label="Courier" active={sortKey==='courier'} dir={sortDir} onClick={() => toggleSort('courier')} />
+                <button
+                  type="button"
+                  className="p-1 rounded hover:bg-slate-100"
+                  title="Filter Courier"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                    setMenuPos({ left: rect.right - 16, top: rect.bottom + 6 });
+                    setOpenFilter(openFilter === 'courier' ? null : 'courier');
+                  }}
+                  aria-label="Open Courier filter"
+                >
+                  <Filter className="w-4 h-4 text-slate-500" />
+                </button>
+              </div>
+            </th>
+
+            <th className="relative px-3 py-2">
+              <div className="flex items-center gap-2">
+                <span>Email Sent</span>
+                <button
+                  type="button"
+                  className="p-1 rounded hover:bg-slate-100"
+                  title="Filter Email Sent"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                    setMenuPos({ left: rect.right - 16, top: rect.bottom + 6 });
+                    setOpenFilter(openFilter === 'email' ? null : 'email');
+                  }}
+                  aria-label="Open Email Sent filter"
+                >
+                  <Filter className="w-4 h-4 text-slate-500" />
+                </button>
+              </div>
+            </th>
+            <th className="relative px-3 py-2">
+              <div className="flex items-center gap-2">
+                <span>Call Status</span>
+                <button
+                  type="button"
+                  className="p-1 rounded hover:bg-slate-100"
+                  title="Filter Call Status"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                    setMenuPos({ left: rect.right - 16, top: rect.bottom + 6 });
+                    setOpenFilter(openFilter === 'call' ? null : 'call');
+                  }}
+                  aria-label="Open Call Status filter"
+                >
+                  <Filter className="w-4 h-4 text-slate-500" />
+                </button>
+              </div>
+            </th>
+
+            <th className="relative px-3 py-2">
+              <div className="flex items-center gap-2">
+                <SortHeader label="EDD" active={sortKey==='edd'} dir={sortDir} onClick={() => toggleSort('edd')} />
+                <button
+                  type="button"
+                  className="p-1 rounded hover:bg-slate-100"
+                  title="Filter EDD"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                    setMenuPos({ left: rect.right - 16, top: rect.bottom + 6 });
+                    setOpenFilter(openFilter === 'edd' ? null : 'edd');
+                  }}
+                  aria-label="Open EDD filter"
+                >
+                  <Filter className="w-4 h-4 text-slate-500" />
+                </button>
+              </div>
+            </th>
           </tr>
         </thead>
         <tbody className="divide-y">
-          {rows.map((r) => {
+          {sortedRows.map((r) => {
             const url = trackingUrl(r);
             const tone = r.__edd?.tone as any;
-            const rowTone = tone === "late" ? "bg-rose-50/40" : tone === "warn" ? "bg-amber-50/30" : "";
+            const rowTone = tone === 'late' ? 'bg-rose-50/40' : tone === 'warn' ? 'bg-amber-50/30' : '';
             return (
               <tr key={r.id} className={`*:px-3 *:py-2 hover:bg-slate-50 ${rowTone} cursor-pointer`} onClick={() => onOpenRepeatRow(r)}>
                 <td>
+                  <input
+                    type="checkbox"
+                    checked={selectedSet.has(r.id)}
+                    onClick={(e) => e.stopPropagation()}
+                    onChange={(e) => onToggleRow(r.id, e.target.checked)}
+                    aria-label={`Select row ${r.order_id}`}
+                    title="Select row"
+                  />
+                </td>
+                <td>
                   <div className="font-medium">{fmtIST(r.event_time)}</div>
-                  <div className="text-xs text-slate-500">{r.location || "—"}</div>
+                  <div className="text-xs text-slate-500">{r.location || '—'}</div>
                 </td>
                 <td className="font-medium">
                   <button
@@ -797,9 +1172,9 @@ function TableView({ rows, onEdit: _onEdit, onQuickUpdate, total, page, pageSize
                   </div>
                 </td>
                 <td>
-                  <div className="font-medium">{r.delivery_status || "—"}</div>
+                  <div className="font-medium">{r.delivery_status || '—'}</div>
                   <div className="text-xs text-slate-500 flex items-center gap-2">
-                    <StatusBadge bucket={r.__bucket} /> <span>{r.rto_awb ? `RTO: ${r.rto_awb}` : ""}</span>
+                    <StatusBadge bucket={r.__bucket} /> <span>{r.rto_awb ? `RTO: ${r.rto_awb}` : ''}</span>
                   </div>
                 </td>
                 <td>{courierName(r.courier_account)}</td>
@@ -860,6 +1235,28 @@ function TableView({ rows, onEdit: _onEdit, onQuickUpdate, total, page, pageSize
           })}
         </tbody>
       </table>
+      {openFilter && menuPos && typeof document !== 'undefined' && ReactDOM.createPortal(
+        <div
+          className="fixed inset-0 z-[200]"
+          onClick={() => setOpenFilter(null)}
+          aria-hidden
+        >
+          <div
+            className="pointer-events-auto"
+            style={{ position: 'fixed', left: Math.max(8, menuPos.left - 256), top: menuPos.top }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {openFilter === 'order' && <FilterMenu colKey="order" title="Order ID" />}
+            {openFilter === 'awb' && <FilterMenu colKey="awb" title="AWB" />}
+            {openFilter === 'status' && <FilterMenu colKey="status" title="Status" />}
+            {openFilter === 'courier' && <FilterMenu colKey="courier" title="Courier" />}
+            {openFilter === 'email' && <FilterMenu colKey="email" title="Email Sent" />}
+            {openFilter === 'call' && <FilterMenu colKey="call" title="Call Status" />}
+            {openFilter === 'edd' && <FilterMenu colKey="edd" title="EDD" />}
+          </div>
+        </div>,
+        document.body
+      )}
       {rows.length === 0 && <div className="p-8 text-center text-slate-500">No results</div>}
       {/* Pagination controls */}
       {rows.length > 0 && (
@@ -921,10 +1318,85 @@ function NdrActionsPanel({ row, onQuickUpdate }: { row: NdrRow; onQuickUpdate: (
   const [emailCourier, setEmailCourier] = useState<string>(courierName(row.courier_account || ""));
   // New: Action to be taken (for email), requested by user. Highlighted in UI and included in email.
   const [actionToBeTaken, setActionToBeTaken] = useState<string>(initial.action_to_be_taken || "");
+  // New: Customer query (additional context from customer), highlighted in email
+  const [customerQuery, setCustomerQuery] = useState<string>(((initial as any).customer_query) || "");
+  // AI suggestions state
+  const [actionSugs, setActionSugs] = useState<string[]>([]);
+  const [querySugs, setQuerySugs] = useState<string[]>([]);
+  const [loadingAction, setLoadingAction] = useState(false);
+  const [loadingQuery, setLoadingQuery] = useState(false);
+
+  async function fetchGeminiSuggestions(kind: 'action' | 'query') {
+    const apiKey = (import.meta as any).env?.VITE_GEMINI_API_KEY;
+    if (!apiKey) {
+      alert('Gemini API key missing. Please set VITE_GEMINI_API_KEY in your environment.');
+      return;
+    }
+    const context = [
+      `Courier: ${courierName(row.courier_account || '')}`,
+      `Order ID: ${row.order_id}`,
+      `AWB: ${row.waybill}`,
+      `Status: ${row.delivery_status || '—'}`,
+      row.location ? `Location: ${row.location}` : '',
+      issue ? `Customer issue: ${issue}` : '',
+      correctedAddress ? `Corrected address: ${correctedAddress}` : '',
+      correctedPhone ? `Corrected phone: ${correctedPhone}` : '',
+    ].filter(Boolean).join('\n');
+
+    const userSeed = kind === 'action' ? (actionToBeTaken || '').trim() : (customerQuery || '').trim();
+    const baseRules = `Output only 5 lines. No headers, no numbering, no bullet characters. One line per suggestion. Keep <= 14 words.`;
+    const prompt = kind === 'action'
+      ? (
+          userSeed
+            ? `${baseRules}\nRewrite the user's draft into 5 imperative, courier-facing instructions (one line each). Start with a strong verb. No IDs/metadata.\n\nUser draft:\n"${userSeed}"\n\nShipment context:\n${context}`
+            : `${baseRules}\nGiven the shipment context, write 5 imperative courier instructions (one line each). Start with a verb. No extra commentary.\n\n${context}`
+        )
+      : (
+          userSeed
+            ? `${baseRules}\nRewrite the customer's words into 5 concise statements of what the customer said. Neutral tone. No IDs, no tracking numbers, no colons, no semicolons.\n\nCustomer words:\n"${userSeed}"\n\nShipment context:\n${context}`
+            : `${baseRules}\nFrom the shipment context, write 5 concise statements of what the customer said over phone. No IDs/metadata, no colons/semicolons.\n\n${context}`
+        );
+
+    try {
+      if (kind === 'action') setLoadingAction(true); else setLoadingQuery(true);
+      const resp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}` , {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: {
+            temperature: 0.2,
+            topP: 0.9,
+            maxOutputTokens: 256
+          }
+        }),
+      });
+      const data = await resp.json();
+      const text: string = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+      // Split into lines, strip bullets/numbers, keep non-empty, max 8
+      const rawLines = text.split(/\r?\n/)
+        .map((l: string) => l.replace(/^[-*\d.).\s]+/, '').trim())
+        .filter((l: string) => l.length >= 3 && l.length <= 140);
+      // Remove meta/preamble and IDs/colon lines; normalize punctuation
+      const lines = rawLines
+        .filter((l: string) => !/^here\b/i.test(l))
+        .filter((l: string) => !/^output\b/i.test(l))
+        .filter((l: string) => !/\b(Order\s*ID|Courier|AWB|Tracking|Current location)\b/i.test(l) || kind === 'action')
+        .filter((l: string) => !(kind === 'query' && /[:;]{1}/.test(l)))
+        .map((l: string) => l.replace(/[\s.]+$/,'').trim())
+        .slice(0, 8);
+      if (kind === 'action') setActionSugs(lines); else setQuerySugs(lines);
+    } catch {
+      if (kind === 'action') setActionSugs([]); else setQuerySugs([]);
+      alert('Failed to fetch suggestions.');
+    } finally {
+      if (kind === 'action') setLoadingAction(false); else setLoadingQuery(false);
+    }
+  }
 
   async function save() {
     const chosenAction = action === "Other" ? (other.trim() || "Other") : (action || "");
-    const notes = { phone: phone || undefined, customer_issue: issue || undefined, action_taken: chosenAction || undefined, action_to_be_taken: (actionToBeTaken || undefined) } as any;
+    const notes = { phone: phone || undefined, customer_issue: issue || undefined, action_taken: chosenAction || undefined, action_to_be_taken: (actionToBeTaken || undefined), customer_query: (customerQuery || undefined) } as any;
     await onQuickUpdate({ called, remark: remark || null, corrected_phone: correctedPhone || null, corrected_address: correctedAddress || null, notes: JSON.stringify(notes) } as any);
   }
 
@@ -992,6 +1464,8 @@ function NdrActionsPanel({ row, onQuickUpdate }: { row: NdrRow; onQuickUpdate: (
         ? `- ${actionToBeTaken}`
         : `- Please correct the address and/or attempt delivery as appropriate.\n- Update the shipment status accordingly.`,
       ``,
+      customerQuery ? `>>> CUSTOMER QUERY <<<\n- ${customerQuery}` : undefined,
+      customerQuery ? `` : undefined,
       (correctedPhone || correctedAddress) ? `Corrections` : undefined,
       correctedPhone ? `- Corrected Phone: ${correctedPhone}` : undefined,
       correctedAddress ? `- Corrected Address: ${correctedAddress}` : undefined,
@@ -1044,10 +1518,21 @@ function NdrActionsPanel({ row, onQuickUpdate }: { row: NdrRow; onQuickUpdate: (
         </ul>
       </div>
     `;
+    const customerQueryHtml = customerQuery ? `
+      <div style="margin:0 0 16px 0;padding:14px 16px;border:2px solid #3B82F6;background:#EFF6FF;border-radius:12px;">
+        <div style="font-weight:700;color:#1D4ED8;font-size:16px;display:flex;align-items:center;gap:8px;">
+          <span>🗣️ Customer query</span>
+        </div>
+        <ul style="margin:8px 0 0 20px;padding:0;font-size:15px;color:#1E3A8A;">
+          <li>${esc(customerQuery)}</li>
+        </ul>
+      </div>
+    ` : "";
     const bodyHtml = `
       <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:14px;line-height:1.6;color:#0f172a;">
         <p>Hello Team,</p>
         ${topRequestedActionHtml}
+        ${customerQueryHtml}
         ${correctionsBox}
         <p>We are observing an address-related issue for the following shipment. Kindly assist with resolution or guide on next steps.</p>
         <h3 style="margin:16px 0 8px 0;font-size:15px;">Shipping Details</h3>
@@ -1087,6 +1572,7 @@ function NdrActionsPanel({ row, onQuickUpdate }: { row: NdrRow; onQuickUpdate: (
       issue: issue || null,
       remark: remark || null,
       requested_action: actionToBeTaken || null,
+      customer_query: customerQuery || null,
       tracking: trackingUrl(row) || null,
       called,
       timestamp: new Date().toISOString(),
@@ -1204,13 +1690,54 @@ function NdrActionsPanel({ row, onQuickUpdate }: { row: NdrRow; onQuickUpdate: (
             </div>
             <div className="p-5 space-y-3">
               <label className="block text-sm">
-                Action to be taken (for email)
+                <div className="flex items-center justify-between gap-2">
+                  <span>Action to be taken (for email)</span>
+                  <button
+                    type="button"
+                    className="text-xs px-2 py-1 rounded-lg ring-1 ring-amber-300 bg-amber-50 hover:bg-amber-100"
+                    onClick={() => fetchGeminiSuggestions('action')}
+                    title="Suggest with AI"
+                  >{loadingAction ? 'Suggesting…' : 'Suggest'}</button>
+                </div>
                 <input
                   className="mt-1 w-full ring-2 ring-amber-300 rounded-lg px-3 py-2 bg-amber-50/40"
                   value={actionToBeTaken}
                   onChange={(e) => setActionToBeTaken(e.target.value)}
                   placeholder="e.g., Please reattempt delivery tomorrow and update address landmark"
                 />
+                {actionSugs.length > 0 && (
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {actionSugs.map((s, i) => (
+                      <button key={i} type="button" className="text-xs px-2 py-1 rounded-full bg-amber-100 hover:bg-amber-200 ring-1 ring-amber-200"
+                        onClick={() => setActionToBeTaken(s)} title="Use this suggestion">{s}</button>
+                    ))}
+                  </div>
+                )}
+              </label>
+              <label className="block text-sm">
+                <div className="flex items-center justify-between gap-2">
+                  <span>Customer query (optional)</span>
+                  <button
+                    type="button"
+                    className="text-xs px-2 py-1 rounded-lg ring-1 ring-blue-300 bg-blue-50 hover:bg-blue-100"
+                    onClick={() => fetchGeminiSuggestions('query')}
+                    title="Suggest with AI"
+                  >{loadingQuery ? 'Suggesting…' : 'Suggest'}</button>
+                </div>
+                <textarea
+                  className="mt-1 w-full ring-2 ring-blue-300 rounded-lg px-3 py-2 bg-blue-50/40 min-h-[80px]"
+                  value={customerQuery}
+                  onChange={(e) => setCustomerQuery(e.target.value)}
+                  placeholder="e.g., Customer asked to hold for 2 days / wants address change / available after 6 PM"
+                />
+                {querySugs.length > 0 && (
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {querySugs.map((s, i) => (
+                      <button key={i} type="button" className="text-xs px-2 py-1 rounded-full bg-blue-100 hover:bg-blue-200 ring-1 ring-blue-200"
+                        onClick={() => setCustomerQuery(s)} title="Use this suggestion">{s}</button>
+                    ))}
+                  </div>
+                )}
               </label>
               <label className="block text-sm">
                 Courier partner
@@ -1344,6 +1871,141 @@ function KanbanView({ rows, onEdit, onMove }: { rows: (NdrRow & any)[]; onEdit: 
             </div>
           );
         })}
+    </div>
+  );
+}
+
+// ---- Analytics View (minimal placeholder) -----------------
+function AnalyticsView({ rows, allRows }: { rows: (NdrRow & any)[]; allRows: (NdrRow & any)[] }) {
+  // Local filters for analytics
+  const allCouriers = useMemo(() => {
+    const set = new Set<string>();
+    for (const r of allRows) set.add(courierName(r.courier_account));
+    return ["All", ...Array.from(set).filter(Boolean).sort()];
+  }, [allRows]);
+  const allBuckets = useMemo(() => {
+    const set = new Set<string>();
+    for (const r of allRows) set.add((r as any).__bucket || "Other");
+    return ["All", ...Array.from(set).filter(Boolean).sort()];
+  }, [allRows]);
+
+  const [aCourier, setACourier] = useState<string>("All");
+  const [aBucket, setABucket] = useState<string>("All");
+
+  const aRows = useMemo(() => {
+    return rows.filter((r) => {
+      const c = courierName(r.courier_account);
+      const b = (r as any).__bucket || "Other";
+      return (aCourier === "All" || c === aCourier) && (aBucket === "All" || b === aBucket);
+    });
+  }, [rows, aCourier, aBucket]);
+
+  // KPI metrics
+  const metrics = useMemo(() => {
+    const total = aRows.length;
+    const byCourier: Record<string, number> = {};
+    const byBucket: Record<string, number> = {};
+    for (const r of aRows) {
+      const c = courierName(r.courier_account) || "—";
+      byCourier[c] = (byCourier[c] || 0) + 1;
+      const b = (r as any).__bucket || "Other";
+      byBucket[b] = (byBucket[b] || 0) + 1;
+    }
+    return { total, byCourier, byBucket };
+  }, [aRows]);
+
+  // Time series by event day
+  const lineOptions = useMemo(() => {
+    const map: Record<string, number> = {};
+    for (const r of aRows) {
+      const d = r.event_time ? new Date(r.event_time) : null;
+      if (!d) continue;
+      const key = d.toISOString().slice(0, 10);
+      map[key] = (map[key] || 0) + 1;
+    }
+    const categories = Object.keys(map).sort();
+    const data = categories.map((k) => map[k]);
+    const opts: Highcharts.Options = {
+      title: { text: "Shipments over time" },
+      xAxis: { categories },
+      yAxis: { title: { text: "Count" } },
+      series: [{ type: "line", name: "Shipments", data }],
+      credits: { enabled: false },
+    };
+    return opts;
+  }, [aRows]);
+
+  // Pie by bucket
+  const pieOptions = useMemo(() => {
+    const data = Object.entries(metrics.byBucket).map(([name, y]) => ({ name, y }));
+    const opts: Highcharts.Options = {
+      title: { text: "By Bucket" },
+      series: [
+        {
+          type: "pie",
+          name: "Shipments",
+          data,
+        },
+      ],
+      credits: { enabled: false },
+    };
+    return opts;
+  }, [metrics.byBucket]);
+
+  // Bar by courier
+  const barOptions = useMemo(() => {
+    const entries = Object.entries(metrics.byCourier).sort((a, b) => b[1] - a[1]);
+    const categories = entries.map((e) => e[0]);
+    const data = entries.map((e) => e[1]);
+    const opts: Highcharts.Options = {
+      chart: { type: "column" },
+      title: { text: "By Courier" },
+      xAxis: { categories, title: { text: "Courier" } },
+      yAxis: { title: { text: "Count" } },
+      series: [{ type: "column", name: "Shipments", data }],
+      credits: { enabled: false },
+    };
+    return opts;
+  }, [metrics.byCourier]);
+
+  return (
+    <div className="space-y-4">
+      <div className="grid sm:grid-cols-3 gap-3">
+        <Stat label="Filtered Shipments" value={metrics.total} icon={Info} />
+        <Stat label="Total (All)" value={allRows.length} icon={Columns} />
+        <Stat label="Couriers" value={Object.keys(metrics.byCourier).length} icon={Truck} />
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="flex items-center gap-2 ring-1 ring-slate-200 rounded-xl px-3 py-2 bg-white">
+          <span className="text-sm text-slate-500">Courier</span>
+          <select className="bg-transparent text-sm outline-none" value={aCourier} onChange={(e) => setACourier(e.target.value)} aria-label="Analytics courier filter" title="Analytics courier filter">
+            {allCouriers.map((c) => (
+              <option key={c}>{c}</option>
+            ))}
+          </select>
+        </div>
+        <div className="flex items-center gap-2 ring-1 ring-slate-200 rounded-xl px-3 py-2 bg-white">
+          <span className="text-sm text-slate-500">Bucket</span>
+          <select className="bg-transparent text-sm outline-none" value={aBucket} onChange={(e) => setABucket(e.target.value)} aria-label="Analytics bucket filter" title="Analytics bucket filter">
+            {allBuckets.map((b) => (
+              <option key={b}>{b}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      <div className="grid lg:grid-cols-2 gap-4">
+        <div className="p-4 rounded-2xl ring-1 ring-slate-200 bg-white">
+          <HighchartsReact highcharts={Highcharts} options={pieOptions} />
+        </div>
+        <div className="p-4 rounded-2xl ring-1 ring-slate-200 bg-white">
+          <HighchartsReact highcharts={Highcharts} options={barOptions} />
+        </div>
+      </div>
+      <div className="p-4 rounded-2xl ring-1 ring-slate-200 bg-white">
+        <HighchartsReact highcharts={Highcharts} options={lineOptions} />
+      </div>
     </div>
   );
 }
