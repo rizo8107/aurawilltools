@@ -280,6 +280,7 @@ export default function NdrDashboard() {
   const [q, setQ] = useState("");
   const [courier, setCourier] = useState("All");
   const [bucket, setBucket] = useState("All");
+  const [remark, setRemark] = useState("All");
   const [view, setView] = useState<"table" | "kanban" | "analytics">("table");
   // pagination
   const [page, setPage] = useState(1);
@@ -313,6 +314,15 @@ export default function NdrDashboard() {
   const [repeatRow, setRepeatRow] = useState<NdrRow | null>(null);
   // selection for export
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
+  // save state + toast
+  const [saving, setSaving] = useState(false);
+  const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  // auto-dismiss toast
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 2500);
+    return () => clearTimeout(t);
+  }, [toast]);
 
   async function load() {
     try {
@@ -363,6 +373,7 @@ export default function NdrDashboard() {
     return enriched.filter((r: any) => {
       if (courier !== "All" && courierName(r.courier_account) !== courier) return false;
       if (bucket !== "All" && r.__bucket !== bucket) return false;
+      if (remark !== "All" && String(r.remark || "") !== remark) return false;
       // per-column multi-select filters
       if (colFilters.order.length && !colFilters.order.includes(String(r.order_id ?? ''))) return false;
       if (colFilters.awb.length && !colFilters.awb.includes(String(r.waybill ?? ''))) return false;
@@ -394,12 +405,12 @@ export default function NdrDashboard() {
       const hay = [r.order_id, r.waybill, r.delivery_status, r.remark, r.location, r.__phone, r.__customer_issue, r.__action_taken].join(" ").toLowerCase();
       return hay.includes(QQ);
     });
-  }, [enriched, q, courier, bucket, fromDate, toDate, colFilters]);
+  }, [enriched, q, courier, bucket, remark, fromDate, toDate, colFilters]);
 
   // reset to first page when filters/search change
   useEffect(() => {
     setPage(1);
-  }, [q, courier, bucket, fromDate, toDate, colFilters]);
+  }, [q, courier, bucket, remark, fromDate, toDate, colFilters]);
 
   // helper to update a single column filter
   function updateColFilter(key: ColumnKey, values: string[]) {
@@ -489,6 +500,21 @@ export default function NdrDashboard() {
   const couriers = useMemo(() => Array.from(new Set(enriched.map((r: any) => courierName(r.courier_account)))).filter(Boolean), [enriched]);
   const buckets = ["All", "Pending", "CNA", "Premises Closed", "Address Issue", "RTO", "Delivered", "Other"];
 
+  // Remark groups: Top N as tabs, rest under 'More'
+  const remarkOrder = useMemo(() => {
+    const counts = new Map<string, number>();
+    (enriched as any[]).forEach((r: any) => {
+      const key = String(r.remark || "").trim();
+      if (!key) return;
+      counts.set(key, (counts.get(key) || 0) + 1);
+    });
+    return Array.from(counts.entries())
+      .sort((a, b) => b[1] - a[1])
+      .map(([k]) => k);
+  }, [enriched]);
+  const topRemarkTabs = useMemo(() => ["All", ...remarkOrder.slice(0, 6)], [remarkOrder]);
+  const moreRemarkOptions = useMemo(() => remarkOrder.slice(6), [remarkOrder]);
+
   // Unique values for per-column filter dropdowns
   const columnUniques: Record<ColumnKey, string[]> = useMemo(() => {
     const uniq = (arr: any[]) => Array.from(new Set(arr))
@@ -535,9 +561,17 @@ export default function NdrDashboard() {
       status: editStatus,
       notes: JSON.stringify(notes),
     };
-    await patchNdr(editing.id, updates);
-    setRows((prev) => prev.map((r) => (r.id === editing.id ? ({ ...r, ...updates } as any) : r)));
-    setEditorOpen(false);
+    try {
+      setSaving(true);
+      await patchNdr(editing.id, updates);
+      setRows((prev) => prev.map((r) => (r.id === editing.id ? ({ ...r, ...updates } as any) : r)));
+      setEditorOpen(false);
+      setToast({ type: 'success', message: 'Saved successfully' });
+    } catch (e: any) {
+      setToast({ type: 'error', message: e?.message ? `Save failed: ${e.message}` : 'Save failed' });
+    } finally {
+      setSaving(false);
+    }
   }
 
   async function quickUpdate(id: number, updates: Partial<NdrRow>) {
@@ -580,6 +614,19 @@ export default function NdrDashboard() {
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-slate-50 to-white text-slate-800">
+      {/* Toast */}
+      {toast && (
+        <div className={classNames(
+          'fixed right-4 top-4 z-[60] min-w-[220px] max-w-sm rounded-xl px-3 py-2 shadow-lg ring-1',
+          toast.type === 'success' ? 'bg-emerald-50 text-emerald-800 ring-emerald-200' : 'bg-rose-50 text-rose-800 ring-rose-200'
+        )}
+        role="status"
+        aria-live="polite"
+        >
+          <div className="text-sm font-medium">{toast.message}</div>
+          <button className="absolute right-2 top-1.5 text-xs underline" onClick={() => setToast(null)} title="Dismiss">Close</button>
+        </div>
+      )}
       {/* Header */}
       <header className="sticky top-0 z-40 backdrop-blur bg-white/80 border-b">
         <div className="max-w-7xl mx-auto px-4 py-3 flex items-center gap-3">
@@ -673,7 +720,44 @@ export default function NdrDashboard() {
         {loading ? (
           <div className="p-8 text-center text-slate-500">Loading NDR data…</div>
         ) : view === "table" ? (
-          <TableView
+          <>
+            {/* Remark Tabs (moved above TableView) */}
+            <div className="mb-2 flex items-center gap-2">
+              <div className="flex gap-2 overflow-x-auto py-1">
+                {topRemarkTabs.map((tab) => (
+                  <button
+                    key={tab}
+                    onClick={() => setRemark(tab)}
+                    className={classNames(
+                      "whitespace-nowrap px-3 py-1.5 rounded-lg text-sm ring-1",
+                      remark === tab ? "bg-slate-900 text-white ring-slate-900" : "bg-white text-slate-700 ring-slate-200 hover:bg-slate-50"
+                    )}
+                    title={tab === "All" ? "Show all remarks" : `Filter by remark: ${tab}`}
+                  >
+                    {tab}
+                  </button>
+                ))}
+              </div>
+              {moreRemarkOptions.length > 0 && (
+                <div className="ml-auto flex items-center gap-2 ring-1 ring-slate-200 rounded-xl px-2 py-1">
+                  <label className="text-xs text-slate-500">
+                    More
+                    <select
+                      aria-label="More remarks"
+                      className="ml-2 bg-transparent text-sm outline-none"
+                      value={moreRemarkOptions.includes(remark) ? remark : ""}
+                      onChange={(e) => setRemark(e.target.value || "All")}
+                    >
+                      <option value="">Select…</option>
+                      {moreRemarkOptions.map((opt) => (
+                        <option key={opt} value={opt}>{opt}</option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+              )}
+            </div>
+            <TableView
             rows={pageRows as any[]}
             total={filtered.length}
             page={page}
@@ -712,6 +796,7 @@ export default function NdrDashboard() {
               }
             }}
           />
+          </>
         ) : view === "kanban" ? (
           <KanbanView rows={filtered as any[]} onEdit={openEditor} onMove={moveToBucket} />
         ) : (
@@ -780,9 +865,9 @@ export default function NdrDashboard() {
             </label>
 
             <div className="flex gap-2">
-              <button onClick={saveEditor} className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-900 text-white hover:bg-slate-800">
+              <button onClick={saveEditor} disabled={saving} aria-busy={saving} className={classNames("inline-flex items-center gap-2 px-4 py-2 rounded-xl text-white", saving ? "bg-slate-400 cursor-not-allowed" : "bg-slate-900 hover:bg-slate-800") }>
                 <CheckCircle2 className="w-4 h-4" />
-                Save
+                {saving ? 'Saving…' : 'Save'}
               </button>
               <button onClick={() => setEditorOpen(false)} className="px-4 py-2 rounded-xl ring-1 ring-slate-200">
                 Cancel
@@ -805,7 +890,7 @@ export default function NdrDashboard() {
                 row={repeatRow} 
                 onQuickUpdate={async (updates) => {
                   await quickUpdate(repeatRow.id, updates);
-                  setRepeatRow((prev) => (prev ? ({ ...prev, ...updates } as NdrRow) : prev));
+                  setRepeatOpen(false);
                 }}
               />
             )}
@@ -1307,6 +1392,9 @@ function NdrActionsPanel({ row, onQuickUpdate }: { row: NdrRow; onQuickUpdate: (
   const [issue, setIssue] = useState<string>(initial.customer_issue || "");
   const isPreset = ACTION_OPTIONS.includes(String(initial.action_taken || ""));
   const [action, setAction] = useState<string>(isPreset ? String(initial.action_taken) : (initial.action_taken ? "Other" : ""));
+  // save button animation state
+  const [savingInline, setSavingInline] = useState(false);
+  const [justSaved, setJustSaved] = useState(false);
   const [other, setOther] = useState<string>(!isPreset ? String(initial.action_taken || "") : "");
   const [called, setCalled] = useState<boolean>(!!row.called);
   const [remark, setRemark] = useState<string>(row.remark || "");
@@ -1397,7 +1485,14 @@ function NdrActionsPanel({ row, onQuickUpdate }: { row: NdrRow; onQuickUpdate: (
   async function save() {
     const chosenAction = action === "Other" ? (other.trim() || "Other") : (action || "");
     const notes = { phone: phone || undefined, customer_issue: issue || undefined, action_taken: chosenAction || undefined, action_to_be_taken: (actionToBeTaken || undefined), customer_query: (customerQuery || undefined) } as any;
-    await onQuickUpdate({ called, remark: remark || null, corrected_phone: correctedPhone || null, corrected_address: correctedAddress || null, notes: JSON.stringify(notes) } as any);
+    try {
+      setSavingInline(true);
+      await onQuickUpdate({ called, remark: remark || null, corrected_phone: correctedPhone || null, corrected_address: correctedAddress || null, notes: JSON.stringify(notes) } as any);
+      setJustSaved(true);
+      setTimeout(() => setJustSaved(false), 1200);
+    } finally {
+      setSavingInline(false);
+    }
   }
 
   // Draft builder and flags for email compose
@@ -1659,9 +1754,21 @@ function NdrActionsPanel({ row, onQuickUpdate }: { row: NdrRow; onQuickUpdate: (
       </label>
 
       <div className="mt-1 flex flex-wrap gap-2">
-        <button onClick={save} className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-900 text-white hover:bg-slate-800" title="Save NDR actions">
-          <CheckCircle2 className="w-4 h-4" />
-          Save
+        <button
+          onClick={save}
+          disabled={savingInline}
+          className={classNames(
+            "inline-flex items-center gap-2 px-4 py-2 rounded-xl text-white transition",
+            savingInline ? "bg-slate-500 cursor-not-allowed" : (justSaved ? "bg-emerald-600" : "bg-slate-900 hover:bg-slate-800")
+          )}
+          title={savingInline ? "Saving…" : (justSaved ? "Saved" : "Save NDR actions")}
+        >
+          {savingInline ? (
+            <RefreshCw className="w-4 h-4 animate-spin" />
+          ) : (
+            <CheckCircle2 className={classNames("w-4 h-4", justSaved && "text-emerald-200")} />
+          )}
+          <span>{savingInline ? "Saving…" : (justSaved ? "Saved!" : "Save")}</span>
         </button>
         <button
           type="button"
