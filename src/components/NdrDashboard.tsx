@@ -758,44 +758,44 @@ export default function NdrDashboard() {
               )}
             </div>
             <TableView
-            rows={pageRows as any[]}
-            total={filtered.length}
-            page={page}
-            pageSize={pageSize}
-            totalPages={totalPages}
-            onPageChange={setPage}
-            onPageSizeChange={setPageSize}
-            onEdit={openEditor}
-            onQuickUpdate={quickUpdate}
-            columnUniques={columnUniques}
-            colFilters={colFilters}
-            onChangeColumnFilter={updateColFilter}
-            selectedIds={selectedIds}
-            onToggleRow={(id, checked) => setSelectedIds(prev => checked ? Array.from(new Set([...prev, id])) : prev.filter(x => x !== id))}
-            onToggleAll={(checked, idsOnPage) => setSelectedIds(prev => checked ? Array.from(new Set([...prev, ...idsOnPage])) : prev.filter(id => !idsOnPage.includes(id)))}
-            onExportFiltered={exportCSV}
-            onExportSelected={exportSelectedCSV}
-            onClearSelection={clearSelection}
-            onOpenRepeat={(orderId) => {
-              try {
-                const idStr = String(orderId);
-                setRepeatOrderId(idStr);
-                setRepeatOpen(true);
-              } catch (err) {
-                console.error('Failed to open embedded Repeat Campaign', err);
-              }
-            }}
-            onOpenRepeatRow={(row) => {
-              try {
-                const idStr = String(row.order_id);
-                setRepeatOrderId(idStr);
-                setRepeatRow(row);
-                setRepeatOpen(true);
-              } catch (err) {
-                console.error('Failed to open embedded Repeat Campaign', err);
-              }
-            }}
-          />
+              rows={pageRows as any[]}
+              total={filtered.length}
+              page={page}
+              pageSize={pageSize}
+              totalPages={totalPages}
+              onPageChange={setPage}
+              onPageSizeChange={setPageSize}
+              onEdit={openEditor}
+              onQuickUpdate={quickUpdate}
+              columnUniques={columnUniques}
+              colFilters={colFilters}
+              onChangeColumnFilter={updateColFilter}
+              selectedIds={selectedIds}
+              onToggleRow={(id, checked) => setSelectedIds(prev => checked ? Array.from(new Set([...prev, id])) : prev.filter(x => x !== id))}
+              onToggleAll={(checked, idsOnPage) => setSelectedIds(prev => checked ? Array.from(new Set([...prev, ...idsOnPage])) : prev.filter(id => !idsOnPage.includes(id)))}
+              onExportFiltered={exportCSV}
+              onExportSelected={exportSelectedCSV}
+              onClearSelection={clearSelection}
+              onOpenRepeat={(orderId) => {
+                try {
+                  const idStr = String(orderId);
+                  setRepeatOrderId(idStr);
+                  setRepeatOpen(true);
+                } catch (err) {
+                  console.error('Failed to open embedded Repeat Campaign', err);
+                }
+              }}
+              onOpenRepeatRow={(row) => {
+                try {
+                  const idStr = String(row.order_id);
+                  setRepeatOrderId(idStr);
+                  setRepeatRow(row);
+                  setRepeatOpen(true);
+                } catch (err) {
+                  console.error('Failed to open embedded Repeat Campaign', err);
+                }
+              }}
+            />
           </>
         ) : view === "kanban" ? (
           <KanbanView rows={filtered as any[]} onEdit={openEditor} onMove={moveToBucket} />
@@ -1649,6 +1649,148 @@ function NdrActionsPanel({ row, onQuickUpdate }: { row: NdrRow; onQuickUpdate: (
     setShowEmail(true);
   }
 
+  // Email activity state (threads + messages) and actions
+  const [activityLoading, setActivityLoading] = useState(false);
+  const [emailThread, setEmailThread] = useState<any | null>(null);
+  const [emailMessages, setEmailMessages] = useState<any[]>([]);
+  const [replyBody, setReplyBody] = useState<string>("");
+  const [sendingReply, setSendingReply] = useState(false);
+  const [expandedMsg, setExpandedMsg] = useState<Record<number, boolean>>({});
+
+  async function loadEmailActivity() {
+    try {
+      setActivityLoading(true);
+      // 1) Load outbound from email_messages by order + awb (no thread dependency)
+      const obUrl = `${SUPABASE_URL}/email_messages?order_id=eq.${row.order_id}&waybill=eq.${encodeURIComponent(String(row.waybill || ''))}&direction=eq.outbound&order=sent_at.asc.nullsfirst,received_at.asc.nullsfirst,created_at.asc&select=*`;
+      const obRes = await fetch(obUrl, { headers: SUPABASE_HEADERS });
+      let outbound: any[] = [];
+      if (obRes.ok) {
+        const arr = await obRes.json();
+        outbound = Array.isArray(arr) ? arr : [];
+      }
+      // Keep a lightweight header object for UI subtitle
+      let headerSubject: string | null = outbound.length ? outbound[outbound.length - 1]?.subject || null : null;
+
+      // 2) Load inbound from email_activity for this order/awb
+      const actUrl = `${SUPABASE_URL}/email_activity?order_id=eq.${row.order_id}&waybill=eq.${encodeURIComponent(String(row.waybill || ''))}&direction=eq.inbound&order=activity_at.asc&select=*`;
+      const inbRes = await fetch(actUrl, { headers: SUPABASE_HEADERS });
+      let inbound: any[] = [];
+      if (inbRes.ok) {
+        const arr = await inbRes.json();
+        inbound = Array.isArray(arr) ? arr.map((a: any) => ({
+          ...a,
+          // Normalize time fields so renderer can pick it up
+          received_at: a.activity_at,
+        })) : [];
+        if (!headerSubject && inbound.length) headerSubject = inbound[inbound.length - 1]?.subject || null;
+      }
+
+      // 3) Merge both and sort chronologically by effective time
+      const merged = [...outbound, ...inbound].sort((a: any, b: any) => {
+        const ta = new Date(a.received_at || a.sent_at || a.created_at || a.activity_at || 0).getTime();
+        const tb = new Date(b.received_at || b.sent_at || b.created_at || b.activity_at || 0).getTime();
+        return ta - tb;
+      });
+
+      setEmailMessages(merged);
+      const latest = merged.length ? merged[merged.length - 1] : null;
+      setEmailThread(latest ? { thread_id: latest.provider_thread_id || '-', subject: headerSubject || latest.subject } : null);
+    } catch {
+      setEmailMessages([]);
+      setEmailThread(null);
+    } finally {
+      setActivityLoading(false);
+    }
+  }
+
+  // Auto-load activity
+  useEffect(() => {
+    loadEmailActivity();
+  }, []);
+  useEffect(() => {
+    if (showEmail) loadEmailActivity();
+  }, [showEmail]);
+
+  async function sendReply() {
+    if (!emailThread?.thread_id || !replyBody.trim()) return;
+    const last = emailMessages.length ? emailMessages[emailMessages.length - 1] : null;
+    const subject = emailThread.subject ? (emailThread.subject.startsWith('Re:') ? emailThread.subject : `Re: ${emailThread.subject}`) : `Re: Order #${row.order_id} – AWB ${row.waybill}`;
+    const bodyText = replyBody.trim();
+    const htmlEsc = (s: string) => (s ?? "").toString().replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\n/g, "<br/>");
+    const bodyHtml = `<div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:14px;line-height:1.6;color:#0f172a;">${htmlEsc(replyBody)}</div>`;
+    const payload = {
+      order_id: row.order_id,
+      waybill: row.waybill,
+      subject,
+      text_body: bodyText,
+      html_body: bodyHtml,
+      content_type: 'text/html',
+      thread_id: emailThread.thread_id,
+      in_reply_to: last?.message_id || null,
+      timestamp: new Date().toISOString(),
+      // marker fields for n8n routing
+      action: 'reply_email',
+      webhook_marker: 'ndr_reply',
+      message_kind: 'reply',
+      source: 'ndr_dashboard',
+    } as any;
+    try {
+      setSendingReply(true);
+      const resp = await fetch('https://auto-n8n.9krcxo.easypanel.host/webhook/ndrmailer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-NDR-Action': 'reply_email', 'X-Webhook-Marker': 'ndr_reply' },
+        body: JSON.stringify(payload),
+      });
+      if (resp.ok) {
+        let data: any = null;
+        try { data = await resp.json(); } catch {}
+        // Upsert thread (keep subject/activity fresh)
+        try {
+          await fetch(`${SUPABASE_URL}/email_threads`, {
+            method: 'POST',
+            headers: { ...SUPABASE_HEADERS, Prefer: 'resolution=merge-duplicates,return=representation' },
+            body: JSON.stringify({
+              ndr_id: row.id,
+              order_id: row.order_id,
+              waybill: String(row.waybill || ''),
+              thread_id: String(emailThread.thread_id),
+              provider: String(data?.provider || 'gmail'),
+              subject,
+              last_message_id: String(data?.message_id || data?.id || ''),
+              last_activity_at: new Date().toISOString(),
+            }),
+          });
+        } catch {}
+        // Insert outbound message
+        try {
+          await fetch(`${SUPABASE_URL}/email_messages`, {
+            method: 'POST',
+            headers: { ...SUPABASE_HEADERS },
+            body: JSON.stringify({
+              thread_id: emailThread.id || null,
+              provider: String(data?.provider || 'gmail'),
+              message_id: String(data?.message_id || data?.id || ''),
+              in_reply_to: last?.message_id || null,
+              provider_thread_id: String(emailThread.thread_id),
+              direction: 'outbound',
+              status: 'sent',
+              subject,
+              body_text: bodyText,
+              body_html: bodyHtml,
+              headers: data?.headers || null,
+              provider_raw: data || null,
+              sent_at: new Date().toISOString(),
+            }),
+          });
+        } catch {}
+        setReplyBody("");
+        await loadEmailActivity();
+      }
+    } finally {
+      setSendingReply(false);
+    }
+  }
+
   async function sendMail() {
     const draftBuilt = getEmailDraft();
     const draft = { subject: emailSubject || draftBuilt.subject, bodyText: emailBody || draftBuilt.bodyText, bodyHtml: draftBuilt.bodyHtml };
@@ -1679,6 +1821,64 @@ function NdrActionsPanel({ row, onQuickUpdate }: { row: NdrRow; onQuickUpdate: (
         body: JSON.stringify(payload),
       });
       if (resp.ok) {
+        // Expect n8n to return provider ids, e.g. { message_id, thread_id, provider, headers, raw }
+        let data: any = null;
+        try { data = await resp.json(); } catch {}
+
+        // Upsert thread first (if ids available)
+        let threadRowId: number | null = null;
+        if (data && (data.thread_id || data.threadId)) {
+          const thread_id = String(data.thread_id || data.threadId);
+          const provider = String(data.provider || 'gmail');
+          const subjectSnap = draft.subject || null;
+          try {
+            const thRes = await fetch(`${SUPABASE_URL}/email_threads`, {
+              method: 'POST',
+              headers: { ...SUPABASE_HEADERS, Prefer: 'resolution=merge-duplicates,return=representation' },
+              body: JSON.stringify({
+                ndr_id: row.id,
+                order_id: row.order_id,
+                waybill: String(row.waybill || ''),
+                thread_id,
+                provider,
+                subject: subjectSnap,
+                last_message_id: String(data.message_id || data.id || ''),
+                last_activity_at: new Date().toISOString(),
+              }),
+            });
+            if (thRes.ok) {
+              const arr = await thRes.json();
+              threadRowId = Array.isArray(arr) && arr[0]?.id ? Number(arr[0].id) : null;
+            }
+          } catch {}
+
+          // Insert outbound message referencing the thread
+          try {
+            await fetch(`${SUPABASE_URL}/email_messages`, {
+              method: 'POST',
+              headers: { ...SUPABASE_HEADERS },
+              body: JSON.stringify({
+                thread_id: threadRowId,
+                provider,
+                message_id: String(data.message_id || data.id || ''),
+                in_reply_to: data.in_reply_to ? String(data.in_reply_to) : null,
+                provider_thread_id: thread_id,
+                direction: 'outbound',
+                status: 'sent',
+                from_addr: null,
+                to_addrs: [],
+                subject: draft.subject,
+                body_text: draft.bodyText,
+                body_html: draft.bodyHtml,
+                headers: data.headers || null,
+                provider_raw: data || null,
+                sent_at: new Date().toISOString(),
+              }),
+            });
+          } catch {}
+        }
+
+        // Mark row as emailed in main NDR table
         await onQuickUpdate({ corrected_phone: correctedPhone || null, corrected_address: correctedAddress || null, email_sent: true } as any);
       }
     } catch {}
@@ -1753,7 +1953,98 @@ function NdrActionsPanel({ row, onQuickUpdate }: { row: NdrRow; onQuickUpdate: (
         <input className="mt-1 w-full ring-1 ring-slate-200 rounded-lg px-3 py-2" value={remark} onChange={(e) => setRemark(e.target.value)} placeholder="Internal remarks" />
       </label>
 
-      <div className="mt-1 flex flex-wrap gap-2">
+      {/* Email Activity moved here (outside compose modal) */}
+      <div className="mt-3 p-3 rounded-xl ring-1 ring-slate-200 bg-slate-50">
+        <div className="flex items-center justify-between">
+          <div className="font-medium">Email Activity</div>
+          <button type="button" className="text-xs px-2 py-1 rounded-lg ring-1 ring-slate-300 bg-white hover:bg-slate-100" onClick={loadEmailActivity} title="Refresh email activity">
+            {activityLoading ? 'Refreshing…' : 'Refresh'}
+          </button>
+        </div>
+        {emailThread ? (
+          <div className="mt-2 text-xs text-slate-600">Thread: <span className="font-mono">{emailThread.thread_id}</span>{emailThread.subject ? ` • ${emailThread.subject}` : ''}</div>
+        ) : (
+          <div className="mt-2 text-sm text-slate-500">No thread found yet for this order/awb.</div>
+        )}
+        {/* Timeline rail */}
+        <div className="mt-3 relative max-h-64 overflow-auto">
+          <div className="absolute left-3 top-0 bottom-0 w-px bg-slate-200" />
+          <div className="space-y-4">
+          {emailMessages.length === 0 ? (
+            <div className="text-sm text-slate-500 pl-8">No messages yet.</div>
+          ) : emailMessages.map((m: any) => {
+            const when = fmtIST(m.received_at || m.sent_at || m.created_at);
+            const snippet = (m.body_text || m.subject || "").toString().split(/\r?\n/)[0].slice(0, 120);
+            const isOpen = !!expandedMsg[m.id as number];
+            return (
+              <div key={m.id} className="relative pl-8">
+                {/* Node dot */}
+                <span className="absolute left-2 top-3 inline-block w-3 h-3 rounded-full bg-slate-200 ring-2 ring-white" />
+                {/* Card */}
+                <div className="rounded-xl bg-blue-50 ring-1 ring-blue-300 p-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-slate-200 text-slate-700">{m.direction}</span>
+                    </div>
+                    <div className="text-[11px] text-slate-600">{when}</div>
+                  </div>
+                  {/* Title/snippet row */}
+                  <div className="mt-2">
+                    {m.subject && <div className="text-sm font-medium text-slate-800">{m.subject}</div>}
+                    <div className="mt-1 text-xs text-slate-700">{snippet}{snippet.length === 120 ? '…' : ''}</div>
+                  </div>
+                  <div className="mt-2 flex justify-end">
+                    <button
+                      type="button"
+                      className="text-xs px-2 py-1 rounded-lg ring-1 ring-slate-300 bg-white hover:bg-slate-100"
+                      onClick={() => setExpandedMsg((prev) => ({ ...prev, [m.id]: !prev[m.id as number] }))}
+                      title={isOpen ? 'Hide details' : 'View details'}
+                    >
+                      {isOpen ? 'Hide details' : 'View details'}
+                    </button>
+                  </div>
+                  {isOpen && (
+                    <div className="mt-2">
+                      {m.body_html ? (
+                        <div className="prose prose-sm max-w-none" dangerouslySetInnerHTML={{ __html: m.body_html }} />
+                      ) : (
+                        <pre className="whitespace-pre-wrap text-xs text-slate-700">{m.body_text || ''}</pre>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+          </div>
+        </div>
+
+        {/* Reply composer */}
+        <div className="mt-3">
+          <label className="text-sm block">
+            Reply in thread
+            <textarea
+              className="mt-1 w-full ring-1 ring-slate-300 rounded-lg px-3 py-2 min-h-[90px]"
+              value={replyBody}
+              onChange={(e) => setReplyBody(e.target.value)}
+              placeholder="Type your reply..."
+            />
+          </label>
+          <div className="mt-2 flex justify-end">
+            <button
+              type="button"
+              disabled={!emailThread?.thread_id || sendingReply || !replyBody.trim()}
+              onClick={sendReply}
+              className={classNames('px-3 py-1.5 rounded-lg text-white', (sendingReply || !replyBody.trim() || !emailThread?.thread_id) ? 'bg-slate-400 cursor-not-allowed' : 'bg-slate-900 hover:bg-slate-800')}
+              title={!emailThread?.thread_id ? 'No thread available' : 'Send reply'}
+            >
+              {sendingReply ? 'Sending…' : 'Send Reply'}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-3 flex flex-wrap gap-2">
         <button
           onClick={save}
           disabled={savingInline}
@@ -1876,29 +2167,10 @@ function NdrActionsPanel({ row, onQuickUpdate }: { row: NdrRow; onQuickUpdate: (
                   placeholder="Email body"
                 />
               </label>
-            </div>
-            <div className="px-5 py-4 border-t flex items-center justify-between gap-2">
-              <div className="text-xs text-slate-500">Tip: You can edit the subject and body before sending.</div>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={copyEmail}
-                  className="inline-flex items-center gap-2 px-4 py-2 rounded-xl ring-1 ring-slate-200 text-sm hover:bg-slate-50"
-                  title="Copy to clipboard"
-                >
-                  Copy content
-                </button>
-                <button
-                  type="button"
-                  onClick={sendMail}
-                  className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-900 text-white hover:bg-slate-800"
-                  title="Send mail and log to webhook"
-                >
-                  Send Mail
-                </button>
-              </div>
-            </div>
+
+              {/* Email Activity removed from modal */}
           </div>
+        </div>
         </div>
       )}
     </div>
