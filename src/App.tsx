@@ -9,9 +9,13 @@ import OrderList from './components/OrderList';
 import GstInvoiceGenerator from './components/GstInvoice';
 import Auth from './components/Auth';
 import NdrDashboard from './components/NdrDashboard';
+import TeamsPage from './components/TeamsPage';
+import NdrLogin from './components/NdrLogin';
+import NdrAllocationPage from './components/NdrAllocationPage';
+import TeamAnalyticsPage from './components/TeamAnalyticsPage';
 import { Package, Printer, Truck, FileText, Users, LogOut, FileSpreadsheet, RefreshCw } from 'lucide-react';
 
-type TabType = 'order' | 'printslip' | 'tracking' | 'manifest' | 'campaign' | 'repeatorders' | 'orderhistory' | 'gstinvoice' | 'ndr';
+type TabType = 'order' | 'printslip' | 'tracking' | 'manifest' | 'campaign' | 'repeatorders' | 'orderhistory' | 'gstinvoice' | 'ndr' | 'teams' | 'allocation' | 'team_analytics';
 
 function App() {
   const [activeTab, setActiveTab] = useState<TabType>('order');
@@ -54,6 +58,9 @@ function App() {
     { id: 'campaign', label: 'Repeat Campaign', icon: <Users size={20} /> },
     { id: 'repeatorders', label: 'Repeat Orders', icon: <RefreshCw size={20} /> },
     { id: 'ndr', label: 'NDR Dashboard', icon: <Truck size={20} /> },
+    { id: 'teams', label: 'Teams', icon: <Users size={20} /> },
+    { id: 'allocation', label: 'Allocation', icon: <Users size={20} /> },
+    { id: 'team_analytics', label: 'Team Analytics', icon: <Users size={20} /> },
     { id: 'gstinvoice', label: 'GST Invoice', icon: <FileSpreadsheet size={20} /> },
   ];
 
@@ -67,11 +74,20 @@ function App() {
     orderhistory: 'View, filter, and print past orders',
     gstinvoice: 'Generate GST invoices for orders',
     ndr: 'Monitor & resolve non-delivery shipments',
+    teams: 'Create teams, add members, and set the active team for lead allocation',
+    allocation: 'Define NDR allocation rules (percentage split, status filters) for the active team',
+    team_analytics: 'Visualize team assignments, status split, and activity',
   };
 
   // Handle logout
   const handleLogout = () => {
     localStorage.removeItem('auth_token');
+    // Clear NDR session keys so PIN/login appears next time
+    localStorage.removeItem('ndr_user');
+    localStorage.removeItem('ndr_active_team_id');
+    localStorage.removeItem('ndr_active_team_name');
+    localStorage.removeItem('ndr_session');
+    localStorage.removeItem('ndr_auto_alloc_done');
     setIsAuthenticated(false);
   };
 
@@ -145,7 +161,20 @@ function App() {
             }
             {activeTab === 'orderhistory' && <OrderList />}
             {activeTab === 'gstinvoice' && <GstInvoiceGenerator />}
-            {activeTab === 'ndr' && <NdrDashboard />}
+            {activeTab === 'ndr' && (
+              (() => {
+                const user = localStorage.getItem('ndr_user');
+                const teamId = localStorage.getItem('ndr_active_team_id');
+                const session = localStorage.getItem('ndr_session');
+                if (!user || !teamId || !session) {
+                  return <NdrLogin onAuthenticated={() => setActiveTab('ndr')} />;
+                }
+                return <NdrDashboard />;
+              })()
+            )}
+            {activeTab === 'teams' && <TeamsPage />}
+            {activeTab === 'allocation' && <NdrAllocationPage />}
+            {activeTab === 'team_analytics' && <TeamAnalyticsPage />}
           </div>
         </main>
         

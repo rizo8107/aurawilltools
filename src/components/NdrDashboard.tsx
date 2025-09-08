@@ -44,6 +44,8 @@ export type NdrRow = {
   notes: string | null; // JSON { phone, customer_issue, action_taken, bucket_override? }
   status: string | null; // Open | In Progress | Resolved | Escalated
   Partner_EDD: string | null;
+  assigned_to?: string | null;
+  assigned_at?: string | null;
 };
 
 // ---- Helpers ----------------------------------------------
@@ -320,9 +322,24 @@ export default function NdrDashboard() {
   // auto-dismiss toast
   useEffect(() => {
     if (!toast) return;
-    const t = setTimeout(() => setToast(null), 2500);
+    const t = setTimeout(() => setToast(null), 3000);
     return () => clearTimeout(t);
   }, [toast]);
+
+  // Persisted current user and "My NDRs" toggle
+  const currentUser = useMemo(() => {
+    try { return localStorage.getItem('ndr_user') || ''; } catch { return ''; }
+  }, []);
+  const [myOnly, setMyOnly] = useState<boolean>(() => {
+    try { return (localStorage.getItem('ndr_my_only') ?? 'true') !== 'false'; } catch { return true; }
+  });
+  function toggleMyOnly() {
+    setMyOnly((prev) => {
+      const next = !prev;
+      try { localStorage.setItem('ndr_my_only', String(next)); } catch {}
+      return next;
+    });
+  }
 
   async function load() {
     try {
@@ -334,6 +351,96 @@ export default function NdrDashboard() {
       setError(e.message || String(e));
     } finally {
       setLoading(false);
+      // Attempt auto-allocation once per session
+      try { await autoAllocateOnce(); } catch {}
+    }
+  }
+
+  // ---- Auto-allocation (first load per session) -------------
+  async function autoAllocateOnce() {
+    try {
+      const session = localStorage.getItem('ndr_session');
+      if (!session) return; // not logged in via NDR login
+      if (localStorage.getItem('ndr_auto_alloc_done')) return; // already done this session
+      const teamId = localStorage.getItem('ndr_active_team_id');
+      if (!teamId) return;
+
+      // 1) Load team members
+      const memRes = await fetch(`${SUPABASE_URL}/team_members?team_id=eq.${teamId}&select=id,member&order=member.asc`, { headers: SUPABASE_HEADERS });
+      if (!memRes.ok) return;
+      const members: Array<{ id: number; member: string }> = await memRes.json();
+      const memberHandles = members.map(m => m.member).filter(Boolean);
+      if (memberHandles.length === 0) return;
+
+      // 2) Load allocation rule
+      let rule: any = { mode: 'percentage', percents: [] as Array<{ member: string; percent: number }> };
+      try {
+        const ruleRes = await fetch(`${SUPABASE_URL}/ndr_allocation_rules?team_id=eq.${teamId}&select=rule&limit=1`, { headers: SUPABASE_HEADERS });
+        if (ruleRes.ok) {
+          const [row] = await ruleRes.json();
+          if (row?.rule) rule = row.rule;
+        }
+      } catch {}
+
+      // 3) Build schedule
+      function buildSchedule(): string[] {
+        if (rule?.mode === 'percentage' && Array.isArray(rule.percents) && rule.percents.length) {
+          const expanded: string[] = [];
+          for (const p of rule.percents) {
+            const m = String(p.member || '').trim();
+            const pct = Math.max(0, Math.round(Number(p.percent) || 0));
+            if (!m || pct <= 0) continue;
+            for (let i = 0; i < pct; i++) expanded.push(m);
+          }
+          const sched = expanded.filter(x => memberHandles.includes(x));
+          if (sched.length) return sched;
+        }
+        // fallback: simple round-robin list
+        return memberHandles;
+      }
+      const schedule = buildSchedule();
+      if (schedule.length === 0) return;
+
+      // 4) Fetch unassigned NDR ids (limit to a sane batch to avoid long ops)
+      const unassignedRes = await fetch(`${SUPABASE_URL}/${SUPABASE_TABLE}?assigned_to=is.null&select=id&order=event_time.desc`, { headers: SUPABASE_HEADERS });
+      if (!unassignedRes.ok) return;
+      const unassigned: Array<{ id: number }> = await unassignedRes.json();
+      if (!Array.isArray(unassigned) || unassigned.length === 0) { localStorage.setItem('ndr_auto_alloc_done', '1'); return; }
+
+      // 5) Assign in batches
+      const now = new Date().toISOString();
+      const batchSize = 25;
+      for (let offset = 0; offset < unassigned.length; offset += batchSize) {
+        const chunk = unassigned.slice(offset, offset + batchSize);
+        await Promise.all(
+          chunk.map((row, idx) => {
+            const assignee = schedule[(offset + idx) % schedule.length];
+            const url = `${SUPABASE_URL}/${SUPABASE_TABLE}?id=eq.${row.id}`;
+            return fetch(url, { method: 'PATCH', headers: SUPABASE_HEADERS, body: JSON.stringify({ assigned_to: assignee, assigned_at: now }) });
+          })
+        );
+      }
+
+      // 6) Log one meta event per session (optional granularity: per row)
+      try {
+        await fetch(`${SUPABASE_URL}/ndr_user_activity`, {
+          method: 'POST',
+          headers: SUPABASE_HEADERS,
+          body: JSON.stringify({
+            order_id: null,
+            waybill: null,
+            actor: localStorage.getItem('ndr_user') || '',
+            action: 'auto_assign',
+            details: { team_id: Number(teamId), rule_mode: rule?.mode || 'percentage' }
+          }),
+        });
+      } catch {}
+
+      localStorage.setItem('ndr_auto_alloc_done', '1');
+      // reload table after allocation
+      try { await load(); } catch {}
+    } catch {
+      // swallow
     }
   }
 
@@ -371,6 +478,8 @@ export default function NdrDashboard() {
   const filtered = useMemo(() => {
     const QQ = q.trim().toLowerCase();
     return enriched.filter((r: any) => {
+      // Show only my leads if enabled and user present
+      if (myOnly && currentUser && String(r.assigned_to || '') !== currentUser) return false;
       if (courier !== "All" && courierName(r.courier_account) !== courier) return false;
       if (bucket !== "All" && r.__bucket !== bucket) return false;
       if (remark !== "All" && String(r.remark || "") !== remark) return false;
@@ -405,7 +514,7 @@ export default function NdrDashboard() {
       const hay = [r.order_id, r.waybill, r.delivery_status, r.remark, r.location, r.__phone, r.__customer_issue, r.__action_taken].join(" ").toLowerCase();
       return hay.includes(QQ);
     });
-  }, [enriched, q, courier, bucket, remark, fromDate, toDate, colFilters]);
+  }, [enriched, q, courier, bucket, remark, fromDate, toDate, colFilters, myOnly, currentUser]);
 
   // reset to first page when filters/search change
   useEffect(() => {
@@ -432,7 +541,9 @@ export default function NdrDashboard() {
     const today = base.filter((r) => r.__edd.tone === "warn").length;
     const cna = base.filter((r) => r.__bucket === "CNA").length;
     const addr = base.filter((r) => r.__bucket === "Address Issue").length;
-    return { total, late, today, cna, addr };
+    const delivered = base.filter((r) => r.__bucket === "Delivered").length;
+    const resolved = base.filter((r) => String(r.status || '').toLowerCase() === 'resolved').length;
+    return { total, late, today, cna, addr, delivered, resolved };
   }, [filtered]);
 
   // CSV exports (filtered and selected)
@@ -565,6 +676,21 @@ export default function NdrDashboard() {
       setSaving(true);
       await patchNdr(editing.id, updates);
       setRows((prev) => prev.map((r) => (r.id === editing.id ? ({ ...r, ...updates } as any) : r)));
+      // Log status update activity
+      try {
+        const actor = localStorage.getItem('ndr_user') || '';
+        await fetch(`${SUPABASE_URL}/ndr_user_activity`, {
+          method: 'POST',
+          headers: SUPABASE_HEADERS,
+          body: JSON.stringify({
+            order_id: editing.order_id,
+            waybill: String(editing.waybill || ''),
+            actor,
+            action: 'status_update',
+            details: updates,
+          }),
+        });
+      } catch {}
       setEditorOpen(false);
       setToast({ type: 'success', message: 'Saved successfully' });
     } catch (e: any) {
@@ -642,6 +768,32 @@ export default function NdrDashboard() {
               <Download className="w-4 h-4" />
               <span className="hidden sm:inline">Export</span>
             </IconButton>
+            <button
+              type="button"
+              onClick={toggleMyOnly}
+              title={myOnly ? 'Showing only my assigned NDRs' : 'Showing all NDRs'}
+              className={classNames(
+                'inline-flex items-center gap-2 rounded-xl px-3 py-2 ring-1 transition',
+                myOnly ? 'ring-emerald-300 bg-emerald-50 text-emerald-900' : 'ring-slate-200 hover:bg-slate-50'
+              )}
+            >
+              <span className="text-xs">My NDRs</span>
+              <span className={classNames('h-2 w-2 rounded-full', myOnly ? 'bg-emerald-500' : 'bg-slate-300')} />
+            </button>
+            <button
+              type="button"
+              title="Switch User"
+              onClick={() => {
+                try {
+                  localStorage.removeItem('ndr_user');
+                  localStorage.removeItem('ndr_session');
+                } catch {}
+                window.location.reload();
+              }}
+              className="inline-flex items-center gap-2 rounded-xl px-3 py-2 ring-1 ring-rose-300 text-rose-900 bg-rose-50 hover:bg-rose-100"
+            >
+              <span className="text-xs">Switch User</span>
+            </button>
             <div className="hidden sm:flex items-center gap-2 rounded-xl ring-1 ring-slate-200 px-1 py-1">
               <button onClick={() => setView("table")} className={classNames("px-3 py-1 rounded-lg text-sm", view === "table" ? "bg-slate-100" : "hover:bg-slate-50")}>Table</button>
               <button onClick={() => setView("kanban")} className={classNames("px-3 py-1 rounded-lg text-sm", view === "kanban" ? "bg-slate-100" : "hover:bg-slate-50")}>Kanban</button>
@@ -707,11 +859,13 @@ export default function NdrDashboard() {
       </div>
 
       {/* Stats */}
-      <div className="max-w-7xl mx-auto px-4 grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
+      <div className="max-w-7xl mx-auto px-4 grid sm:grid-cols-2 lg:grid-cols-6 gap-3">
         <Stat label="Total Shipments" value={stats.total} icon={Info} />
         <Stat label="EDD Overdue" value={stats.late} icon={AlertTriangle} tone="late" />
         <Stat label="Due Today" value={stats.today} icon={Clock} tone="warn" />
         <Stat label="CNA | Address Issues" value={`${stats.cna} | ${stats.addr}`} icon={Truck} />
+        <Stat label="Resolved" value={stats.resolved} icon={CheckCircle2} />
+        <Stat label="Delivered" value={stats.delivered} icon={Truck} />
       </div>
 
       {/* Content */}
@@ -1302,6 +1456,21 @@ function TableView({ rows, onEdit: _onEdit, onQuickUpdate, total, page, pageSize
                         }
                       } catch {}
                       await onQuickUpdate(r.id, { called: newCalled as any, notes: JSON.stringify(notes) });
+                      // Log call status update
+                      try {
+                        const actor = localStorage.getItem('ndr_user') || '';
+                        await fetch(`${SUPABASE_URL}/ndr_user_activity`, {
+                          method: 'POST',
+                          headers: SUPABASE_HEADERS,
+                          body: JSON.stringify({
+                            order_id: r.order_id,
+                            waybill: String(r.waybill || ''),
+                            actor,
+                            action: 'call_status_update',
+                            details: { called: newCalled, call_status: newStatus },
+                          }),
+                        });
+                      } catch {}
                     }}
                     className="ring-1 ring-slate-200 rounded-full px-2 py-1 text-xs bg-white hover:bg-slate-50"
                     title="Update call status"
@@ -1490,6 +1659,21 @@ function NdrActionsPanel({ row, onQuickUpdate }: { row: NdrRow; onQuickUpdate: (
       await onQuickUpdate({ called, remark: remark || null, corrected_phone: correctedPhone || null, corrected_address: correctedAddress || null, notes: JSON.stringify(notes) } as any);
       setJustSaved(true);
       setTimeout(() => setJustSaved(false), 1200);
+      // Log status update from inline save
+      try {
+        const actor = agent || (localStorage.getItem('ndr_user') || '');
+        await fetch(`${SUPABASE_URL}/ndr_user_activity`, {
+          method: 'POST',
+          headers: SUPABASE_HEADERS,
+          body: JSON.stringify({
+            order_id: row.order_id,
+            waybill: String(row.waybill || ''),
+            actor,
+            action: 'status_update',
+            details: { called, remark, corrected_phone: correctedPhone || null, corrected_address: correctedAddress || null, notes },
+          }),
+        });
+      } catch {}
     } finally {
       setSavingInline(false);
     }
@@ -1656,6 +1840,40 @@ function NdrActionsPanel({ row, onQuickUpdate }: { row: NdrRow; onQuickUpdate: (
   const [replyBody, setReplyBody] = useState<string>("");
   const [sendingReply, setSendingReply] = useState(false);
   const [expandedMsg, setExpandedMsg] = useState<Record<number, boolean>>({});
+  // Lightweight login (agent identity) stored locally
+  const [agent, setAgent] = useState<string>(() => {
+    try { return localStorage.getItem('ndr_user') || ''; } catch { return ''; }
+  });
+  function saveAgent(next: string) {
+    setAgent(next);
+    try { localStorage.setItem('ndr_user', next || ''); } catch {}
+  }
+
+  // Assign current NDR to this agent
+  const [assigning, setAssigning] = useState(false);
+  async function assignToMe() {
+    if (!agent) { alert('Set your user name/email first.'); return; }
+    try {
+      setAssigning(true);
+      await onQuickUpdate({ assigned_to: agent, assigned_at: new Date().toISOString() } as any);
+      // log user activity
+      try {
+        await fetch(`${SUPABASE_URL}/ndr_user_activity`, {
+          method: 'POST',
+          headers: SUPABASE_HEADERS,
+          body: JSON.stringify({
+            order_id: row.order_id,
+            waybill: String(row.waybill || ''),
+            actor: agent,
+            action: 'assign',
+            details: { assigned_to: agent }
+          }),
+        });
+      } catch {}
+    } finally {
+      setAssigning(false);
+    }
+  }
 
   async function loadEmailActivity() {
     try {
@@ -1774,12 +1992,33 @@ function NdrActionsPanel({ row, onQuickUpdate }: { row: NdrRow; onQuickUpdate: (
               provider_thread_id: String(emailThread.thread_id),
               direction: 'outbound',
               status: 'sent',
+              order_id: row.order_id,
+              waybill: String(row.waybill || ''),
               subject,
               body_text: bodyText,
               body_html: bodyHtml,
               headers: data?.headers || null,
               provider_raw: data || null,
               sent_at: new Date().toISOString(),
+            }),
+          });
+        } catch {}
+        // Log user activity for outbound email
+        try {
+          const actor = agent || (localStorage.getItem('ndr_user') || '');
+          await fetch(`${SUPABASE_URL}/ndr_user_activity`, {
+            method: 'POST',
+            headers: SUPABASE_HEADERS,
+            body: JSON.stringify({
+              order_id: row.order_id,
+              waybill: String(row.waybill || ''),
+              actor,
+              action: 'email_outbound',
+              details: {
+                subject,
+                message_id: String(data?.message_id || data?.id || ''),
+                provider_thread_id: String(emailThread.thread_id)
+              }
             }),
           });
         } catch {}
@@ -1902,8 +2141,75 @@ function NdrActionsPanel({ row, onQuickUpdate }: { row: NdrRow; onQuickUpdate: (
     }
   }
 
+  // Mark as Resolved and log attribution for analytics
+  async function resolveNow() {
+    try {
+      setSavingInline(true);
+      const emailSent = Boolean((row as any).email_sent);
+      const callUpdated = Boolean(called);
+      const attribution = (emailSent && callUpdated)
+        ? 'resolved_by_member'
+        : ((emailSent || callUpdated) ? 'resolved_by_agent' : 'auto_resolved');
+      await onQuickUpdate({ status: 'Resolved' } as any);
+      try {
+        const actor = agent || (localStorage.getItem('ndr_user') || '');
+        await fetch(`${SUPABASE_URL}/ndr_user_activity`, {
+          method: 'POST',
+          headers: SUPABASE_HEADERS,
+          body: JSON.stringify({
+            order_id: row.order_id,
+            waybill: String(row.waybill || ''),
+            actor,
+            action: 'resolve',
+            details: { attribution, email_sent: emailSent, called: callUpdated }
+          }),
+        });
+      } catch {}
+      setToast({ type: 'success', message: 'Marked as Resolved' });
+    } finally {
+      setSavingInline(false);
+    }
+  }
+
   return (
     <div className="p-3 space-y-3 rounded-2xl ring-1 ring-slate-200 bg-white">
+      {/* Agent login + assignment header */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <label className="text-xs text-slate-600">User</label>
+          <input
+            className="ring-1 ring-slate-200 rounded-lg px-2 py-1 text-sm"
+            placeholder="you@company"
+            value={agent}
+            onChange={(e) => saveAgent(e.target.value)}
+          />
+          {!!(row as any).assigned_to && (
+            <span className="text-xs px-2 py-0.5 rounded-full bg-violet-100 text-violet-900">
+              Assigned to: {(row as any).assigned_to}
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={assignToMe}
+            disabled={!agent || assigning}
+            className={classNames('text-xs px-2 py-1 rounded-lg ring-1', (!agent || assigning) ? 'ring-slate-200 text-slate-400' : 'ring-emerald-300 text-emerald-900 bg-emerald-50 hover:bg-emerald-100')}
+            title={!agent ? 'Set your user first' : 'Assign this NDR to me'}
+          >
+            {assigning ? 'Assigning…' : 'Assign to me'}
+          </button>
+          <button
+            type="button"
+            onClick={resolveNow}
+            disabled={savingInline}
+            className={classNames('text-xs px-2 py-1 rounded-lg ring-1', savingInline ? 'ring-slate-200 text-slate-400' : 'ring-blue-300 text-blue-900 bg-blue-50 hover:bg-blue-100')}
+            title="Mark this NDR as Resolved"
+          >
+            {savingInline ? 'Saving…' : 'Resolve'}
+          </button>
+        </div>
+      </div>
       <div className="grid grid-cols-2 gap-3">
         <label className="text-sm block">
           Phone
@@ -1974,17 +2280,27 @@ function NdrActionsPanel({ row, onQuickUpdate }: { row: NdrRow; onQuickUpdate: (
             <div className="text-sm text-slate-500 pl-8">No messages yet.</div>
           ) : emailMessages.map((m: any) => {
             const when = fmtIST(m.received_at || m.sent_at || m.created_at);
-            const snippet = (m.body_text || m.subject || "").toString().split(/\r?\n/)[0].slice(0, 120);
+            const isInbound = String(m.direction || '').toLowerCase() === 'inbound';
+            const cleanInbound = (t: string) => {
+              if (!t) return '';
+              const idx = t.search(/\bOn\s+.*wrote:/i);
+              return idx >= 0 ? t.slice(0, idx).trim() : t.trim();
+            };
+            const baseText = isInbound ? cleanInbound((m.body_text || '')) : ((m.body_text || m.subject || ''));
+            const snippet = baseText.toString().split(/\r?\n/)[0].slice(0, 120);
             const isOpen = !!expandedMsg[m.id as number];
             return (
               <div key={m.id} className="relative pl-8">
                 {/* Node dot */}
                 <span className="absolute left-2 top-3 inline-block w-3 h-3 rounded-full bg-slate-200 ring-2 ring-white" />
                 {/* Card */}
-                <div className="rounded-xl bg-blue-50 ring-1 ring-blue-300 p-3">
+                <div className={classNames(
+                  'rounded-xl ring-1 p-3',
+                  isInbound ? 'bg-emerald-50 ring-emerald-300' : 'bg-blue-50 ring-blue-300'
+                )}>
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
-                      <span className="text-xs px-2 py-0.5 rounded-full bg-slate-200 text-slate-700">{m.direction}</span>
+                      <span className={classNames('text-xs px-2 py-0.5 rounded-full', isInbound ? 'bg-emerald-200 text-emerald-900' : 'bg-blue-200 text-blue-900')}>{m.direction}</span>
                     </div>
                     <div className="text-[11px] text-slate-600">{when}</div>
                   </div>
@@ -2005,11 +2321,14 @@ function NdrActionsPanel({ row, onQuickUpdate }: { row: NdrRow; onQuickUpdate: (
                   </div>
                   {isOpen && (
                     <div className="mt-2">
-                      {m.body_html ? (
-                        <div className="prose prose-sm max-w-none" dangerouslySetInnerHTML={{ __html: m.body_html }} />
-                      ) : (
-                        <pre className="whitespace-pre-wrap text-xs text-slate-700">{m.body_text || ''}</pre>
-                      )}
+                      {isInbound
+                        ? (
+                          <pre className="whitespace-pre-wrap text-xs text-slate-700">{cleanInbound(String(m.body_text || ''))}</pre>
+                        )
+                        : (m.body_html
+                          ? <div className="prose prose-sm max-w-none" dangerouslySetInnerHTML={{ __html: m.body_html }} />
+                          : <pre className="whitespace-pre-wrap text-xs text-slate-700">{m.body_text || ''}</pre>
+                        )}
                     </div>
                   )}
                 </div>
