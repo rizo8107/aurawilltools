@@ -2053,6 +2053,7 @@ function NdrActionsPanel({ row, onQuickUpdate }: { row: NdrRow; onQuickUpdate: (
       called,
       timestamp: new Date().toISOString(),
     };
+    let sentOk = false;
     try {
       const resp = await fetch('https://auto-n8n.9krcxo.easypanel.host/webhook/ndrmailer', {
         method: 'POST',
@@ -2098,6 +2099,8 @@ function NdrActionsPanel({ row, onQuickUpdate }: { row: NdrRow; onQuickUpdate: (
               headers: { ...SUPABASE_HEADERS },
               body: JSON.stringify({
                 thread_id: threadRowId,
+                order_id: row.order_id,
+                waybill: String(row.waybill || ''),
                 provider,
                 message_id: String(data.message_id || data.id || ''),
                 in_reply_to: data.in_reply_to ? String(data.in_reply_to) : null,
@@ -2117,14 +2120,40 @@ function NdrActionsPanel({ row, onQuickUpdate }: { row: NdrRow; onQuickUpdate: (
           } catch {}
         }
 
+        // Log user activity for outbound email
+        try {
+          const actor = agent || (localStorage.getItem('ndr_user') || '');
+          await fetch(`${SUPABASE_URL}/ndr_user_activity`, {
+            method: 'POST',
+            headers: SUPABASE_HEADERS,
+            body: JSON.stringify({
+              order_id: row.order_id,
+              waybill: String(row.waybill || ''),
+              actor,
+              action: 'email_outbound',
+              details: {
+                subject: draft.subject,
+                provider_thread_id: data?.thread_id || data?.threadId || null,
+                message_id: String(data?.message_id || data?.id || ''),
+              }
+            }),
+          });
+        } catch {}
+
         // Mark row as emailed in main NDR table
         await onQuickUpdate({ corrected_phone: correctedPhone || null, corrected_address: correctedAddress || null, email_sent: true } as any);
+        sentOk = true;
+        // Reload activity timeline so the new message appears immediately
+        await loadEmailActivity();
+        setShowEmail(false);
       }
     } catch {}
-    // Mailto cannot send HTML; we provide plaintext fallback to user's client
-    const url = `mailto:?subject=${encodeURIComponent(draft.subject)}&body=${encodeURIComponent(draft.bodyText)}`;
-    try { window.location.href = url; } catch {}
-    setShowEmail(false);
+    if (!sentOk) {
+      // Mailto cannot send HTML; we provide plaintext fallback to user's client
+      const url = `mailto:?subject=${encodeURIComponent(draft.subject)}&body=${encodeURIComponent(draft.bodyText)}`;
+      try { window.location.href = url; } catch {}
+      setShowEmail(false);
+    }
   }
 
   async function copyEmail() {
@@ -2486,6 +2515,32 @@ function NdrActionsPanel({ row, onQuickUpdate }: { row: NdrRow; onQuickUpdate: (
                   placeholder="Email body"
                 />
               </label>
+              <div className="mt-4 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  className="px-4 py-2 rounded-xl bg-slate-900 text-white hover:bg-slate-800"
+                  title="Send email to courier"
+                  onClick={sendMail}
+                >
+                  Send
+                </button>
+                <button
+                  type="button"
+                  className="px-4 py-2 rounded-xl ring-1 ring-slate-300 hover:bg-slate-50"
+                  title="Copy composed email"
+                  onClick={copyEmail}
+                >
+                  Copy
+                </button>
+                <button
+                  type="button"
+                  className="px-4 py-2 rounded-xl ring-1 ring-slate-300 hover:bg-slate-50"
+                  title="Cancel"
+                  onClick={() => setShowEmail(false)}
+                >
+                  Cancel
+                </button>
+              </div>
 
               {/* Email Activity removed from modal */}
           </div>
