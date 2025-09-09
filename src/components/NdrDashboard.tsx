@@ -359,7 +359,10 @@ export default function NdrDashboard() {
   const [courier, setCourier] = useState("All");
   const [bucket, setBucket] = useState("All");
   const [remark, setRemark] = useState("All");
-  const [view, setView] = useState<"table" | "kanban" | "analytics">("table");
+  const [view, setView] = useState<"table" | "analytics" | "emails">("table");
+  // Emails feed (inbound/outbound across orders)
+  const [emailFeed, setEmailFeed] = useState<any[]>([]);
+  const [emailFeedLoading, setEmailFeedLoading] = useState<boolean>(false);
   // dashboard stat tile filter
   const [statFilter, setStatFilter] = useState<'all' | 'edd_overdue' | 'due_today' | 'cna_addr' | 'resolved' | 'delivered'>('all');
   // pagination
@@ -368,11 +371,6 @@ export default function NdrDashboard() {
   // date filter (YYYY-MM-DD)
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
-
-  // latest email activity per waybill
-  const [emailStates, setEmailStates] = useState<Record<string, { dir: 'in' | 'out' | 'sys' | null; time: string | null }>>({});
-  // order mode
-  const [orderMode, setOrderMode] = useState<'date' | 'activity'>('date');
 
   // Per-column multi-select filters
   const [colFilters, setColFilters] = useState<Record<ColumnKey, string[]>>({
@@ -410,9 +408,9 @@ export default function NdrDashboard() {
   }, [toast]);
 
   // Persisted current user and "My NDRs" toggle
-  const currentUser = useMemo(() => {
+  const [currentUser, setCurrentUser] = useState<string>(() => {
     try { return localStorage.getItem('ndr_user') || ''; } catch { return ''; }
-  }, []);
+  });
   const [myOnly, setMyOnly] = useState<boolean>(() => {
     try { return (localStorage.getItem('ndr_my_only') ?? 'true') !== 'false'; } catch { return true; }
   });
@@ -424,13 +422,27 @@ export default function NdrDashboard() {
     });
   }
 
+  function switchUser() {
+    const next = window.prompt('Enter your handle (team member)', currentUser || '');
+    if (next == null) return;
+    const handle = next.trim();
+    if (!handle) { setToast({ type: 'error', message: 'User cannot be empty' }); return; }
+    try {
+      localStorage.setItem('ndr_user', handle);
+      // allow auto-allocation to run again for the new session/user if needed
+      localStorage.removeItem('ndr_auto_alloc_done');
+    } catch {}
+    setCurrentUser(handle);
+    setToast({ type: 'success', message: `Switched user to ${handle}` });
+    try { load(); } catch {}
+  }
+
   async function load() {
     try {
       setLoading(true);
       const data = await fetchNdr();
       setRows(data);
       setError(null);
-      try { await loadEmailStates(data); } catch {}
     } catch (e: any) {
       setError(e.message || String(e));
     } finally {
@@ -438,32 +450,6 @@ export default function NdrDashboard() {
       // Attempt auto-allocation once per session
       try { await autoAllocateOnce(); } catch {}
     }
-  }
-
-  async function loadEmailStates(list: NdrRow[]) {
-    const waybills = Array.from(new Set(list.map(r => String(r.waybill || '').trim()).filter(Boolean)));
-    if (waybills.length === 0) { setEmailStates({}); return; }
-    // Chunk IN filter to avoid very long URLs
-    const chunkSize = 50;
-    const map: Record<string, { dir: 'in'|'out'|'sys'|null; time: string|null }> = {};
-    for (let i=0;i<waybills.length;i+=chunkSize) {
-      const chunk = waybills.slice(i, i+chunkSize).map(w => encodeURIComponent(w)).join(',');
-      const url = `${SUPABASE_URL}/email_messages?select=waybill,created_at,timestamp,is_inbound,direction,message_kind&waybill=in.(${chunk})&order=timestamp.desc,nullslast&order=created_at.desc`;
-      const res = await fetch(url, { headers: SUPABASE_HEADERS });
-      if (!res.ok) continue;
-      const arr = await res.json();
-      for (const m of arr) {
-        const wb = String(m.waybill || '').trim();
-        if (!wb || map[wb]) continue; // first is latest due to order
-        const dir: 'in'|'out'|'sys'|null = (m.is_inbound === true) ? 'in'
-          : (String(m.direction || '').toLowerCase().startsWith('in') ? 'in'
-          : (String(m.direction || '').toLowerCase().startsWith('out') ? 'out'
-          : (String(m.message_kind || '').toLowerCase().includes('reply') ? 'out' : null)));
-        const time = m.timestamp || m.created_at || null;
-        map[wb] = { dir: dir || null, time };
-      }
-    }
-    setEmailStates(map);
   }
 
   // Reset allocation: clear assigned_to/assigned_at for current team members
@@ -605,10 +591,9 @@ export default function NdrDashboard() {
           __action_taken: notes.action_taken || "",
           __bucket_override: notes.bucket_override,
           __call_status: notes.call_status || (r.called === true ? "Yes" : r.called === false ? "No" : ""),
-          __email: emailStates[String(r.waybill || '').trim()] || { dir: null, time: null },
         } as any;
       }),
-    [rows, emailStates]
+    [rows]
   );
 
   const filtered = useMemo(() => {
@@ -718,6 +703,74 @@ export default function NdrDashboard() {
 
   function clearSelection() { setSelectedIds([]); }
 
+  // ---- Emails feed (inbound from email_activity, outbound from email_messages) ----
+  async function loadEmailFeed() {
+    try {
+      setEmailFeedLoading(true);
+      // Pull latest first; we will merge and keep only necessary fields
+      const [actRes, msgRes] = await Promise.all([
+        fetch(`${SUPABASE_URL}/email_activity?direction=eq.inbound&order=created_at.desc&select=*`, { headers: SUPABASE_HEADERS }),
+        fetch(`${SUPABASE_URL}/email_messages?order=created_at.desc&select=*`, { headers: SUPABASE_HEADERS }),
+      ]);
+      const inbound = actRes.ok ? await actRes.json() : [];
+      const outbound = msgRes.ok ? await msgRes.json() : [];
+      const mapInbound = (inbound as any[]).map((a) => ({
+        __kind: 'activity',
+        id: a.id,
+        created_at: a.created_at || a.activity_at,
+        direction: 'inbound',
+        order_id: a.order_id,
+        waybill: a.waybill,
+        subject: a.subject,
+        from_addr: a.from_addr,
+        to_addrs: a.to_addrs,
+        provider_thread_id: a.provider_thread_id,
+      }));
+      const mapOutbound = (outbound as any[]).map((m) => ({
+        __kind: 'message',
+        id: m.id,
+        created_at: m.created_at || m.sent_at || m.received_at,
+        direction: 'outbound',
+        order_id: m.order_id,
+        waybill: m.waybill,
+        subject: m.subject,
+        from_addr: m.from_addr,
+        to_addrs: m.to_addrs,
+        provider_thread_id: m.provider_thread_id,
+      }));
+      // Restrict to orders assigned to the current team member
+      let member = '';
+      try { member = (localStorage.getItem('ndr_user') || '').trim().toLowerCase(); } catch {}
+      const allowedOrders = new Set<number>();
+      try {
+        for (const r of enriched as any[]) {
+          const assignee = String((r as any).assigned_to || '').trim().toLowerCase();
+          if (assignee && assignee === member) {
+            const oid = Number((r as any).order_id);
+            if (!Number.isNaN(oid)) allowedOrders.add(oid);
+          }
+        }
+      } catch {}
+
+      // Build full feed and tag whether each item is assigned to current member
+      const mergedAll = [...mapInbound, ...mapOutbound]
+        .filter((x) => x.created_at)
+        .map((x) => ({ ...x, assigned: x.order_id ? allowedOrders.has(Number(x.order_id)) : false }))
+        .sort((a, b) => new Date(b.created_at as any).getTime() - new Date(a.created_at as any).getTime());
+      setEmailFeed(mergedAll);
+    } catch {
+      setEmailFeed([]);
+    } finally {
+      setEmailFeedLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (view === 'emails') {
+      loadEmailFeed();
+    }
+  }, [view]);
+
   // Build CSV from given rows
   function buildCsvRows(rowsToExport: any[]) {
     const head = [
@@ -820,6 +873,31 @@ export default function NdrDashboard() {
     setEditorOpen(true);
   }
 
+  // Open order editor from Emails tab
+  async function openOrderFromEmail(orderId: number, awb?: string) {
+    try {
+      // Keep current view (emails); open the EXISTING Repeat Campaign drawer with full order details
+      const byOrder = (r: any) => Number(r.order_id) === Number(orderId);
+      const byAwb = (r: any) => awb ? String(r.waybill || '') === String(awb) : true;
+      let target = (enriched as any[]).find(r => byOrder(r) && byAwb(r)) || (enriched as any[]).find(byOrder);
+      if (!target) {
+        // Fallback: fetch the single order directly
+        try {
+          const url = `${SUPABASE_URL}/${SUPABASE_TABLE}?order_id=eq.${orderId}&select=*`;
+          const res = await fetch(url, { headers: SUPABASE_HEADERS });
+          if (res.ok) {
+            const arr = await res.json();
+            if (Array.isArray(arr) && arr.length) target = arr[0];
+          }
+        } catch {}
+      }
+      // Populate Repeat drawer state and open
+      try { setRepeatOrderId(String(orderId)); } catch {}
+      try { if (target) setRepeatRow(target as NdrRow); } catch {}
+      try { setRepeatOpen(true); } catch {}
+    } catch {}
+  }
+
   async function saveEditor() {
     if (!editing) return;
     const chosenAction = editAction === "Other" ? otherAction?.trim() || "Other" : editAction || "";
@@ -899,24 +977,23 @@ export default function NdrDashboard() {
     <div className="min-h-screen bg-gradient-to-b from-slate-50 to-white text-slate-800">
       {/* Toast */}
       {toast && (
-        <div className={classNames(
-          'fixed right-4 top-4 z-[60] min-w-[220px] max-w-sm rounded-xl px-3 py-2 shadow-lg ring-1',
-          toast.type === 'success' ? 'bg-emerald-50 text-emerald-800 ring-emerald-200' : 'bg-rose-50 text-rose-800 ring-rose-200'
-        )}
-        role="status"
-        aria-live="polite"
+        <div
+          className={classNames(
+            'fixed right-4 top-4 z-[60] min-w-[220px] max-w-sm rounded-xl px-3 py-2 shadow-lg ring-1',
+            toast.type === 'success' ? 'bg-emerald-50 text-emerald-800 ring-emerald-200' : 'bg-rose-50 text-rose-800 ring-rose-200'
+          )}
+          role="status"
+          aria-live="polite"
         >
           <div className="text-sm font-medium">{toast.message}</div>
           <button className="absolute right-2 top-1.5 text-xs underline" onClick={() => setToast(null)} title="Dismiss">Close</button>
         </div>
       )}
-      {/* Header */}
+
+      {/* Header (compact) */}
       <header className="sticky top-0 z-40 backdrop-blur bg-white/80 border-b">
-        <div className="max-w-7xl mx-auto px-4 py-3 flex items-center gap-3">
-          <Truck className="w-6 h-6" />
-          <h1 className="text-lg font-semibold">NDR CRM Dashboard</h1>
-          <span className="text-xs text-slate-500">Monitor & resolve non-delivery shipments</span>
-          <div className="ml-auto flex items-center gap-2">
+        <div className="max-w-7xl mx-auto px-4 py-2 flex items-center justify-end gap-1.5 flex-wrap">
+          <div className="flex items-center gap-1.5 rounded-xl ring-1 ring-slate-200 px-1 py-1">
             <IconButton title="Refresh" onClick={load}>
               <RefreshCw className="w-4 h-4" />
               <span className="hidden sm:inline">Refresh</span>
@@ -930,44 +1007,37 @@ export default function NdrDashboard() {
               onClick={toggleMyOnly}
               title={myOnly ? 'Showing only my assigned NDRs' : 'Showing all NDRs'}
               className={classNames(
-                'inline-flex items-center gap-2 rounded-xl px-3 py-2 ring-1 transition',
-                myOnly ? 'ring-emerald-300 bg-emerald-50 text-emerald-900' : 'ring-slate-200 hover:bg-slate-50'
+                'inline-flex items-center gap-2 rounded-xl px-2.5 py-1.5 ring-1',
+                myOnly ? 'bg-emerald-50 text-emerald-700 ring-emerald-200' : 'bg-white text-slate-700 ring-slate-200 hover:bg-slate-50'
               )}
             >
-              <span className="text-xs">My NDRs</span>
-              <span className={classNames('h-2 w-2 rounded-full', myOnly ? 'bg-emerald-500' : 'bg-slate-300')} />
+              <span className="text-sm">My NDRs</span>
+              <span className={classNames('ml-1 inline-block w-2 h-2 rounded-full', myOnly ? 'bg-emerald-500' : 'bg-slate-300')} />
             </button>
             <button
               type="button"
-              title="Switch User"
-              onClick={() => {
-                try {
-                  localStorage.removeItem('ndr_user');
-                  localStorage.removeItem('ndr_session');
-                } catch {}
-                window.location.reload();
-              }}
-              className="inline-flex items-center gap-2 rounded-xl px-3 py-2 ring-1 ring-rose-300 text-rose-900 bg-rose-50 hover:bg-rose-100"
+              onClick={switchUser}
+              className="inline-flex items-center gap-2 rounded-xl px-2.5 py-1.5 ring-1 bg-white text-slate-700 ring-slate-200 hover:bg-slate-50"
+              title="Switch user"
             >
-              <span className="text-xs">Switch User</span>
+              <span className="text-sm">Switch User</span>
             </button>
             <button
               type="button"
               title="Reset allocation for current team"
               onClick={resetAllocation}
-              className="inline-flex items-center gap-2 rounded-xl px-3 py-2 ring-1 ring-amber-300 text-amber-900 bg-amber-50 hover:bg-amber-100"
+              className="inline-flex items-center gap-2 rounded-xl px-2.5 py-1.5 ring-1 ring-amber-300 text-amber-900 bg-amber-50 hover:bg-amber-100"
             >
               <span className="text-xs">Reset Allocation</span>
             </button>
-            <div className="hidden sm:flex items-center gap-2 rounded-xl ring-1 ring-slate-200 px-1 py-1">
-              <button onClick={() => setView("table")} className={classNames("px-3 py-1 rounded-lg text-sm", view === "table" ? "bg-slate-100" : "hover:bg-slate-50")}>Table</button>
-              <button onClick={() => setView("kanban")} className={classNames("px-3 py-1 rounded-lg text-sm", view === "kanban" ? "bg-slate-100" : "hover:bg-slate-50")}>Kanban</button>
-              <button onClick={() => setView("analytics")} className={classNames("px-3 py-1 rounded-lg text-sm", view === "analytics" ? "bg-slate-100" : "hover:bg-slate-50")}>Analytics</button>
+            <div className="flex items-center gap-1.5 rounded-xl ring-1 ring-slate-200 px-1 py-1">
+              <button onClick={() => setView('table')} className={classNames('px-2.5 py-1 rounded-lg text-sm', view === 'table' ? 'bg-slate-100' : 'hover:bg-slate-50')}>Table</button>
+              <button onClick={() => setView('emails')} className={classNames('px-2.5 py-1 rounded-lg text-sm', view === 'emails' ? 'bg-slate-100' : 'hover:bg-slate-50')}>Emails</button>
+              <button onClick={() => setView('analytics')} className={classNames('px-2.5 py-1 rounded-lg text-sm', view === 'analytics' ? 'bg-slate-100' : 'hover:bg-slate-50')}>Analytics</button>
             </div>
           </div>
         </div>
       </header>
-
       {/* Toolbar */}
       <div className="max-w-7xl mx-auto px-4 py-4 flex flex-col sm:flex-row gap-3">
         <TextInput value={q} onChange={setQ} placeholder="Search order id, awb, status, location, phone, issue..." />
@@ -1122,8 +1192,8 @@ export default function NdrDashboard() {
               }}
             />
           </>
-        ) : view === "kanban" ? (
-          <KanbanView rows={filtered as any[]} onEdit={openEditor} onMove={moveToBucket} />
+        ) : view === "emails" ? (
+          <EmailsView items={emailFeed} loading={emailFeedLoading} onOpenOrder={(orderId, awb) => openOrderFromEmail(orderId, awb)} />
         ) : (
           <AnalyticsView rows={filtered as any[]} allRows={enriched as any[]} />
         )}
@@ -2795,6 +2865,74 @@ function KanbanView({ rows, onEdit, onMove }: { rows: (NdrRow & any)[]; onEdit: 
             </div>
           );
         })}
+    </div>
+  );
+}
+
+// ---- Emails View (global inbox) ---------------------------
+function EmailsView({ items, loading, onOpenOrder }: { items: any[]; loading: boolean; onOpenOrder: (orderId: number, awb?: string) => void }) {
+  const [tab, setTab] = React.useState<'inbound' | 'outbound' | 'all'>('inbound');
+  const visible = React.useMemo(() => {
+    const list = Array.isArray(items) ? items : [];
+    if (tab === 'all') {
+      // show everything, including those without order_id and regardless of assignment
+      return list;
+    }
+    const dir = tab === 'inbound' ? 'inbound' : 'outbound';
+    return list.filter((m: any) =>
+      m && m.order_id && m.assigned && String(m.direction || '').toLowerCase() === dir
+    );
+  }, [items, tab]);
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2">
+        <button type="button" onClick={() => setTab('inbound')} className={classNames('px-3 py-1 rounded-lg text-sm ring-1', tab==='inbound' ? 'bg-slate-900 text-white ring-slate-900' : 'bg-white text-slate-700 ring-slate-200 hover:bg-slate-50')}>Inbound</button>
+        <button type="button" onClick={() => setTab('outbound')} className={classNames('px-3 py-1 rounded-lg text-sm ring-1', tab==='outbound' ? 'bg-slate-900 text-white ring-slate-900' : 'bg-white text-slate-700 ring-slate-200 hover:bg-slate-50')}>Outbound</button>
+        <button type="button" onClick={() => setTab('all')} className={classNames('px-3 py-1 rounded-lg text-sm ring-1', tab==='all' ? 'bg-slate-900 text-white ring-slate-900' : 'bg-white text-slate-700 ring-slate-200 hover:bg-slate-50')}>All</button>
+      </div>
+      {loading ? (
+        <div className="p-4 text-slate-500">Loading email activity…</div>
+      ) : visible.length === 0 ? (
+        <div className="p-4 text-slate-500">No email activity found.</div>
+      ) : (
+        <div className="overflow-auto rounded-xl ring-1 ring-slate-200">
+          <table className="min-w-full bg-white text-sm">
+            <thead>
+              <tr className="text-left bg-slate-50">
+                <th className="px-3 py-2">When</th>
+                <th className="px-3 py-2">Dir</th>
+                <th className="px-3 py-2">Order</th>
+                <th className="px-3 py-2">AWB</th>
+                <th className="px-3 py-2">Subject</th>
+                <th className="px-3 py-2">From</th>
+                <th className="px-3 py-2">To</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visible.map((m) => (
+                <tr
+                  key={`${m.__kind}-${m.id}`}
+                  className="border-t hover:bg-slate-50 cursor-pointer"
+                  onClick={() => m.order_id ? onOpenOrder(Number(m.order_id), m.waybill) : undefined}
+                  title={m.order_id ? `Open Order #${m.order_id}${m.waybill ? ` • AWB ${m.waybill}` : ''}` : 'No linked order'}
+                >
+                  <td className="px-3 py-2 whitespace-nowrap">{fmtIST(m.created_at)}</td>
+                  <td className="px-3 py-2">
+                    <span className={classNames('px-2.5 py-0.5 rounded-full text-xs', String(m.direction).toLowerCase()==='inbound' ? 'bg-emerald-50 text-emerald-700' : 'bg-blue-50 text-blue-700')}>
+                      {String(m.direction || '').toUpperCase()}
+                    </span>
+                  </td>
+                  <td className="px-3 py-2">{m.order_id ?? '—'}</td>
+                  <td className="px-3 py-2">{m.waybill ?? '—'}</td>
+                  <td className="px-3 py-2 max-w-xl truncate" title={m.subject || ''}>{m.subject || '—'}</td>
+                  <td className="px-3 py-2 max-w-xs truncate" title={m.from_addr || ''}>{m.from_addr || '—'}</td>
+                  <td className="px-3 py-2 max-w-xs truncate" title={Array.isArray(m.to_addrs)? m.to_addrs.join(', ') : (m.to_addrs || '')}>{Array.isArray(m.to_addrs)? m.to_addrs.join(', ') : (m.to_addrs || '—')}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }

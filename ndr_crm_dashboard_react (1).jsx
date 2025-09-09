@@ -461,7 +461,6 @@ export default function NdrDashboard() {
         <div className="max-w-7xl mx-auto px-4 py-3 flex items-center gap-3">
           <Truck className="w-6 h-6" />
           <h1 className="text-lg font-semibold">NDR CRM Dashboard</h1>
-          <span className="text-xs text-slate-500">Monitor & resolve non-delivery shipments</span>
           <div className="ml-auto flex items-center gap-2">
             <IconButton title="Refresh" onClick={load}>
               <RefreshCw className="w-4 h-4" />
