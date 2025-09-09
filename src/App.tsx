@@ -21,6 +21,8 @@ function App() {
   const [activeTab, setActiveTab] = useState<TabType>('order');
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
   const [repeatInitialOrder, setRepeatInitialOrder] = useState<string>("");
+  // tick to re-render after NDR login completes (when localStorage keys are set)
+  const [ndrAuthVersion, setNdrAuthVersion] = useState<number>(0);
   
   // Check for authentication and preloaded repeat order on mount
   useEffect(() => {
@@ -163,11 +165,13 @@ function App() {
             {activeTab === 'gstinvoice' && <GstInvoiceGenerator />}
             {activeTab === 'ndr' && (
               (() => {
+                // use ndrAuthVersion just to create a re-render dependency after login
+                void ndrAuthVersion;
                 const user = localStorage.getItem('ndr_user');
                 const teamId = localStorage.getItem('ndr_active_team_id');
                 const session = localStorage.getItem('ndr_session');
                 if (!user || !teamId || !session) {
-                  return <NdrLogin onAuthenticated={() => setActiveTab('ndr')} />;
+                  return <NdrLogin onAuthenticated={() => setNdrAuthVersion((v) => v + 1)} />;
                 }
                 return <NdrDashboard />;
               })()
