@@ -78,7 +78,12 @@ export default function NdrAllocationPage() {
 
   async function saveRule() {
     if (!teamId) { alert('Select a team first'); return; }
-    if (rule.mode === 'percentage' && Math.round(percentTotal) !== 100) {
+    // Normalize: include every current team member in the rule payload
+    let percents = (rule.percents || []).slice();
+    const getPct = (name: string) => percents.find(p => p.member === name)?.percent ?? 0;
+    percents = members.map(m => ({ member: m.member, percent: Number(getPct(m.member)) || 0 }));
+    const total = percents.reduce((s, p) => s + (Number(p.percent) || 0), 0);
+    if (rule.mode === 'percentage' && Math.round(total) !== 100) {
       alert('Percentage total must equal 100');
       return;
     }
@@ -87,9 +92,11 @@ export default function NdrAllocationPage() {
       await fetch(`${SUPABASE_URL}/ndr_allocation_rules`, {
         method: 'POST',
         headers: { ...SUPABASE_HEADERS, Prefer: 'resolution=merge-duplicates' },
-        body: JSON.stringify({ team_id: teamId, rule }),
+        body: JSON.stringify({ team_id: teamId, rule: { ...rule, percents } }),
       });
-      alert('Allocation rule saved');
+      // Reset auto-allocation session flag so dashboard will apply the new rule immediately on next load
+      try { localStorage.removeItem('ndr_auto_alloc_done'); } catch {}
+      alert('Allocation rule saved. The dashboard will apply it on next refresh.');
     } finally { setSaving(false); }
   }
 

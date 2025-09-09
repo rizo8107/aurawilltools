@@ -65,6 +65,82 @@ function fmtIST(dateLike?: string | number | Date | null) {
   } catch {
     return String(dateLike);
   }
+
+  // Manually (re)allocate unassigned NDRs according to saved rule
+  async function allocateNow(reset: boolean) {
+    try {
+      const teamId = localStorage.getItem('ndr_active_team_id');
+      if (!teamId) { setToast({ type: 'error', message: 'Select a team first' }); return; }
+      // Load team members
+      const memRes = await fetch(`${SUPABASE_URL}/team_members?team_id=eq.${teamId}&select=id,member&order=member.asc`, { headers: SUPABASE_HEADERS });
+      if (!memRes.ok) { setToast({ type: 'error', message: 'Failed to load team members' }); return; }
+      const members: Array<{ id: number; member: string }> = await memRes.json();
+      const memberHandles = members.map(m => m.member).filter(Boolean);
+      if (memberHandles.length === 0) { setToast({ type: 'error', message: 'No members in team' }); return; }
+
+      // Load allocation rule
+      let rule: any = { mode: 'percentage', percents: [] as Array<{ member: string; percent: number }> };
+      try {
+        const ruleRes = await fetch(`${SUPABASE_URL}/ndr_allocation_rules?team_id=eq.${teamId}&select=rule&limit=1`, { headers: SUPABASE_HEADERS });
+        if (ruleRes.ok) {
+          const [row] = await ruleRes.json();
+          if (row?.rule) rule = row.rule;
+        }
+      } catch {}
+
+      function buildSchedule(): string[] {
+        if (rule?.mode === 'percentage' && Array.isArray(rule.percents) && rule.percents.length) {
+          const expanded: string[] = [];
+          const normHandles = memberHandles.map(h => ({ raw: h, norm: String(h || '').trim().toLowerCase() }));
+          for (const p of rule.percents) {
+            const nameNorm = String(p.member || '').trim().toLowerCase();
+            const pct = Math.max(0, Math.round(Number(p.percent) || 0));
+            if (!nameNorm || pct <= 0) continue;
+            const hit = normHandles.find(h => h.norm === nameNorm);
+            const actual = hit?.raw;
+            if (!actual) continue;
+            for (let i = 0; i < pct; i++) expanded.push(actual);
+          }
+          if (expanded.length) return expanded;
+        }
+        return memberHandles;
+      }
+      const schedule = buildSchedule();
+
+      if (reset) {
+        await Promise.all(
+          memberHandles.map(h =>
+            fetch(`${SUPABASE_URL}/${SUPABASE_TABLE}?assigned_to=eq.${encodeURIComponent(h)}`, { method: 'PATCH', headers: SUPABASE_HEADERS, body: JSON.stringify({ assigned_to: null, assigned_at: null }) })
+          )
+        );
+      }
+
+      const unassignedRes = await fetch(`${SUPABASE_URL}/${SUPABASE_TABLE}?assigned_to=is.null&select=id&order=event_time.desc`, { headers: SUPABASE_HEADERS });
+      if (!unassignedRes.ok) { setToast({ type: 'error', message: 'Failed to fetch unassigned' }); return; }
+      const unassigned: Array<{ id: number }> = await unassignedRes.json();
+      if (!Array.isArray(unassigned) || unassigned.length === 0) {
+        setToast({ type: 'success', message: 'No unassigned NDRs found' });
+        await load();
+        return;
+      }
+      const now = new Date().toISOString();
+      const batchSize = 25;
+      for (let offset = 0; offset < unassigned.length; offset += batchSize) {
+        const chunk = unassigned.slice(offset, offset + batchSize);
+        await Promise.all(
+          chunk.map((r, idx) => {
+            const assignee = schedule[(offset + idx) % schedule.length];
+            const url = `${SUPABASE_URL}/${SUPABASE_TABLE}?id=eq.${r.id}`;
+            return fetch(url, { method: 'PATCH', headers: SUPABASE_HEADERS, body: JSON.stringify({ assigned_to: assignee, assigned_at: now }) });
+          })
+        );
+      }
+      setToast({ type: 'success', message: reset ? 'Reset and re-allocated' : 'Re-allocated unassigned' });
+      await load();
+    } catch (e: any) {
+      setToast({ type: 'error', message: e?.message || 'Allocation failed' });
+    }
+  }
 }
 
 function courierName(s?: string | null) {
@@ -356,6 +432,26 @@ export default function NdrDashboard() {
     }
   }
 
+  // Reset allocation: clear assigned_to/assigned_at for current team members
+  async function resetAllocation() {
+    try {
+      const teamId = localStorage.getItem('ndr_active_team_id');
+      if (!teamId) { setToast({ type: 'error', message: 'Select a team first' }); return; }
+      const memRes = await fetch(`${SUPABASE_URL}/team_members?team_id=eq.${teamId}&select=member&order=member.asc`, { headers: SUPABASE_HEADERS });
+      if (!memRes.ok) { setToast({ type: 'error', message: 'Failed to load team members' }); return; }
+      const members: Array<{ member: string }>= await memRes.json();
+      const handles = members.map(m=>m.member).filter(Boolean);
+      if (handles.length===0) { setToast({ type: 'error', message: 'No members in team' }); return; }
+      await Promise.all(handles.map(h =>
+        fetch(`${SUPABASE_URL}/${SUPABASE_TABLE}?assigned_to=eq.${encodeURIComponent(h)}`, { method: 'PATCH', headers: SUPABASE_HEADERS, body: JSON.stringify({ assigned_to: null, assigned_at: null }) })
+      ));
+      setToast({ type: 'success', message: 'Allocation reset for team' });
+      await load();
+    } catch (e:any) {
+      setToast({ type: 'error', message: e?.message || 'Reset failed' });
+    }
+  }
+
   // ---- Auto-allocation (first load per session) -------------
   async function autoAllocateOnce() {
     try {
@@ -386,14 +482,19 @@ export default function NdrDashboard() {
       function buildSchedule(): string[] {
         if (rule?.mode === 'percentage' && Array.isArray(rule.percents) && rule.percents.length) {
           const expanded: string[] = [];
+          const normHandles = memberHandles.map(h => ({ raw: h, norm: String(h || '').trim().toLowerCase() }));
           for (const p of rule.percents) {
-            const m = String(p.member || '').trim();
+            const nameNorm = String(p.member || '').trim().toLowerCase();
             const pct = Math.max(0, Math.round(Number(p.percent) || 0));
-            if (!m || pct <= 0) continue;
-            for (let i = 0; i < pct; i++) expanded.push(m);
+            if (!nameNorm || pct <= 0) continue;
+            // Find the actual handle from team members using normalized compare
+            const hit = normHandles.find(h => h.norm === nameNorm);
+            const actual = hit?.raw;
+            if (!actual) continue;
+            for (let i = 0; i < pct; i++) expanded.push(actual);
           }
-          const sched = expanded.filter(x => memberHandles.includes(x));
-          if (sched.length) return sched;
+          // If still empty (all mismatched), fall back
+          if (expanded.length) return expanded;
         }
         // fallback: simple round-robin list
         return memberHandles;
@@ -793,6 +894,14 @@ export default function NdrDashboard() {
               className="inline-flex items-center gap-2 rounded-xl px-3 py-2 ring-1 ring-rose-300 text-rose-900 bg-rose-50 hover:bg-rose-100"
             >
               <span className="text-xs">Switch User</span>
+            </button>
+            <button
+              type="button"
+              title="Reset allocation for current team"
+              onClick={resetAllocation}
+              className="inline-flex items-center gap-2 rounded-xl px-3 py-2 ring-1 ring-amber-300 text-amber-900 bg-amber-50 hover:bg-amber-100"
+            >
+              <span className="text-xs">Reset Allocation</span>
             </button>
             <div className="hidden sm:flex items-center gap-2 rounded-xl ring-1 ring-slate-200 px-1 py-1">
               <button onClick={() => setView("table")} className={classNames("px-3 py-1 rounded-lg text-sm", view === "table" ? "bg-slate-100" : "hover:bg-slate-50")}>Table</button>
