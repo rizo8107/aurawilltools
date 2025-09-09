@@ -276,7 +276,7 @@ function StatusBadge({ bucket }: { bucket: string }) {
   return <span className={classNames("px-2.5 py-1 rounded-full text-xs font-medium", map[bucket] || map.Other)}>{bucket}</span>;
 }
 
-function Stat({ label, value, icon: Icon, tone }: { label: string; value: string | number; icon: any; tone?: "ok" | "warn" | "late" }) {
+function Stat({ label, value, icon: Icon, tone, onClick, active }: { label: string; value: string | number; icon: any; tone?: "ok" | "warn" | "late"; onClick?: () => void; active?: boolean }) {
   const toneClass =
     tone === "late"
       ? "bg-red-50 text-red-700 ring-red-200"
@@ -284,7 +284,7 @@ function Stat({ label, value, icon: Icon, tone }: { label: string; value: string
       ? "bg-amber-50 text-amber-700 ring-amber-200"
       : "bg-slate-50 text-slate-700 ring-slate-200";
   return (
-    <div className={classNames("flex items-center gap-3 rounded-2xl p-4 ring-1", toneClass)}>
+    <button type="button" onClick={onClick} className={classNames("text-left w-full flex items-center gap-3 rounded-2xl p-4 ring-2 transition", toneClass, active ? 'ring-slate-400' : 'ring-1')}>
       <div className="p-2 rounded-xl bg-white/70 ring-1 ring-black/5">
         <Icon className="w-5 h-5" />
       </div>
@@ -292,7 +292,7 @@ function Stat({ label, value, icon: Icon, tone }: { label: string; value: string
         <div className="text-xs uppercase tracking-wide text-slate-500">{label}</div>
         <div className="text-xl font-semibold">{value}</div>
       </div>
-    </div>
+    </button>
   );
 }
 
@@ -360,12 +360,19 @@ export default function NdrDashboard() {
   const [bucket, setBucket] = useState("All");
   const [remark, setRemark] = useState("All");
   const [view, setView] = useState<"table" | "kanban" | "analytics">("table");
+  // dashboard stat tile filter
+  const [statFilter, setStatFilter] = useState<'all' | 'edd_overdue' | 'due_today' | 'cna_addr' | 'resolved' | 'delivered'>('all');
   // pagination
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   // date filter (YYYY-MM-DD)
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
+
+  // latest email activity per waybill
+  const [emailStates, setEmailStates] = useState<Record<string, { dir: 'in' | 'out' | 'sys' | null; time: string | null }>>({});
+  // order mode
+  const [orderMode, setOrderMode] = useState<'date' | 'activity'>('date');
 
   // Per-column multi-select filters
   const [colFilters, setColFilters] = useState<Record<ColumnKey, string[]>>({
@@ -423,6 +430,7 @@ export default function NdrDashboard() {
       const data = await fetchNdr();
       setRows(data);
       setError(null);
+      try { await loadEmailStates(data); } catch {}
     } catch (e: any) {
       setError(e.message || String(e));
     } finally {
@@ -430,6 +438,32 @@ export default function NdrDashboard() {
       // Attempt auto-allocation once per session
       try { await autoAllocateOnce(); } catch {}
     }
+  }
+
+  async function loadEmailStates(list: NdrRow[]) {
+    const waybills = Array.from(new Set(list.map(r => String(r.waybill || '').trim()).filter(Boolean)));
+    if (waybills.length === 0) { setEmailStates({}); return; }
+    // Chunk IN filter to avoid very long URLs
+    const chunkSize = 50;
+    const map: Record<string, { dir: 'in'|'out'|'sys'|null; time: string|null }> = {};
+    for (let i=0;i<waybills.length;i+=chunkSize) {
+      const chunk = waybills.slice(i, i+chunkSize).map(w => encodeURIComponent(w)).join(',');
+      const url = `${SUPABASE_URL}/email_messages?select=waybill,created_at,timestamp,is_inbound,direction,message_kind&waybill=in.(${chunk})&order=timestamp.desc,nullslast&order=created_at.desc`;
+      const res = await fetch(url, { headers: SUPABASE_HEADERS });
+      if (!res.ok) continue;
+      const arr = await res.json();
+      for (const m of arr) {
+        const wb = String(m.waybill || '').trim();
+        if (!wb || map[wb]) continue; // first is latest due to order
+        const dir: 'in'|'out'|'sys'|null = (m.is_inbound === true) ? 'in'
+          : (String(m.direction || '').toLowerCase().startsWith('in') ? 'in'
+          : (String(m.direction || '').toLowerCase().startsWith('out') ? 'out'
+          : (String(m.message_kind || '').toLowerCase().includes('reply') ? 'out' : null)));
+        const time = m.timestamp || m.created_at || null;
+        map[wb] = { dir: dir || null, time };
+      }
+    }
+    setEmailStates(map);
   }
 
   // Reset allocation: clear assigned_to/assigned_at for current team members
@@ -571,9 +605,10 @@ export default function NdrDashboard() {
           __action_taken: notes.action_taken || "",
           __bucket_override: notes.bucket_override,
           __call_status: notes.call_status || (r.called === true ? "Yes" : r.called === false ? "No" : ""),
+          __email: emailStates[String(r.waybill || '').trim()] || { dir: null, time: null },
         } as any;
       }),
-    [rows]
+    [rows, emailStates]
   );
 
   const filtered = useMemo(() => {
@@ -584,6 +619,27 @@ export default function NdrDashboard() {
       if (courier !== "All" && courierName(r.courier_account) !== courier) return false;
       if (bucket !== "All" && r.__bucket !== bucket) return false;
       if (remark !== "All" && String(r.remark || "") !== remark) return false;
+      // stat tile filter
+      switch (statFilter) {
+        case 'edd_overdue':
+          if (r.__edd?.tone !== 'late') return false;
+          break;
+        case 'due_today':
+          if (r.__edd?.tone !== 'warn') return false;
+          break;
+        case 'cna_addr':
+          if (!(r.__bucket === 'CNA' || r.__bucket === 'Address Issue')) return false;
+          break;
+        case 'resolved':
+          if (String(r.status || '').toLowerCase() !== 'resolved') return false;
+          break;
+        case 'delivered':
+          if (r.__bucket !== 'Delivered') return false;
+          break;
+        case 'all':
+        default:
+          break;
+      }
       // per-column multi-select filters
       if (colFilters.order.length && !colFilters.order.includes(String(r.order_id ?? ''))) return false;
       if (colFilters.awb.length && !colFilters.awb.includes(String(r.waybill ?? ''))) return false;
@@ -615,7 +671,7 @@ export default function NdrDashboard() {
       const hay = [r.order_id, r.waybill, r.delivery_status, r.remark, r.location, r.__phone, r.__customer_issue, r.__action_taken].join(" ").toLowerCase();
       return hay.includes(QQ);
     });
-  }, [enriched, q, courier, bucket, remark, fromDate, toDate, colFilters, myOnly, currentUser]);
+  }, [enriched, q, courier, bucket, remark, fromDate, toDate, colFilters, myOnly, currentUser, statFilter]);
 
   // reset to first page when filters/search change
   useEffect(() => {
@@ -969,12 +1025,18 @@ export default function NdrDashboard() {
 
       {/* Stats */}
       <div className="max-w-7xl mx-auto px-4 grid sm:grid-cols-2 lg:grid-cols-6 gap-3">
-        <Stat label="Total Shipments" value={stats.total} icon={Info} />
-        <Stat label="EDD Overdue" value={stats.late} icon={AlertTriangle} tone="late" />
-        <Stat label="Due Today" value={stats.today} icon={Clock} tone="warn" />
-        <Stat label="CNA | Address Issues" value={`${stats.cna} | ${stats.addr}`} icon={Truck} />
-        <Stat label="Resolved" value={stats.resolved} icon={CheckCircle2} />
-        <Stat label="Delivered" value={stats.delivered} icon={Truck} />
+        <Stat label="Total Shipments" value={stats.total} icon={Info}
+          onClick={() => { setStatFilter('all'); setView('table'); }} active={statFilter==='all'} />
+        <Stat label="EDD Overdue" value={stats.late} icon={AlertTriangle} tone="late"
+          onClick={() => { setStatFilter('edd_overdue'); setView('table'); }} active={statFilter==='edd_overdue'} />
+        <Stat label="Due Today" value={stats.today} icon={Clock} tone="warn"
+          onClick={() => { setStatFilter('due_today'); setView('table'); }} active={statFilter==='due_today'} />
+        <Stat label="CNA | Address Issues" value={`${stats.cna} | ${stats.addr}`} icon={Truck}
+          onClick={() => { setStatFilter('cna_addr'); setView('table'); }} active={statFilter==='cna_addr'} />
+        <Stat label="Resolved" value={stats.resolved} icon={CheckCircle2}
+          onClick={() => { setStatFilter('resolved'); setView('table'); }} active={statFilter==='resolved'} />
+        <Stat label="Delivered" value={stats.delivered} icon={Truck}
+          onClick={() => { setStatFilter('delivered'); setView('table'); }} active={statFilter==='delivered'} />
       </div>
 
       {/* Content */}
