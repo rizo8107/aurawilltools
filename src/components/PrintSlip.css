@@ -58,6 +58,15 @@
   width: 70%;
 }
 
+/* Highlight note for India Post */
+.india-post-note {
+  background: #fffbe6;
+  border-top: 1px dashed #d4b106;
+  border-bottom: 1px dashed #d4b106;
+  font-weight: 600;
+  font-size: 14px;
+}
+
 .barcode-section {
   padding: 5px;
   text-align: center;

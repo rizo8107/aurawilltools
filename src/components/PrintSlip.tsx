@@ -31,6 +31,9 @@ export default function PrintSlip() {
       const date = parts[1];
       const orderId = parts[2];
       const qty = parts[3] || '1';
+      // Some feeds provide courier name at index 4 (e.g., "India post")
+      const courierRaw = (parts[4] || '').toString().trim();
+      const isIndiaPost = courierRaw.toLowerCase() === 'india post';
       const mode = parts[5];
       const toRaw = parts.slice(6).join(' ');
       const phoneMatch = toRaw.match(/Phone\s*=?\s*(\d+)/i);
@@ -56,6 +59,10 @@ export default function PrintSlip() {
         <div class="slip">
           <div class="slip-header">
             <div class="ship-to-label">SHIP TO:</div>
+            ${isIndiaPost ? `
+            <div class="detail-row india-post-note" style="margin-top:2px;">
+              <div class="detail-value">Speed Post Booked Under Advance Customer ID: 1790889211 @coimbatore HPO</div>
+            </div>` : ''}
             <div class="address">
               ${customerName ? `<div class="to-name">${customerName}</div>` : ''}
               ${streetLines.length ? `<div>${streetLines.join(', ')}</div>` : ''}
@@ -184,6 +191,12 @@ export default function PrintSlip() {
             }
             .detail-value {
               width: 70%;
+            }
+            .india-post-note {
+              background: #fffbe6;
+              border-top: 1px dashed #d4b106;
+              border-bottom: 1px dashed #d4b106;
+              font-weight: 700;
             }
             .barcode-section {
               padding: 5px;
