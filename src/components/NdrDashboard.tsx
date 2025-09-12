@@ -66,6 +66,45 @@ function fmtIST(dateLike?: string | number | Date | null) {
     return String(dateLike);
   }
 
+  // Load team members for current active team
+  async function loadTeamMembers() {
+    try {
+      const teamId = localStorage.getItem('ndr_active_team_id');
+      if (!teamId) { setTeamMembers([]); return; }
+      const memRes = await fetch(`${SUPABASE_URL}/team_members?team_id=eq.${teamId}&select=member&order=member.asc`, { headers: SUPABASE_HEADERS });
+      if (!memRes.ok) { setTeamMembers([]); return; }
+      const members: Array<{ member: string }>= await memRes.json();
+      setTeamMembers(members.map(m => m.member).filter(Boolean));
+    } catch {
+      setTeamMembers([]);
+    }
+  }
+
+  // Assign currently selected rows to a member
+  async function assignSelectedTo(member: string) {
+    const handle = String(member || '').trim();
+    if (!handle) { setToast({ type: 'error', message: 'Choose a team member' }); return; }
+    if (selectedIds.length === 0) { setToast({ type: 'error', message: 'No rows selected' }); return; }
+    try {
+      setAssigning(true);
+      const now = new Date().toISOString();
+      // Patch individually to avoid REST filter pitfalls
+      await Promise.all(selectedIds.map(id =>
+        fetch(`${SUPABASE_URL}/${SUPABASE_TABLE}?id=eq.${id}`, {
+          method: 'PATCH',
+          headers: SUPABASE_HEADERS,
+          body: JSON.stringify({ assigned_to: handle, assigned_at: now })
+        })
+      ));
+      setToast({ type: 'success', message: `Assigned ${selectedIds.length} row(s) to ${handle}` });
+      await load();
+    } catch (e: any) {
+      setToast({ type: 'error', message: e?.message || 'Assignment failed' });
+    } finally {
+      setAssigning(false);
+    }
+  }
+
   // Manually (re)allocate unassigned NDRs according to saved rule
   async function allocateNow(reset: boolean) {
     try {
@@ -397,6 +436,9 @@ export default function NdrDashboard() {
   const [repeatRow, setRepeatRow] = useState<NdrRow | null>(null);
   // selection for export
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
+  // team members for assignment
+  const [teamMembers, setTeamMembers] = useState<string[]>([]);
+  const [assigning, setAssigning] = useState(false);
   // save state + toast
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
@@ -590,7 +632,8 @@ export default function NdrDashboard() {
           __customer_issue: notes.customer_issue || "",
           __action_taken: notes.action_taken || "",
           __bucket_override: notes.bucket_override,
-          __call_status: notes.call_status || (r.called === true ? "Yes" : r.called === false ? "No" : ""),
+          // Only the explicit saved call status. If absent (null), keep empty string so 'Empty' filter matches.
+          __call_status: notes.call_status || "",
         } as any;
       }),
     [rows]
@@ -635,7 +678,7 @@ export default function NdrDashboard() {
         if (!colFilters.email.includes(emailVal)) return false;
       }
       if (colFilters.call.length) {
-        const callVal = String(r.__call_status || (r.called === true ? 'Yes' : r.called === false ? 'No' : '')) || '';
+        const callVal = String(r.__call_status || '');
         if (!colFilters.call.includes(callVal)) return false;
       }
       if (colFilters.edd.length && !colFilters.edd.includes(String(r.__edd?.label || '—'))) return false;
@@ -847,7 +890,9 @@ export default function NdrDashboard() {
       status: uniq((enriched as any[]).map((r: any) => r.delivery_status || '')),
       courier: uniq((enriched as any[]).map((r: any) => courierName(r.courier_account))),
       email: uniq((enriched as any[]).map((r: any) => ((r.email_sent ? 'Yes' : 'No')))),
-      call: uniq((enriched as any[]).map((r: any) => (r.__call_status || (r.called === true ? 'Yes' : r.called === false ? 'No' : '')))),
+      // Call status options are based only on the explicit saved status (notes.call_status),
+      // so 'Empty' truly reflects rows with no selected value in the UI.
+      call: Array.from(new Set((enriched as any[]).map((r: any) => (r.__call_status || '')))).map((x:any) => String(x)),
       edd: uniq((enriched as any[]).map((r: any) => (r.__edd?.label || '—'))),
     } as Record<ColumnKey, string[]>;
   }, [enriched]);
@@ -1328,6 +1373,48 @@ function TableView({ rows, onEdit: _onEdit, onQuickUpdate, total, page, pageSize
   type SortKey = 'date' | 'order' | 'awb' | 'status' | 'courier' | 'edd';
   const [sortKey, setSortKey] = useState<SortKey>('date');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
+  // assignment state (local to table)
+  const [assignMember, setAssignMember] = useState<string>('');
+  const [teamMembers, setTeamMembers] = useState<string[]>([]);
+  const [assigning, setAssigning] = useState(false);
+
+  useEffect(() => {
+    async function loadTeamMembersLocal() {
+      try {
+        const teamId = localStorage.getItem('ndr_active_team_id');
+        if (!teamId) { setTeamMembers([]); return; }
+        const memRes = await fetch(`${SUPABASE_URL}/team_members?team_id=eq.${teamId}&select=member&order=member.asc`, { headers: SUPABASE_HEADERS });
+        if (!memRes.ok) { setTeamMembers([]); return; }
+        const members: Array<{ member: string }>= await memRes.json();
+        setTeamMembers(members.map(m => m.member).filter(Boolean));
+      } catch {
+        setTeamMembers([]);
+      }
+    }
+    loadTeamMembersLocal();
+  }, []);
+
+  async function onAssignSelected() {
+    const handle = String(assignMember || '').trim();
+    if (!handle) return;
+    if (selectedIds.length === 0) return;
+    try {
+      setAssigning(true);
+      const now = new Date().toISOString();
+      await Promise.all(selectedIds.map(id =>
+        fetch(`${SUPABASE_URL}/${SUPABASE_TABLE}?id=eq.${id}`, {
+          method: 'PATCH',
+          headers: SUPABASE_HEADERS,
+          body: JSON.stringify({ assigned_to: handle, assigned_at: now })
+        })
+      ));
+      // No direct access to parent toast; rely on visual refresh by re-sorting list
+    } catch {
+      // swallow here; parent lacks toast in this scope
+    } finally {
+      setAssigning(false);
+    }
+  }
   const [tableFilter, setTableFilter] = useState('');
   const [openFilter, setOpenFilter] = useState<ColumnKey | null>(null);
   const [menuPos, setMenuPos] = useState<{ left: number; top: number } | null>(null);
@@ -1388,23 +1475,30 @@ function TableView({ rows, onEdit: _onEdit, onQuickUpdate, total, page, pageSize
     const clearAll = () => onChangeColumnFilter(colKey, []);
     return (
       <div className="w-64 max-h-80 overflow-auto rounded-xl bg-white shadow-lg ring-1 ring-slate-200 p-2" role="dialog" aria-label={`${title} filter`}>
-        <div className="flex items-center gap-2 px-2 py-1 text-xs text-slate-600">
-          <button className="px-2 py-1 rounded ring-1 ring-slate-200 hover:bg-slate-50" onClick={selectAll} title="Select all">Select All</button>
-          <button className="px-2 py-1 rounded ring-1 ring-slate-200 hover:bg-slate-50" onClick={clearAll} title="Clear selection">Clear</button>
+        <div className="flex items-center justify-between px-2 py-1">
+          <div className="text-xs font-medium text-slate-500">{title}</div>
+          <div className="flex items-center gap-1">
+            <button className="text-xs px-2 py-0.5 rounded ring-1 ring-slate-200 hover:bg-slate-50" onClick={selectAll} title="Select all">All</button>
+            <button className="text-xs px-2 py-0.5 rounded ring-1 ring-slate-200 hover:bg-slate-50" onClick={clearAll} title="Clear">Clear</button>
+          </div>
         </div>
-        <div className="px-2 py-1 text-xs text-slate-500">{title}</div>
-        <ul className="space-y-1">
-          {options.map((opt) => (
-            <li key={opt} className="flex items-center gap-2 px-2 py-1 hover:bg-slate-50 rounded">
-              <input
-                id={`${colKey}-${opt}`}
-                type="checkbox"
-                checked={allSelected ? true : selected.has(opt)}
-                onChange={() => toggleValue(opt)}
-              />
-              <label htmlFor={`${colKey}-${opt}`} className="text-sm truncate" title={opt}>{opt}</label>
-            </li>
-          ))}
+        <ul className="mt-1 space-y-1">
+          {options.map((opt) => {
+            const isEmpty = opt === '';
+            const display = isEmpty ? 'Empty' : opt;
+            const key = `${colKey}-${isEmpty ? 'empty' : opt}`;
+            return (
+              <li key={key} className="flex items-center gap-2 px-2">
+                <input
+                  id={key}
+                  type="checkbox"
+                  checked={allSelected ? true : selected.has(opt)}
+                  onChange={() => toggleValue(opt)}
+                />
+                <label htmlFor={key} className="text-sm truncate" title={display}>{display}</label>
+              </li>
+            );
+          })}
         </ul>
         <div className="flex justify-end gap-2 px-2 py-2">
           <button className="px-3 py-1 rounded-lg ring-1 ring-slate-200" onClick={() => setOpenFilter(null)} title="Close">OK</button>
@@ -1441,6 +1535,29 @@ function TableView({ rows, onEdit: _onEdit, onQuickUpdate, total, page, pageSize
           >
             <Download className="w-4 h-4" /> Export selected ({selectedIds.length})
           </button>
+          {/* Assign to team member */}
+          <div className="flex items-center gap-2 ring-1 ring-slate-200 rounded-xl px-2 py-1 bg-white">
+            <select
+              className="bg-transparent text-sm outline-none"
+              aria-label="Assign selected to team member"
+              title="Assign selected to team member"
+              value={assignMember}
+              onChange={(e) => setAssignMember(e.target.value)}
+            >
+              <option value="">Assign to…</option>
+              {teamMembers.map((m) => (
+                <option key={m} value={m}>{m}</option>
+              ))}
+            </select>
+            <button
+              className="px-3 py-1.5 rounded-lg ring-1 ring-slate-200 text-sm hover:bg-slate-50 disabled:opacity-50"
+              onClick={onAssignSelected}
+              disabled={!assignMember || selectedIds.length === 0 || assigning}
+              title={selectedIds.length === 0 ? 'Select rows first' : 'Assign selected rows'}
+            >
+              {assigning ? 'Assigning…' : 'Assign'}
+            </button>
+          </div>
           {selectedIds.length > 0 && (
             <button
               className="px-2 py-1 rounded-lg text-xs ring-1 ring-slate-200 hover:bg-slate-50"
@@ -1679,7 +1796,7 @@ function TableView({ rows, onEdit: _onEdit, onQuickUpdate, total, page, pageSize
                 </td>
                 <td>
                   <select
-                    value={r.__call_status || (r.called ? "Yes" : (r.called === false ? "No" : ""))}
+                    value={r.__call_status}
                     onClick={(e) => e.stopPropagation()}
                     onChange={async (e) => {
                       e.stopPropagation();
