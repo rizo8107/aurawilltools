@@ -30,6 +30,10 @@ export default function TeamAnalyticsPage() {
   });
   const [to, setTo] = useState<string>(() => toISODate(new Date()));
   const [loading, setLoading] = useState(false);
+  // Daily (previous day) snapshot
+  const [dailyLoading, setDailyLoading] = useState(false);
+  const [dailyRows, setDailyRows] = useState<Array<{ assigned_to: string | null; assigned_at: string | null; notes: string | null; courier_account?: string | null; email_sent?: boolean | null }>>([]);
+  const [dailyAgent, setDailyAgent] = useState<string>('All');
   const [ndrRows, setNdrRows] = useState<Array<{ assigned_to: string | null; assigned_at: string | null; status: string | null; notes: string | null; order_id?: number; waybill?: string | number; courier_account?: string | null; delivery_status?: string | null; email_sent?: boolean | null; called?: boolean | null }>>([]);
   const [activities, setActivities] = useState<Array<{ actor: string | null; action: string | null; created_at: string | null }>>([]);
   // table-like filters
@@ -81,6 +85,84 @@ export default function TeamAnalyticsPage() {
       const actArr = actRes.ok ? await actRes.json() : [];
       setActivities(Array.isArray(actArr) ? actArr : []);
     } finally { setLoading(false); }
+  }
+
+  // Load snapshot for the selected range (uses global From/To)
+  async function loadSnapshotRange() {
+    if (!teamId) { setDailyRows([]); return; }
+    setDailyLoading(true);
+    try {
+      const fromIso = `${from}T00:00:00`;
+      const toIso = `${to}T23:59:59.999`;
+      const url = `${SUPABASE_URL}/ndr?assigned_at=gte.${encodeURIComponent(fromIso)}&assigned_at=lte.${encodeURIComponent(toIso)}&select=assigned_to,assigned_at,notes,courier_account,email_sent&order=assigned_at.asc`;
+      const res = await fetch(url, { headers: SUPABASE_HEADERS });
+      const arr = res.ok ? await res.json() : [];
+      setDailyRows(Array.isArray(arr) ? arr : []);
+    } finally { setDailyLoading(false); }
+  }
+
+  useEffect(() => { loadSnapshotRange(); /* eslint-disable-line react-hooks/exhaustive-deps */ }, [teamId, from, to]);
+
+  // Derived daily metrics (agent-filtered)
+  const filteredDailyRows = useMemo(() => {
+    const sel = (dailyAgent || 'All').trim();
+    if (sel === 'All' || sel === '') return dailyRows;
+    return dailyRows.filter(r => (r.assigned_to || '').trim() === sel);
+  }, [dailyRows, dailyAgent]);
+
+  const prevDayAssignedCount = useMemo(() => filteredDailyRows.length, [filteredDailyRows]);
+  const dailyPartnerWise = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const r of filteredDailyRows) {
+      const key = courierName(r.courier_account || "");
+      if (!key || key === '—') continue;
+      m.set(key, (m.get(key) || 0) + 1);
+    }
+    return Array.from(m.entries()).sort((a,b)=>b[1]-a[1]);
+  }, [filteredDailyRows]);
+  const dailyAgentWise = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const r of filteredDailyRows) {
+      const key = (r.assigned_to || '').trim();
+      if (!key) continue;
+      m.set(key, (m.get(key) || 0) + 1);
+    }
+    return Array.from(m.entries()).sort((a,b)=>b[1]-a[1]);
+  }, [filteredDailyRows]);
+  const dailyRaisedWithPartner = useMemo(() => {
+    // Business rule: "Raised with Delivery partner" = Email sent to courier partner
+    return filteredDailyRows.reduce((acc, r) => acc + (r.email_sent === true ? 1 : 0), 0);
+  }, [filteredDailyRows]);
+
+  // Export filtered report as CSV
+  function exportReport() {
+    const rows = filteredDailyRows;
+    const headers = [
+      'assigned_to',
+      'assigned_at',
+      'courier_account',
+      'email_sent',
+      'notes'
+    ] as const;
+    const esc = (v: unknown) => {
+      if (v === null || v === undefined) return '';
+      const s = String(v).replace(/"/g, '""');
+      return /[",\n]/.test(s) ? `"${s}"` : s;
+    };
+    const csv = [
+      headers.join(','),
+      ...rows.map(r => headers.map(h => esc((r as any)[h])).join(','))
+    ].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const agentSlug = (dailyAgent && dailyAgent !== 'All') ? dailyAgent.replace(/\s+/g, '_') : 'all_agents';
+    a.download = `ndr_report_${from}_to_${to}_${agentSlug}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
   }
 
   useEffect(() => { loadData(); /* eslint-disable-line react-hooks/exhaustive-deps */ }, [teamId, from, to, members.length]);
@@ -313,6 +395,60 @@ export default function TeamAnalyticsPage() {
           >
             Switch User
           </button>
+        </div>
+      </div>
+
+      {/* Daily Report (Previous Day) */}
+      <div className="p-4 rounded-2xl ring-1 ring-slate-200 bg-white">
+        <div className="flex items-center justify-between mb-3">
+          <div className="font-semibold">Report (Selected Date Range)</div>
+          <div className="flex items-center gap-2">
+            <label className="text-xs text-slate-600">Agent
+              <select
+                className="ml-2 ring-1 ring-slate-200 rounded-lg px-2 py-1 text-sm"
+                value={dailyAgent}
+                onChange={(e)=>setDailyAgent(e.target.value)}
+                title="Filter report by agent"
+              >
+                <option>All</option>
+                {members.map(m => <option key={m.member} value={m.member}>{m.member}</option>)}
+              </select>
+            </label>
+            <button className="px-3 py-1.5 rounded-lg ring-1 ring-slate-200 text-sm hover:bg-slate-50" onClick={exportReport} title="Export report as CSV">Export CSV</button>
+            <button className="px-3 py-1.5 rounded-lg ring-1 ring-slate-200 text-sm hover:bg-slate-50" onClick={loadSnapshotRange} disabled={dailyLoading}>{dailyLoading ? 'Refreshing…' : 'Refresh'}</button>
+          </div>
+        </div>
+        <div className="grid gap-3 lg:grid-cols-4">
+          <div className="rounded-xl ring-1 ring-slate-200 p-3">
+            <div className="text-xs text-slate-500">Assigned count (range)</div>
+            <div className="text-2xl font-semibold mt-1">{prevDayAssignedCount}</div>
+          </div>
+          <div className="rounded-xl ring-1 ring-slate-200 p-3">
+            <div className="text-xs text-slate-500">Delivery partner wise (top)</div>
+            <div className="mt-2 space-y-1 max-h-40 overflow-auto">
+              {dailyPartnerWise.length === 0 ? <div className="text-sm text-slate-500">No data</div> : dailyPartnerWise.map(([k,v]) => (
+                <div key={k} className="flex items-center justify-between text-sm">
+                  <span>{k}</span>
+                  <span className="font-medium">{v}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="rounded-xl ring-1 ring-slate-200 p-3">
+            <div className="text-xs text-slate-500">Agent wise assigned</div>
+            <div className="mt-2 space-y-1 max-h-40 overflow-auto">
+              {dailyAgentWise.length === 0 ? <div className="text-sm text-slate-500">No data</div> : dailyAgentWise.map(([k,v]) => (
+                <div key={k} className="flex items-center justify-between text-sm">
+                  <span>{k}</span>
+                  <span className="font-medium">{v}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="rounded-xl ring-1 ring-slate-200 p-3">
+            <div className="text-xs text-slate-500">Raised with Delivery partner (emails sent)</div>
+            <div className="text-2xl font-semibold mt-1">{dailyRaisedWithPartner}</div>
+          </div>
         </div>
       </div>
 
