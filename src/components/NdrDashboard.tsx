@@ -66,6 +66,91 @@ function fmtIST(dateLike?: string | number | Date | null) {
     return String(dateLike);
   }
 
+  // Update allocation: assign only untouched (currently unassigned) records
+  async function updateAllocation() {
+    try {
+      const teamId = localStorage.getItem('ndr_active_team_id');
+      if (!teamId) { setToast({ type: 'error', message: 'Select a team first' }); return; }
+
+      // 1) Load team members
+      const memRes = await fetch(`${SUPABASE_URL}/team_members?team_id=eq.${teamId}&select=id,member&order=member.asc`, { headers: SUPABASE_HEADERS });
+      if (!memRes.ok) { setToast({ type: 'error', message: 'Failed to load team members' }); return; }
+      const members: Array<{ id: number; member: string }> = await memRes.json();
+      const memberHandles = members.map(m => m.member).filter(Boolean);
+      if (memberHandles.length === 0) { setToast({ type: 'error', message: 'No members in team' }); return; }
+
+      // 2) Load allocation rule
+      let rule: any = { mode: 'percentage', percents: [] as Array<{ member: string; percent: number }> };
+      try {
+        const ruleRes = await fetch(`${SUPABASE_URL}/ndr_allocation_rules?team_id=eq.${teamId}&select=rule&limit=1`, { headers: SUPABASE_HEADERS });
+        if (ruleRes.ok) {
+          const [row] = await ruleRes.json();
+          if (row?.rule) rule = row.rule;
+        }
+      } catch {}
+
+      // 3) Build schedule from rule or round-robin
+      function buildSchedule(): string[] {
+        if (rule?.mode === 'percentage' && Array.isArray(rule.percents) && rule.percents.length) {
+          const expanded: string[] = [];
+          const normHandles = memberHandles.map(h => ({ raw: h, norm: String(h || '').trim().toLowerCase() }));
+          for (const p of rule.percents) {
+            const nameNorm = String(p.member || '').trim().toLowerCase();
+            const pct = Math.max(0, Math.round(Number(p.percent) || 0));
+            if (!nameNorm || pct <= 0) continue;
+            const hit = normHandles.find(h => h.norm === nameNorm);
+            const actual = hit?.raw;
+            if (!actual) continue;
+            for (let i = 0; i < pct; i++) expanded.push(actual);
+          }
+          if (expanded.length) return expanded;
+        }
+        return memberHandles;
+      }
+      const schedule = buildSchedule();
+      if (schedule.length === 0) { setToast({ type: 'error', message: 'No schedule available' }); return; }
+
+      // 4) Fetch unassigned NDR ids
+      const unassignedRes = await fetch(`${SUPABASE_URL}/${SUPABASE_TABLE}?assigned_to=is.null&select=id&order=event_time.desc`, { headers: SUPABASE_HEADERS });
+      if (!unassignedRes.ok) { setToast({ type: 'error', message: 'Failed to fetch unassigned' }); return; }
+      const unassigned: Array<{ id: number }> = await unassignedRes.json();
+      if (!Array.isArray(unassigned) || unassigned.length === 0) { setToast({ type: 'success', message: 'No untouched records to assign' }); return; }
+
+      // 5) Assign in batches
+      const now = new Date().toISOString();
+      const batchSize = 25;
+      for (let offset = 0; offset < unassigned.length; offset += batchSize) {
+        const chunk = unassigned.slice(offset, offset + batchSize);
+        await Promise.all(
+          chunk.map(async (row, idx) => {
+            const assignee = schedule[(offset + idx) % schedule.length];
+            const url = `${SUPABASE_URL}/${SUPABASE_TABLE}?id=eq.${row.id}`;
+            await fetch(url, { method: 'PATCH', headers: SUPABASE_HEADERS, body: JSON.stringify({ assigned_to: assignee, assigned_at: now }) });
+            // Log assignment event per lead
+            try {
+              await fetch(`${SUPABASE_URL}/ndr_user_activity`, {
+                method: 'POST',
+                headers: SUPABASE_HEADERS,
+                body: JSON.stringify({
+                  order_id: null,
+                  waybill: null,
+                  actor: localStorage.getItem('ndr_user') || '',
+                  action: 'assign',
+                  details: { from: null, to: assignee, via: 'autoAllocateOnce' },
+                }),
+              });
+            } catch {}
+          })
+        );
+      }
+
+      setToast({ type: 'success', message: `Allocated ${unassigned.length} untouched record(s)` });
+      await load();
+    } catch (e:any) {
+      setToast({ type: 'error', message: e?.message || 'Update allocation failed' });
+    }
+  }
+
   // Load team members for current active team
   async function loadTeamMembers() {
     try {
@@ -398,10 +483,13 @@ export default function NdrDashboard() {
   const [courier, setCourier] = useState("All");
   const [bucket, setBucket] = useState("All");
   const [remark, setRemark] = useState("All");
-  const [view, setView] = useState<"table" | "analytics" | "emails">("table");
+  const [view, setView] = useState<"table" | "analytics" | "emails" | "activity">("table");
   // Emails feed (inbound/outbound across orders)
   const [emailFeed, setEmailFeed] = useState<any[]>([]);
   const [emailFeedLoading, setEmailFeedLoading] = useState<boolean>(false);
+  // Activity feed (assignment and other events)
+  const [activityFeed, setActivityFeed] = useState<any[]>([]);
+  const [activityLoading, setActivityLoading] = useState(false);
   // dashboard stat tile filter
   const [statFilter, setStatFilter] = useState<'all' | 'edd_overdue' | 'due_today' | 'cna_addr' | 'resolved' | 'delivered'>('all');
   // pagination
@@ -507,6 +595,20 @@ export default function NdrDashboard() {
       await Promise.all(handles.map(h =>
         fetch(`${SUPABASE_URL}/${SUPABASE_TABLE}?assigned_to=eq.${encodeURIComponent(h)}`, { method: 'PATCH', headers: SUPABASE_HEADERS, body: JSON.stringify({ assigned_to: null, assigned_at: null }) })
       ));
+      // Log reset event
+      try {
+        await fetch(`${SUPABASE_URL}/ndr_user_activity`, {
+          method: 'POST',
+          headers: SUPABASE_HEADERS,
+          body: JSON.stringify({
+            order_id: null,
+            waybill: null,
+            actor: localStorage.getItem('ndr_user') || '',
+            action: 'reset_allocation',
+            details: { team_id: Number(teamId) }
+          }),
+        });
+      } catch {}
       setToast({ type: 'success', message: 'Allocation reset for team' });
       await load();
     } catch (e:any) {
@@ -565,7 +667,7 @@ export default function NdrDashboard() {
       if (schedule.length === 0) return;
 
       // 4) Fetch unassigned NDR ids (limit to a sane batch to avoid long ops)
-      const unassignedRes = await fetch(`${SUPABASE_URL}/${SUPABASE_TABLE}?assigned_to=is.null&select=id&order=event_time.desc`, { headers: SUPABASE_HEADERS });
+      const unassignedRes = await fetch(`${SUPABASE_URL}/${SUPABASE_TABLE}?assigned_to=is.null&select=id,order_id,waybill&order=event_time.desc`, { headers: SUPABASE_HEADERS });
       if (!unassignedRes.ok) return;
       const unassigned: Array<{ id: number }> = await unassignedRes.json();
       if (!Array.isArray(unassigned) || unassigned.length === 0) { localStorage.setItem('ndr_auto_alloc_done', '1'); return; }
@@ -576,10 +678,28 @@ export default function NdrDashboard() {
       for (let offset = 0; offset < unassigned.length; offset += batchSize) {
         const chunk = unassigned.slice(offset, offset + batchSize);
         await Promise.all(
-          chunk.map((row, idx) => {
+          chunk.map(async (row: any, idx) => {
             const assignee = schedule[(offset + idx) % schedule.length];
             const url = `${SUPABASE_URL}/${SUPABASE_TABLE}?id=eq.${row.id}`;
-            return fetch(url, { method: 'PATCH', headers: SUPABASE_HEADERS, body: JSON.stringify({ assigned_to: assignee, assigned_at: now }) });
+            await fetch(url, { method: 'PATCH', headers: SUPABASE_HEADERS, body: JSON.stringify({ assigned_to: assignee, assigned_at: now }) });
+            // Log per-lead assignment with explicit columns
+            try {
+              await fetch(`${SUPABASE_URL}/ndr_user_activity`, {
+                method: 'POST',
+                headers: SUPABASE_HEADERS,
+                body: JSON.stringify({
+                  ndr_id: row.id,
+                  order_id: row.order_id ?? null,
+                  waybill: row.waybill != null ? String(row.waybill) : null,
+                  actor: localStorage.getItem('ndr_user') || '',
+                  action: 'assign',
+                  from_member: null,
+                  to_member: assignee,
+                  team_id: Number(localStorage.getItem('ndr_active_team_id') || 0) || null,
+                  details: { via: 'autoAllocateOnce' },
+                }),
+              });
+            } catch {}
           })
         );
       }
@@ -812,6 +932,26 @@ export default function NdrDashboard() {
     if (view === 'emails') {
       loadEmailFeed();
     }
+  }, [view]);
+
+  // Load activity feed when Activity view is open
+  async function loadActivity() {
+    try {
+      setActivityLoading(true);
+      // Fetch recent assignment-related events
+      const q = encodeURIComponent("assign,reassign,unassign,reset_allocation,auto_assign,call_status_update");
+      const url = `${SUPABASE_URL}/ndr_user_activity?select=*&order=created_at.desc&action=in.(${q})`;
+      const res = await fetch(url, { headers: SUPABASE_HEADERS });
+      const data = res.ok ? await res.json() : [];
+      setActivityFeed(Array.isArray(data) ? data : []);
+    } catch {
+      setActivityFeed([]);
+    } finally {
+      setActivityLoading(false);
+    }
+  }
+  useEffect(() => {
+    if (view === 'activity') loadActivity();
   }, [view]);
 
   // Build CSV from given rows
@@ -1075,10 +1215,19 @@ export default function NdrDashboard() {
             >
               <span className="text-xs">Reset Allocation</span>
             </button>
+            <button
+              type="button"
+              title="Update allocation (assign untouched only)"
+              onClick={async () => { try { localStorage.removeItem('ndr_auto_alloc_done'); await autoAllocateOnce(); } catch {} }}
+              className="inline-flex items-center gap-2 rounded-xl px-2.5 py-1.5 ring-1 ring-emerald-300 text-emerald-900 bg-emerald-50 hover:bg-emerald-100"
+            >
+              <span className="text-xs">Update Allocation</span>
+            </button>
             <div className="flex items-center gap-1.5 rounded-xl ring-1 ring-slate-200 px-1 py-1">
               <button onClick={() => setView('table')} className={classNames('px-2.5 py-1 rounded-lg text-sm', view === 'table' ? 'bg-slate-100' : 'hover:bg-slate-50')}>Table</button>
               <button onClick={() => setView('emails')} className={classNames('px-2.5 py-1 rounded-lg text-sm', view === 'emails' ? 'bg-slate-100' : 'hover:bg-slate-50')}>Emails</button>
               <button onClick={() => setView('analytics')} className={classNames('px-2.5 py-1 rounded-lg text-sm', view === 'analytics' ? 'bg-slate-100' : 'hover:bg-slate-50')}>Analytics</button>
+              <button onClick={() => setView('activity')} className={classNames('px-2.5 py-1 rounded-lg text-sm', view === 'activity' ? 'bg-slate-100' : 'hover:bg-slate-50')}>Activity</button>
             </div>
           </div>
         </div>
@@ -1239,6 +1388,47 @@ export default function NdrDashboard() {
           </>
         ) : view === "emails" ? (
           <EmailsView items={emailFeed} loading={emailFeedLoading} onOpenOrder={(orderId, awb) => openOrderFromEmail(orderId, awb)} />
+        ) : view === "activity" ? (
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="text-lg font-semibold">Activity</div>
+              <button className="px-3 py-1.5 rounded-lg ring-1 ring-slate-200 text-sm hover:bg-slate-50" onClick={loadActivity} title="Refresh activity">Refresh</button>
+            </div>
+            {activityLoading ? (
+              <div className="p-6 text-center text-slate-500">Loading activity…</div>
+            ) : (
+              <div className="overflow-auto rounded-2xl ring-1 ring-slate-200">
+                <table className="min-w-full text-sm">
+                  <thead className="bg-slate-50 text-left">
+                    <tr className="*:px-3 *:py-2 *:whitespace-nowrap">
+                      <th>Date (IST)</th>
+                      <th>Actor</th>
+                      <th>Action</th>
+                      <th>From → To</th>
+                      <th>Order</th>
+                      <th>AWB</th>
+                      <th>Details</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y">
+                    {activityFeed.map((a: any) => (
+                      <tr key={a.id} className="*:px-3 *:py-2">
+                        <td>{fmtIST(a.created_at)}</td>
+                        <td>{a.actor || '—'}</td>
+                        <td>{a.action}</td>
+                        <td>{[a.from_member || '—', a.to_member || '—'].join(' → ')}</td>
+                        <td>{a.order_id ?? '—'}</td>
+                        <td className="font-mono">{a.waybill ?? '—'}</td>
+                        <td className="max-w-[360px] truncate" title={typeof a.details === 'object' ? JSON.stringify(a.details) : String(a.details)}>
+                          {typeof a.details === 'object' ? JSON.stringify(a.details) : String(a.details)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
         ) : (
           <AnalyticsView rows={filtered as any[]} allRows={enriched as any[]} />
         )}
@@ -1408,7 +1598,23 @@ function TableView({ rows, onEdit: _onEdit, onQuickUpdate, total, page, pageSize
           body: JSON.stringify({ assigned_to: handle, assigned_at: now })
         })
       ));
-      // No direct access to parent toast; rely on visual refresh by re-sorting list
+      // Log a single bulk assignment event
+      try {
+        await fetch(`${SUPABASE_URL}/ndr_user_activity`, {
+          method: 'POST',
+          headers: SUPABASE_HEADERS,
+          body: JSON.stringify({
+            order_id: null,
+            waybill: null,
+            actor: localStorage.getItem('ndr_user') || '',
+            action: 'assign',
+            from_member: null,
+            to_member: handle,
+            team_id: Number(localStorage.getItem('ndr_active_team_id') || 0) || null,
+            details: { to: handle, count: selectedIds.length, via: 'bulk_assign' },
+          }),
+        });
+      } catch {}
     } catch {
       // swallow here; parent lacks toast in this scope
     } finally {
