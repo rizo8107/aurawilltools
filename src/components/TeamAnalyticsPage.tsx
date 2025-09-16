@@ -142,17 +142,35 @@ export default function TeamAnalyticsPage() {
       'assigned_at',
       'courier_account',
       'email_sent',
-      'notes'
+      'phone',
+      'customer_issue',
+      'action_taken',
+      'call_status',
+      'notes_raw'
     ] as const;
     const esc = (v: unknown) => {
       if (v === null || v === undefined) return '';
       const s = String(v).replace(/"/g, '""');
       return /[",\n]/.test(s) ? `"${s}"` : s;
     };
-    const csv = [
-      headers.join(','),
-      ...rows.map(r => headers.map(h => esc((r as any)[h])).join(','))
-    ].join('\n');
+    const csvRows: string[] = [];
+    csvRows.push(headers.join(','));
+    for (const r of rows) {
+      const n = parseNotes(r.notes || null) as Record<string, unknown>;
+      const record: Record<string, unknown> = {
+        assigned_to: r.assigned_to ?? '',
+        assigned_at: r.assigned_at ?? '',
+        courier_account: r.courier_account ?? '',
+        email_sent: r.email_sent === true ? 'TRUE' : r.email_sent === false ? 'FALSE' : '',
+        phone: n?.phone ?? '',
+        customer_issue: n?.customer_issue ?? '',
+        action_taken: n?.action_taken ?? '',
+        call_status: n?.call_status ?? '',
+        notes_raw: r.notes ?? ''
+      };
+      csvRows.push(headers.map(h => esc(record[h])).join(','));
+    }
+    const csv = csvRows.join('\n');
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');

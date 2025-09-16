@@ -46,6 +46,7 @@ export type NdrRow = {
   Partner_EDD: string | null;
   assigned_to?: string | null;
   assigned_at?: string | null;
+  final_status?: string | null;
 };
 
 // ---- Helpers ----------------------------------------------
@@ -64,206 +65,6 @@ function fmtIST(dateLike?: string | number | Date | null) {
     return new Date(dateLike).toLocaleString("en-IN", IST_OPTIONS);
   } catch {
     return String(dateLike);
-  }
-
-  // Update allocation: assign only untouched (currently unassigned) records
-  async function updateAllocation() {
-    try {
-      const teamId = localStorage.getItem('ndr_active_team_id');
-      if (!teamId) { setToast({ type: 'error', message: 'Select a team first' }); return; }
-
-      // 1) Load team members
-      const memRes = await fetch(`${SUPABASE_URL}/team_members?team_id=eq.${teamId}&select=id,member&order=member.asc`, { headers: SUPABASE_HEADERS });
-      if (!memRes.ok) { setToast({ type: 'error', message: 'Failed to load team members' }); return; }
-      const members: Array<{ id: number; member: string }> = await memRes.json();
-      const memberHandles = members.map(m => m.member).filter(Boolean);
-      if (memberHandles.length === 0) { setToast({ type: 'error', message: 'No members in team' }); return; }
-
-      // 2) Load allocation rule
-      let rule: any = { mode: 'percentage', percents: [] as Array<{ member: string; percent: number }> };
-      try {
-        const ruleRes = await fetch(`${SUPABASE_URL}/ndr_allocation_rules?team_id=eq.${teamId}&select=rule&limit=1`, { headers: SUPABASE_HEADERS });
-        if (ruleRes.ok) {
-          const [row] = await ruleRes.json();
-          if (row?.rule) rule = row.rule;
-        }
-      } catch {}
-
-      // 3) Build schedule from rule or round-robin
-      function buildSchedule(): string[] {
-        if (rule?.mode === 'percentage' && Array.isArray(rule.percents) && rule.percents.length) {
-          const expanded: string[] = [];
-          const normHandles = memberHandles.map(h => ({ raw: h, norm: String(h || '').trim().toLowerCase() }));
-          for (const p of rule.percents) {
-            const nameNorm = String(p.member || '').trim().toLowerCase();
-            const pct = Math.max(0, Math.round(Number(p.percent) || 0));
-            if (!nameNorm || pct <= 0) continue;
-            const hit = normHandles.find(h => h.norm === nameNorm);
-            const actual = hit?.raw;
-            if (!actual) continue;
-            for (let i = 0; i < pct; i++) expanded.push(actual);
-          }
-          if (expanded.length) return expanded;
-        }
-        return memberHandles;
-      }
-      const schedule = buildSchedule();
-      if (schedule.length === 0) { setToast({ type: 'error', message: 'No schedule available' }); return; }
-
-      // 4) Fetch unassigned NDR ids
-      const unassignedRes = await fetch(`${SUPABASE_URL}/${SUPABASE_TABLE}?assigned_to=is.null&select=id&order=event_time.desc`, { headers: SUPABASE_HEADERS });
-      if (!unassignedRes.ok) { setToast({ type: 'error', message: 'Failed to fetch unassigned' }); return; }
-      const unassigned: Array<{ id: number }> = await unassignedRes.json();
-      if (!Array.isArray(unassigned) || unassigned.length === 0) { setToast({ type: 'success', message: 'No untouched records to assign' }); return; }
-
-      // 5) Assign in batches
-      const now = new Date().toISOString();
-      const batchSize = 25;
-      for (let offset = 0; offset < unassigned.length; offset += batchSize) {
-        const chunk = unassigned.slice(offset, offset + batchSize);
-        await Promise.all(
-          chunk.map(async (row, idx) => {
-            const assignee = schedule[(offset + idx) % schedule.length];
-            const url = `${SUPABASE_URL}/${SUPABASE_TABLE}?id=eq.${row.id}`;
-            await fetch(url, { method: 'PATCH', headers: SUPABASE_HEADERS, body: JSON.stringify({ assigned_to: assignee, assigned_at: now }) });
-            // Log assignment event per lead
-            try {
-              await fetch(`${SUPABASE_URL}/ndr_user_activity`, {
-                method: 'POST',
-                headers: SUPABASE_HEADERS,
-                body: JSON.stringify({
-                  order_id: null,
-                  waybill: null,
-                  actor: localStorage.getItem('ndr_user') || '',
-                  action: 'assign',
-                  details: { from: null, to: assignee, via: 'autoAllocateOnce' },
-                }),
-              });
-            } catch {}
-          })
-        );
-      }
-
-      setToast({ type: 'success', message: `Allocated ${unassigned.length} untouched record(s)` });
-      await load();
-    } catch (e:any) {
-      setToast({ type: 'error', message: e?.message || 'Update allocation failed' });
-    }
-  }
-
-  // Load team members for current active team
-  async function loadTeamMembers() {
-    try {
-      const teamId = localStorage.getItem('ndr_active_team_id');
-      if (!teamId) { setTeamMembers([]); return; }
-      const memRes = await fetch(`${SUPABASE_URL}/team_members?team_id=eq.${teamId}&select=member&order=member.asc`, { headers: SUPABASE_HEADERS });
-      if (!memRes.ok) { setTeamMembers([]); return; }
-      const members: Array<{ member: string }>= await memRes.json();
-      setTeamMembers(members.map(m => m.member).filter(Boolean));
-    } catch {
-      setTeamMembers([]);
-    }
-  }
-
-  // Assign currently selected rows to a member
-  async function assignSelectedTo(member: string) {
-    const handle = String(member || '').trim();
-    if (!handle) { setToast({ type: 'error', message: 'Choose a team member' }); return; }
-    if (selectedIds.length === 0) { setToast({ type: 'error', message: 'No rows selected' }); return; }
-    try {
-      setAssigning(true);
-      const now = new Date().toISOString();
-      // Patch individually to avoid REST filter pitfalls
-      await Promise.all(selectedIds.map(id =>
-        fetch(`${SUPABASE_URL}/${SUPABASE_TABLE}?id=eq.${id}`, {
-          method: 'PATCH',
-          headers: SUPABASE_HEADERS,
-          body: JSON.stringify({ assigned_to: handle, assigned_at: now })
-        })
-      ));
-      setToast({ type: 'success', message: `Assigned ${selectedIds.length} row(s) to ${handle}` });
-      await load();
-    } catch (e: any) {
-      setToast({ type: 'error', message: e?.message || 'Assignment failed' });
-    } finally {
-      setAssigning(false);
-    }
-  }
-
-  // Manually (re)allocate unassigned NDRs according to saved rule
-  async function allocateNow(reset: boolean) {
-    try {
-      const teamId = localStorage.getItem('ndr_active_team_id');
-      if (!teamId) { setToast({ type: 'error', message: 'Select a team first' }); return; }
-      // Load team members
-      const memRes = await fetch(`${SUPABASE_URL}/team_members?team_id=eq.${teamId}&select=id,member&order=member.asc`, { headers: SUPABASE_HEADERS });
-      if (!memRes.ok) { setToast({ type: 'error', message: 'Failed to load team members' }); return; }
-      const members: Array<{ id: number; member: string }> = await memRes.json();
-      const memberHandles = members.map(m => m.member).filter(Boolean);
-      if (memberHandles.length === 0) { setToast({ type: 'error', message: 'No members in team' }); return; }
-
-      // Load allocation rule
-      let rule: any = { mode: 'percentage', percents: [] as Array<{ member: string; percent: number }> };
-      try {
-        const ruleRes = await fetch(`${SUPABASE_URL}/ndr_allocation_rules?team_id=eq.${teamId}&select=rule&limit=1`, { headers: SUPABASE_HEADERS });
-        if (ruleRes.ok) {
-          const [row] = await ruleRes.json();
-          if (row?.rule) rule = row.rule;
-        }
-      } catch {}
-
-      function buildSchedule(): string[] {
-        if (rule?.mode === 'percentage' && Array.isArray(rule.percents) && rule.percents.length) {
-          const expanded: string[] = [];
-          const normHandles = memberHandles.map(h => ({ raw: h, norm: String(h || '').trim().toLowerCase() }));
-          for (const p of rule.percents) {
-            const nameNorm = String(p.member || '').trim().toLowerCase();
-            const pct = Math.max(0, Math.round(Number(p.percent) || 0));
-            if (!nameNorm || pct <= 0) continue;
-            const hit = normHandles.find(h => h.norm === nameNorm);
-            const actual = hit?.raw;
-            if (!actual) continue;
-            for (let i = 0; i < pct; i++) expanded.push(actual);
-          }
-          if (expanded.length) return expanded;
-        }
-        return memberHandles;
-      }
-      const schedule = buildSchedule();
-
-      if (reset) {
-        await Promise.all(
-          memberHandles.map(h =>
-            fetch(`${SUPABASE_URL}/${SUPABASE_TABLE}?assigned_to=eq.${encodeURIComponent(h)}`, { method: 'PATCH', headers: SUPABASE_HEADERS, body: JSON.stringify({ assigned_to: null, assigned_at: null }) })
-          )
-        );
-      }
-
-      const unassignedRes = await fetch(`${SUPABASE_URL}/${SUPABASE_TABLE}?assigned_to=is.null&select=id&order=event_time.desc`, { headers: SUPABASE_HEADERS });
-      if (!unassignedRes.ok) { setToast({ type: 'error', message: 'Failed to fetch unassigned' }); return; }
-      const unassigned: Array<{ id: number }> = await unassignedRes.json();
-      if (!Array.isArray(unassigned) || unassigned.length === 0) {
-        setToast({ type: 'success', message: 'No unassigned NDRs found' });
-        await load();
-        return;
-      }
-      const now = new Date().toISOString();
-      const batchSize = 25;
-      for (let offset = 0; offset < unassigned.length; offset += batchSize) {
-        const chunk = unassigned.slice(offset, offset + batchSize);
-        await Promise.all(
-          chunk.map((r, idx) => {
-            const assignee = schedule[(offset + idx) % schedule.length];
-            const url = `${SUPABASE_URL}/${SUPABASE_TABLE}?id=eq.${r.id}`;
-            return fetch(url, { method: 'PATCH', headers: SUPABASE_HEADERS, body: JSON.stringify({ assigned_to: assignee, assigned_at: now }) });
-          })
-        );
-      }
-      setToast({ type: 'success', message: reset ? 'Reset and re-allocated' : 'Re-allocated unassigned' });
-      await load();
-    } catch (e: any) {
-      setToast({ type: 'error', message: e?.message || 'Allocation failed' });
-    }
   }
 }
 
@@ -375,6 +176,17 @@ const CALL_STATUS_OPTIONS = [
   "Asked to call later",
   "Wrong Number",
   "Invalid Number",
+];
+
+// Final status options for resolution
+const FINAL_STATUS_OPTIONS = [
+  "Delivered",
+  "Fake delivery",
+  "Returned",
+  "Refund",
+  "Damage",
+  "Invalid Number",
+  "Address/Number issue",
 ];
 
 function Pill({ tone, label }: { tone: "ok" | "warn" | "late" | "na"; label: string }) {
@@ -969,6 +781,7 @@ export default function NdrDashboard() {
       "EDD",
       "Remarks",
       "Location",
+      "Final Status",
     ];
     const lines = rowsToExport.map((r: any) =>
       [
@@ -984,6 +797,7 @@ export default function NdrDashboard() {
         eddStatus(r.Partner_EDD).label,
         r.remark || "",
         r.location || "",
+        r.final_status || "",
       ]
         .map((x) => `"${String(x ?? "").replace(/"/g, '""')}"`)
         .join(",")
@@ -1564,25 +1378,110 @@ function TableView({ rows, onEdit: _onEdit, onQuickUpdate, total, page, pageSize
   const [sortKey, setSortKey] = useState<SortKey>('date');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   // assignment state (local to table)
-  const [assignMember, setAssignMember] = useState<string>('');
   const [teamMembers, setTeamMembers] = useState<string[]>([]);
-  const [assigning, setAssigning] = useState(false);
+  const [assignMember, setAssignMember] = useState<string>('');
+  const [assigning, setAssigning] = useState<boolean>(false);
+  const [showPctAssign, setShowPctAssign] = useState<boolean>(false);
+  const [pctValues, setPctValues] = useState<Record<string, number>>({});
+
+  // Load team members for active team into local state
+  async function loadTeamMembersLocal() {
+    try {
+      const teamId = localStorage.getItem('ndr_active_team_id');
+      if (!teamId) { setTeamMembers([]); return; }
+      const memRes = await fetch(`${SUPABASE_URL}/team_members?team_id=eq.${teamId}&select=member&order=member.asc`, { headers: SUPABASE_HEADERS });
+      if (!memRes.ok) { setTeamMembers([]); return; }
+      const members: Array<{ member: string }>= await memRes.json();
+      setTeamMembers(members.map(m => m.member).filter(Boolean));
+    } catch {
+      setTeamMembers([]);
+    }
+  }
 
   useEffect(() => {
-    async function loadTeamMembersLocal() {
-      try {
-        const teamId = localStorage.getItem('ndr_active_team_id');
-        if (!teamId) { setTeamMembers([]); return; }
-        const memRes = await fetch(`${SUPABASE_URL}/team_members?team_id=eq.${teamId}&select=member&order=member.asc`, { headers: SUPABASE_HEADERS });
-        if (!memRes.ok) { setTeamMembers([]); return; }
-        const members: Array<{ member: string }>= await memRes.json();
-        setTeamMembers(members.map(m => m.member).filter(Boolean));
-      } catch {
-        setTeamMembers([]);
-      }
-    }
     loadTeamMembersLocal();
   }, []);
+
+  // Percentage assignment helpers (scoped to TableView)
+  function openPctPanel() {
+    const members = teamMembers.filter(Boolean);
+    if (members.length === 0) return;
+    const per = Math.floor(100 / members.length);
+    const map: Record<string, number> = {};
+    members.forEach(m => { map[m] = per; });
+    let sum = members.reduce((acc, m) => acc + map[m], 0);
+    let i = 0;
+    while (sum < 100) { map[members[i % members.length]] += 1; sum++; i++; }
+    setPctValues(map);
+    setShowPctAssign(true);
+  }
+
+  function updatePct(member: string, val: number) {
+    setPctValues(prev => ({ ...prev, [member]: Math.max(0, Math.min(100, Math.round(val))) }));
+  }
+
+  function validatePctTotal(): { ok: boolean; total: number } {
+    const total = Object.values(pctValues).reduce((a: number, b: number) => a + (Number.isFinite(b) ? b : 0), 0);
+    return { ok: total === 100, total };
+  }
+
+  async function onAssignByPercentages() {
+    const members = teamMembers.filter(Boolean);
+    const n = selectedIds.length;
+    if (members.length === 0 || n === 0) return;
+    // Largest remainder method
+    const ideal = members.map(m => ({ m, x: ((pctValues[m] ?? 0) / 100) * n }));
+    const base = ideal.map(o => ({ m: o.m, cnt: Math.floor(o.x), frac: o.x - Math.floor(o.x) }));
+    const assignedCount = base.reduce((acc, o) => acc + o.cnt, 0);
+    const need = Math.max(0, n - assignedCount);
+    base.sort((a, b) => b.frac - a.frac);
+    for (let i = 0; i < need; i++) base[i % base.length].cnt += 1;
+    // Build round-robin schedule from buckets
+    const buckets: Record<string, number> = {};
+    base.forEach(o => { buckets[o.m] = o.cnt; });
+    const schedule: string[] = [];
+    let made = 0;
+    while (made < n) {
+      for (const m of members) {
+        if ((buckets[m] ?? 0) > 0) {
+          schedule.push(m);
+          buckets[m] = (buckets[m] ?? 0) - 1;
+          made++;
+          if (made >= n) break;
+        }
+      }
+      if (members.every(m => (buckets[m] ?? 0) <= 0)) break;
+    }
+    try {
+      setAssigning(true);
+      const now = new Date().toISOString();
+      await Promise.all(selectedIds.map((id, idx) =>
+        fetch(`${SUPABASE_URL}/${SUPABASE_TABLE}?id=eq.${id}`, {
+          method: 'PATCH',
+          headers: SUPABASE_HEADERS,
+          body: JSON.stringify({ assigned_to: schedule[idx] || members[idx % members.length], assigned_at: now })
+        })
+      ));
+      // Log single bulk event
+      try {
+        await fetch(`${SUPABASE_URL}/ndr_user_activity`, {
+          method: 'POST',
+          headers: SUPABASE_HEADERS,
+          body: JSON.stringify({
+            order_id: null,
+            waybill: null,
+            actor: localStorage.getItem('ndr_user') || '',
+            action: 'assign_percentages',
+            team_id: Number(localStorage.getItem('ndr_active_team_id') || 0) || null,
+            details: { count: selectedIds.length, percents: pctValues }
+          }),
+        });
+      } catch {}
+    } finally {
+      setAssigning(false);
+      setShowPctAssign(false);
+    }
+  }
 
   async function onAssignSelected() {
     const handle = String(assignMember || '').trim();
@@ -1621,6 +1520,7 @@ function TableView({ rows, onEdit: _onEdit, onQuickUpdate, total, page, pageSize
       setAssigning(false);
     }
   }
+
   const [tableFilter, setTableFilter] = useState('');
   const [openFilter, setOpenFilter] = useState<ColumnKey | null>(null);
   const [menuPos, setMenuPos] = useState<{ left: number; top: number } | null>(null);
@@ -1763,6 +1663,14 @@ function TableView({ rows, onEdit: _onEdit, onQuickUpdate, total, page, pageSize
             >
               {assigning ? 'Assigning…' : 'Assign'}
             </button>
+            <button
+              className="px-3 py-1.5 rounded-lg ring-1 ring-slate-200 text-sm hover:bg-slate-50 disabled:opacity-50"
+              onClick={openPctPanel}
+              disabled={teamMembers.length === 0 || selectedIds.length === 0 || assigning}
+              title={selectedIds.length === 0 ? 'Select rows first' : 'Assign by percentages'}
+            >
+              Assign by %
+            </button>
           </div>
           {selectedIds.length > 0 && (
             <button
@@ -1892,6 +1800,11 @@ function TableView({ rows, onEdit: _onEdit, onQuickUpdate, total, page, pageSize
             </th>
             <th className="relative px-3 py-2">
               <div className="flex items-center gap-2">
+                <span>Final Status</span>
+              </div>
+            </th>
+            <th className="relative px-3 py-2">
+              <div className="flex items-center gap-2">
                 <span>Call Status</span>
                 <button
                   type="button"
@@ -2002,6 +1915,38 @@ function TableView({ rows, onEdit: _onEdit, onQuickUpdate, total, page, pageSize
                 </td>
                 <td>
                   <select
+                    value={r.final_status || ''}
+                    onClick={(e) => e.stopPropagation()}
+                    onChange={async (e) => {
+                      e.stopPropagation();
+                      const newVal = e.target.value || null;
+                      await onQuickUpdate(r.id, { final_status: newVal as any });
+                      try {
+                        const actor = localStorage.getItem('ndr_user') || '';
+                        await fetch(`${SUPABASE_URL}/ndr_user_activity`, {
+                          method: 'POST',
+                          headers: SUPABASE_HEADERS,
+                          body: JSON.stringify({
+                            order_id: r.order_id,
+                            waybill: String(r.waybill || ''),
+                            actor,
+                            action: 'final_status_update',
+                            details: { final_status: newVal },
+                          }),
+                        });
+                      } catch {}
+                    }}
+                    className="ring-1 ring-slate-200 rounded-full px-2 py-1 text-xs bg-white hover:bg-slate-50"
+                    title="Update final status"
+                  >
+                    <option value="">Select…</option>
+                    {FINAL_STATUS_OPTIONS.map(opt => (
+                      <option key={opt} value={opt}>{opt}</option>
+                    ))}
+                  </select>
+                </td>
+                <td>
+                  <select
                     value={r.__call_status}
                     onClick={(e) => e.stopPropagation()}
                     onChange={async (e) => {
@@ -2076,6 +2021,49 @@ function TableView({ rows, onEdit: _onEdit, onQuickUpdate, total, page, pageSize
         document.body
       )}
       {rows.length === 0 && <div className="p-8 text-center text-slate-500">No results</div>}
+      {showPctAssign && typeof document !== 'undefined' && ReactDOM.createPortal(
+        <div className="fixed inset-0 z-[200]" onClick={() => setShowPctAssign(false)} aria-hidden>
+          <div className="pointer-events-auto" style={{ position: 'fixed', right: 16, top: 72 }} onClick={(e) => e.stopPropagation()}>
+            <div className="w-80 rounded-xl bg-white shadow-xl ring-1 ring-slate-200 p-3">
+              <div className="text-sm font-semibold mb-2">Assign by percentages</div>
+              <div className="space-y-2 max-h-64 overflow-auto pr-1">
+                {teamMembers.map(m => (
+                  <div key={m} className="flex items-center justify-between gap-3">
+                    <div className="text-sm text-slate-700 truncate" title={m}>{m}</div>
+                    <div className="flex items-center gap-1">
+                      <input
+                        type="number"
+                        min={0}
+                        max={100}
+                        value={Number.isFinite(pctValues[m]) ? pctValues[m] : 0}
+                        onChange={(e) => updatePct(m, Number(e.target.value))}
+                        className="w-20 ring-1 ring-slate-200 rounded-lg px-2 py-1 text-sm text-right"
+                        title={`Percentage for ${m}`}
+                      />
+                      <span className="text-sm text-slate-500">%</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-3 flex items-center justify-between text-xs text-slate-500">
+                <div>Total: {Object.values(pctValues).reduce((a: number, b: number) => a + (Number.isFinite(b) ? b : 0), 0)}%</div>
+                {!validatePctTotal().ok && <div className="text-rose-600">Must total 100%</div>}
+              </div>
+              <div className="mt-3 flex items-center justify-end gap-2">
+                <button className="px-3 py-1.5 rounded-lg ring-1 ring-slate-200 text-sm" onClick={() => setShowPctAssign(false)}>Cancel</button>
+                <button
+                  className="px-3 py-1.5 rounded-lg bg-slate-900 text-white text-sm disabled:opacity-50"
+                  disabled={!validatePctTotal().ok || selectedIds.length === 0 || assigning}
+                  onClick={onAssignByPercentages}
+                >
+                  {assigning ? 'Assigning…' : 'Apply'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
       {/* Pagination controls */}
       {rows.length > 0 && (
         <div className="flex flex-col sm:flex-row items-center justify-between gap-3 p-3">
