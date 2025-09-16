@@ -32,9 +32,9 @@ export default function TeamAnalyticsPage() {
   const [loading, setLoading] = useState(false);
   // Daily (previous day) snapshot
   const [dailyLoading, setDailyLoading] = useState(false);
-  const [dailyRows, setDailyRows] = useState<Array<{ assigned_to: string | null; assigned_at: string | null; notes: string | null; courier_account?: string | null; email_sent?: boolean | null }>>([]);
+  const [dailyRows, setDailyRows] = useState<Array<{ assigned_to: string | null; assigned_at: string | null; notes: string | null; courier_account?: string | null; email_sent?: boolean | null; status?: string | null; final_status?: string | null }>>([]);
   const [dailyAgent, setDailyAgent] = useState<string>('All');
-  const [ndrRows, setNdrRows] = useState<Array<{ assigned_to: string | null; assigned_at: string | null; status: string | null; notes: string | null; order_id?: number; waybill?: string | number; courier_account?: string | null; delivery_status?: string | null; email_sent?: boolean | null; called?: boolean | null }>>([]);
+  const [ndrRows, setNdrRows] = useState<Array<{ assigned_to: string | null; assigned_at: string | null; status: string | null; final_status?: string | null; notes: string | null; order_id?: number; waybill?: string | number; courier_account?: string | null; delivery_status?: string | null; email_sent?: boolean | null; called?: boolean | null }>>([]);
   const [activities, setActivities] = useState<Array<{ actor: string | null; action: string | null; created_at: string | null }>>([]);
   // table-like filters
   const [qOrderId, setQOrderId] = useState<string>("");
@@ -74,7 +74,7 @@ export default function TeamAnalyticsPage() {
       const fromIso = `${from}T00:00:00`;
       const toIso = `${to}T23:59:59.999`;
       // fetch NDR assignment slice (assigned_to, assigned_at, status, notes)
-      const ndrUrl = `${SUPABASE_URL}/ndr?assigned_at=gte.${encodeURIComponent(fromIso)}&assigned_at=lte.${encodeURIComponent(toIso)}&select=assigned_to,assigned_at,status,notes,order_id,waybill,courier_account,delivery_status,email_sent,called&order=assigned_at.asc`;
+      const ndrUrl = `${SUPABASE_URL}/ndr?assigned_at=gte.${encodeURIComponent(fromIso)}&assigned_at=lte.${encodeURIComponent(toIso)}&select=assigned_to,assigned_at,status,final_status,notes,order_id,waybill,courier_account,delivery_status,email_sent,called&order=assigned_at.asc`;
       const ndrRes = await fetch(ndrUrl, { headers: SUPABASE_HEADERS });
       const ndrArr = ndrRes.ok ? await ndrRes.json() : [];
       setNdrRows(Array.isArray(ndrArr) ? ndrArr : []);
@@ -94,7 +94,7 @@ export default function TeamAnalyticsPage() {
     try {
       const fromIso = `${from}T00:00:00`;
       const toIso = `${to}T23:59:59.999`;
-      const url = `${SUPABASE_URL}/ndr?assigned_at=gte.${encodeURIComponent(fromIso)}&assigned_at=lte.${encodeURIComponent(toIso)}&select=assigned_to,assigned_at,notes,courier_account,email_sent&order=assigned_at.asc`;
+      const url = `${SUPABASE_URL}/ndr?assigned_at=gte.${encodeURIComponent(fromIso)}&assigned_at=lte.${encodeURIComponent(toIso)}&select=assigned_to,assigned_at,notes,courier_account,email_sent,status,final_status&order=assigned_at.asc`;
       const res = await fetch(url, { headers: SUPABASE_HEADERS });
       const arr = res.ok ? await res.json() : [];
       setDailyRows(Array.isArray(arr) ? arr : []);
@@ -120,6 +120,38 @@ export default function TeamAnalyticsPage() {
     }
     return Array.from(m.entries()).sort((a,b)=>b[1]-a[1]);
   }, [filteredDailyRows]);
+
+  // Final Status summary (agent-filtered, selected date range)
+  const dailyFinalStatusSummary = useMemo(() => {
+    const categories = [
+      'Delivered',
+      'Fake delivery',
+      'Returned',
+      'Refund',
+      'Damage',
+      'Invalid Number',
+      'Address/Number issue',
+      'Other',
+    ];
+    const normalize = (v: string) => {
+      const t = v.trim().toLowerCase();
+      if (t === 'delivered') return 'Delivered';
+      if (t === 'fake delivery' || t === 'fakedelivery') return 'Fake delivery';
+      if (t === 'returned' || t === 'return') return 'Returned';
+      if (t === 'refund' || t === 'refunded') return 'Refund';
+      if (t === 'damage' || t === 'damaged') return 'Damage';
+      if (t === 'invalid number' || t === 'invalidnumber') return 'Invalid Number';
+      if (t === 'address/number issue' || t === 'address issue' || t === 'number issue') return 'Address/Number issue';
+      return 'Other';
+    };
+    const map = new Map<string, number>(categories.map(c => [c, 0]));
+    for (const r of filteredDailyRows) {
+      const raw = String(((r as any).final_status || '')).trim();
+      const key = raw ? normalize(raw) : 'Other';
+      map.set(key, (map.get(key) || 0) + 1);
+    }
+    return categories.map(c => [c, map.get(c) || 0] as [string, number]).filter(([,v]) => v > 0);
+  }, [filteredDailyRows]);
   const dailyAgentWise = useMemo(() => {
     const m = new Map<string, number>();
     for (const r of filteredDailyRows) {
@@ -132,6 +164,28 @@ export default function TeamAnalyticsPage() {
   const dailyRaisedWithPartner = useMemo(() => {
     // Business rule: "Raised with Delivery partner" = Email sent to courier partner
     return filteredDailyRows.reduce((acc, r) => acc + (r.email_sent === true ? 1 : 0), 0);
+  }, [filteredDailyRows]);
+
+  // Agent-wise splits for raised (emails sent) and resolved
+  const dailyRaisedAgentWise = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const r of filteredDailyRows) {
+      const agent = (r.assigned_to || '').trim();
+      if (!agent) continue;
+      if (r.email_sent === true) m.set(agent, (m.get(agent) || 0) + 1);
+    }
+    return Array.from(m.entries()).sort((a,b)=>b[1]-a[1]);
+  }, [filteredDailyRows]);
+
+  const dailyResolvedAgentWise = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const r of filteredDailyRows) {
+      const agent = (r.assigned_to || '').trim();
+      if (!agent) continue;
+      const status = String((r as any).final_status || r.status || '').toLowerCase();
+      if (status === 'resolved') m.set(agent, (m.get(agent) || 0) + 1);
+    }
+    return Array.from(m.entries()).sort((a,b)=>b[1]-a[1]);
   }, [filteredDailyRows]);
 
   // Export filtered report as CSV
@@ -153,6 +207,7 @@ export default function TeamAnalyticsPage() {
       const s = String(v).replace(/"/g, '""');
       return /[",\n]/.test(s) ? `"${s}"` : s;
     };
+
     const csvRows: string[] = [];
     csvRows.push(headers.join(','));
     for (const r of rows) {
@@ -246,6 +301,42 @@ export default function TeamAnalyticsPage() {
       layers[key][idx] += 1;
     }
     return { statuses, layers };
+  }, [filteredRows, memberList]);
+
+  // Final status split per member (actual final_status categories from DB)
+  const finalStatusSplitByMember = useMemo(() => {
+    const categories = [
+      'Delivered',
+      'Fake delivery',
+      'Returned',
+      'Refund',
+      'Damage',
+      'Invalid Number',
+      'Address/Number issue',
+      'Other',
+    ];
+    const layers: Record<string, number[]> = {};
+    for (const c of categories) layers[c] = memberList.map(() => 0);
+    const normalize = (v: string) => {
+      const t = v.trim().toLowerCase();
+      if (t === 'delivered') return 'Delivered';
+      if (t === 'fake delivery' || t === 'fakedelivery') return 'Fake delivery';
+      if (t === 'returned' || t === 'return') return 'Returned';
+      if (t === 'refund' || t === 'refunded') return 'Refund';
+      if (t === 'damage' || t === 'damaged') return 'Damage';
+      if (t === 'invalid number' || t === 'invalidnumber') return 'Invalid Number';
+      if (t === 'address/number issue' || t === 'address issue' || t === 'number issue') return 'Address/Number issue';
+      return 'Other';
+    };
+    for (const r of filteredRows) {
+      const m = (r.assigned_to || '').trim();
+      const idx = memberList.indexOf(m);
+      if (idx < 0) continue;
+      const raw = String(((r as any).final_status || '')).trim();
+      const key = raw ? normalize(raw) : 'Other';
+      layers[key][idx] += 1;
+    }
+    return { statuses: categories, layers };
   }, [filteredRows, memberList]);
 
   const actionsByDay = useMemo(() => {
@@ -381,16 +472,32 @@ export default function TeamAnalyticsPage() {
     series: [{ type: 'pie', name: 'Resolved', data: resolutionPie as any }],
   };
 
+  const finalStatusStackedOptions: Highcharts.Options = {
+    chart: { type: "column", height: 380, spacing: [12, 12, 12, 12] },
+    title: { text: "Final status split per member" },
+    credits: { enabled: false },
+    xAxis: { categories: memberList, tickPixelInterval: 50 },
+    yAxis: { min: 0, title: { text: "Count" }, stackLabels: { enabled: true }, allowDecimals: false },
+    tooltip: { shared: true },
+    plotOptions: { column: { stacking: "normal", dataLabels: { enabled: true }, minPointLength: 2, pointPadding: 0.05, groupPadding: 0.05, borderWidth: 0 } },
+    series: (finalStatusSplitByMember.statuses.map((s) => ({
+      name: s,
+      type: "column",
+      data: finalStatusSplitByMember.layers[s] as number[],
+      showInLegend: true,
+    })) as Highcharts.SeriesOptionsType[]),
+  };
+
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 w-10xl max-w-10xl mx-auto px-3 sm:px-4">
       <div className="flex items-center justify-between">
         <div>
           <div className="text-lg font-semibold">Team Analytics</div>
           <div className="text-sm text-slate-600">Assignments, status split, and activity over time</div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <label className="text-sm">Team</label>
-          <select className="ring-1 ring-slate-200 rounded-lg px-3 py-2" value={teamId ?? ''} onChange={(e)=>{
+          <select className="ring-1 ring-slate-200 rounded-lg px-3 py-2 w-full sm:w-auto" value={teamId ?? ''} onChange={(e)=>{
             const tid = e.target.value ? Number(e.target.value) : null; setTeamId(tid);
             try { localStorage.setItem('ndr_active_team_id', tid ? String(tid) : ''); } catch {}
           }} title="Select team">
@@ -398,14 +505,14 @@ export default function TeamAnalyticsPage() {
             {teams.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
           </select>
           <label className="text-sm">From</label>
-          <input className="ring-1 ring-slate-200 rounded-lg px-3 py-2" type="date" value={from} onChange={(e)=>setFrom(e.target.value)} />
+          <input className="ring-1 ring-slate-200 rounded-lg px-3 py-2 w-full sm:w-auto min-w-[160px]" type="date" value={from} onChange={(e)=>setFrom(e.target.value)} />
           <label className="text-sm">To</label>
-          <input className="ring-1 ring-slate-200 rounded-lg px-3 py-2" type="date" value={to} onChange={(e)=>setTo(e.target.value)} />
-          <button className="px-3 py-2 rounded-lg bg-slate-900 text-white disabled:bg-slate-400" onClick={loadData} disabled={loading || !teamId}>{loading ? 'Loading…' : 'Refresh'}</button>
+          <input className="ring-1 ring-slate-200 rounded-lg px-3 py-2 w-full sm:w-auto min-w-[160px]" type="date" value={to} onChange={(e)=>setTo(e.target.value)} />
+          <button className="px-3 py-2 rounded-lg bg-slate-900 text-white disabled:bg-slate-400 w-full sm:w-auto" onClick={loadData} disabled={loading || !teamId}>{loading ? 'Loading…' : 'Refresh'}</button>
           <button
             type="button"
             title="Switch User"
-            className="px-3 py-2 rounded-lg ring-1 ring-rose-300 text-rose-900 bg-rose-50 hover:bg-rose-100"
+            className="px-3 py-2 rounded-lg ring-1 ring-rose-300 text-rose-900 bg-rose-50 hover:bg-rose-100 w-full sm:w-auto"
             onClick={() => {
               try { localStorage.removeItem('ndr_user'); localStorage.removeItem('ndr_session'); } catch {}
               window.location.reload();
@@ -418,12 +525,12 @@ export default function TeamAnalyticsPage() {
 
       {/* Daily Report (Previous Day) */}
       <div className="p-4 rounded-2xl ring-1 ring-slate-200 bg-white">
-        <div className="flex items-center justify-between mb-3">
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
           <div className="font-semibold">Report (Selected Date Range)</div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <label className="text-xs text-slate-600">Agent
               <select
-                className="ml-2 ring-1 ring-slate-200 rounded-lg px-2 py-1 text-sm"
+                className="ml-2 ring-1 ring-slate-200 rounded-lg px-2 py-1 text-sm w-full sm:w-auto min-w-[140px]"
                 value={dailyAgent}
                 onChange={(e)=>setDailyAgent(e.target.value)}
                 title="Filter report by agent"
@@ -432,16 +539,16 @@ export default function TeamAnalyticsPage() {
                 {members.map(m => <option key={m.member} value={m.member}>{m.member}</option>)}
               </select>
             </label>
-            <button className="px-3 py-1.5 rounded-lg ring-1 ring-slate-200 text-sm hover:bg-slate-50" onClick={exportReport} title="Export report as CSV">Export CSV</button>
-            <button className="px-3 py-1.5 rounded-lg ring-1 ring-slate-200 text-sm hover:bg-slate-50" onClick={loadSnapshotRange} disabled={dailyLoading}>{dailyLoading ? 'Refreshing…' : 'Refresh'}</button>
+            <button className="px-3 py-1.5 rounded-lg ring-1 ring-slate-200 text-sm hover:bg-slate-50 w-full sm:w-auto" onClick={exportReport} title="Export report as CSV">Export CSV</button>
+            <button className="px-3 py-1.5 rounded-lg ring-1 ring-slate-200 text-sm hover:bg-slate-50 w-full sm:w-auto" onClick={loadSnapshotRange} disabled={dailyLoading}>{dailyLoading ? 'Refreshing…' : 'Refresh'}</button>
           </div>
         </div>
-        <div className="grid gap-3 lg:grid-cols-4">
-          <div className="rounded-xl ring-1 ring-slate-200 p-3">
+        <div className="grid gap-3 grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-6">
+          <div className="rounded-xl ring-1 ring-slate-200 p-3 min-w-0">
             <div className="text-xs text-slate-500">Assigned count (range)</div>
             <div className="text-2xl font-semibold mt-1">{prevDayAssignedCount}</div>
           </div>
-          <div className="rounded-xl ring-1 ring-slate-200 p-3">
+          <div className="rounded-xl ring-1 ring-slate-200 p-3 min-w-0">
             <div className="text-xs text-slate-500">Delivery partner wise (top)</div>
             <div className="mt-2 space-y-1 max-h-40 overflow-auto">
               {dailyPartnerWise.length === 0 ? <div className="text-sm text-slate-500">No data</div> : dailyPartnerWise.map(([k,v]) => (
@@ -452,7 +559,7 @@ export default function TeamAnalyticsPage() {
               ))}
             </div>
           </div>
-          <div className="rounded-xl ring-1 ring-slate-200 p-3">
+          <div className="rounded-xl ring-1 ring-slate-200 p-3 min-w-0">
             <div className="text-xs text-slate-500">Agent wise assigned</div>
             <div className="mt-2 space-y-1 max-h-40 overflow-auto">
               {dailyAgentWise.length === 0 ? <div className="text-sm text-slate-500">No data</div> : dailyAgentWise.map(([k,v]) => (
@@ -463,15 +570,48 @@ export default function TeamAnalyticsPage() {
               ))}
             </div>
           </div>
-          <div className="rounded-xl ring-1 ring-slate-200 p-3">
-            <div className="text-xs text-slate-500">Raised with Delivery partner (emails sent)</div>
-            <div className="text-2xl font-semibold mt-1">{dailyRaisedWithPartner}</div>
+          <div className="rounded-xl ring-1 ring-slate-200 p-3 min-w-0">
+            <div className="text-xs text-slate-500">Agent wise raised with Delivery partner</div>
+            <div className="mt-2 space-y-1 max-h-40 overflow-auto">
+              {dailyRaisedAgentWise.length === 0 ? <div className="text-sm text-slate-500">No data</div> : dailyRaisedAgentWise.map(([k,v]) => (
+                <div key={k} className="flex items-center justify-between text-sm">
+                  <span>{k}</span>
+                  <span className="font-medium">{v}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="rounded-xl ring-1 ring-slate-200 p-3 min-w-0">
+            <div className="text-xs text-slate-500">Agent wise resolved</div>
+            <div className="mt-2 space-y-1 max-h-40 overflow-auto">
+              {dailyResolvedAgentWise.length === 0 ? <div className="text-sm text-slate-500">No data</div> : dailyResolvedAgentWise.map(([k,v]) => (
+                <div key={k} className="flex items-center justify-between text-sm">
+                  <span>{k}</span>
+                  <span className="font-medium">{v}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="rounded-xl ring-1 ring-slate-200 p-3 min-w-0">
+            <div className="text-xs text-slate-500">Final status (range)</div>
+            <div className="mt-2 space-y-1 max-h-40 overflow-auto">
+              {dailyFinalStatusSummary.length === 0 ? (
+                <div className="text-sm text-slate-500">No data</div>
+              ) : (
+                dailyFinalStatusSummary.map(([k,v]) => (
+                  <div key={k} className="flex items-center justify-between text-sm">
+                    <span>{k}</span>
+                    <span className="font-medium">{v}</span>
+                  </div>
+                ))
+              )}
+            </div>
           </div>
         </div>
       </div>
 
       {/* Table-like filters */}
-      <div className="ring-1 ring-slate-200 bg-white rounded-2xl p-3 grid md:grid-cols-3 lg:grid-cols-6 gap-2">
+      <div className="ring-1 ring-slate-200 bg-white rounded-2xl p-3 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
         <label className="text-xs">Order ID
           <input className="mt-1 w-full ring-1 ring-slate-200 rounded-lg px-2 py-1" value={qOrderId} onChange={(e)=>setQOrderId(e.target.value)} placeholder="e.g. 123" />
         </label>
@@ -511,7 +651,7 @@ export default function TeamAnalyticsPage() {
         </label>
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-2">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <div className="p-4 rounded-2xl ring-1 ring-slate-200 bg-white">
           <HighchartsReact highcharts={Highcharts} options={assignedOptions} />
         </div>
@@ -523,6 +663,9 @@ export default function TeamAnalyticsPage() {
         </div>
         <div className="p-4 rounded-2xl ring-1 ring-slate-200 bg-white">
           <HighchartsReact highcharts={Highcharts} options={callsOptions} />
+        </div>
+        <div className="p-4 rounded-2xl ring-1 ring-slate-200 bg-white lg:col-span-2">
+          <HighchartsReact highcharts={Highcharts} options={finalStatusStackedOptions} />
         </div>
         <div className="p-4 rounded-2xl ring-1 ring-slate-200 bg-white lg:col-span-2">
           <HighchartsReact highcharts={Highcharts} options={activityOptions} />

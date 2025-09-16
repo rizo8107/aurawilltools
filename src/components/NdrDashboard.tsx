@@ -3180,9 +3180,27 @@ function KanbanView({ rows, onEdit, onMove }: { rows: (NdrRow & any)[]; onEdit: 
   );
 }
 
-// ---- Emails View (global inbox) ---------------------------
 function EmailsView({ items, loading, onOpenOrder }: { items: any[]; loading: boolean; onOpenOrder: (orderId: number, awb?: string) => void }) {
   const [tab, setTab] = React.useState<'inbound' | 'outbound' | 'all'>('inbound');
+  // Read/unread tracking
+  const STORAGE_KEY = 'ndr_email_read_ids';
+  const [readIds, setReadIds] = React.useState<Set<string>>(() => {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return new Set<string>();
+      const arr = JSON.parse(raw);
+      if (Array.isArray(arr)) return new Set(arr.map(String));
+      return new Set<string>();
+    } catch { return new Set<string>(); }
+  });
+  const persistRead = (next: Set<string>) => {
+    setReadIds(new Set(next));
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(Array.from(next))); } catch {}
+  };
+  const makeKey = (m: any) => String(m.id ?? `${m.provider_thread_id || ''}:${m.message_id || m.subject || ''}:${m.created_at || m.received_at || m.sent_at || ''}`);
+  const markRead = (m: any) => { const k = makeKey(m); const next = new Set(readIds); next.add(k); persistRead(next); };
+  const markUnread = (m: any) => { const k = makeKey(m); const next = new Set(readIds); next.delete(k); persistRead(next); };
+
   const visible = React.useMemo(() => {
     const list = Array.isArray(items) ? items : [];
     if (tab === 'all') {
@@ -3190,9 +3208,12 @@ function EmailsView({ items, loading, onOpenOrder }: { items: any[]; loading: bo
       return list;
     }
     const dir = tab === 'inbound' ? 'inbound' : 'outbound';
-    return list.filter((m: any) =>
-      m && m.order_id && m.assigned && String(m.direction || '').toLowerCase() === dir
-    );
+    const base = list.filter((m: any) => String(m.direction || '').toLowerCase() === dir);
+    if (dir === 'inbound') {
+      // For inbound, only show rows that have both order_id and waybill
+      return base.filter((m: any) => !!m.order_id && !!m.waybill);
+    }
+    return base;
   }, [items, tab]);
   return (
     <div className="space-y-3">
@@ -3220,26 +3241,43 @@ function EmailsView({ items, loading, onOpenOrder }: { items: any[]; loading: bo
               </tr>
             </thead>
             <tbody>
-              {visible.map((m) => (
-                <tr
-                  key={`${m.__kind}-${m.id}`}
-                  className="border-t hover:bg-slate-50 cursor-pointer"
-                  onClick={() => m.order_id ? onOpenOrder(Number(m.order_id), m.waybill) : undefined}
-                  title={m.order_id ? `Open Order #${m.order_id}${m.waybill ? ` • AWB ${m.waybill}` : ''}` : 'No linked order'}
-                >
-                  <td className="px-3 py-2 whitespace-nowrap">{fmtIST(m.created_at)}</td>
-                  <td className="px-3 py-2">
-                    <span className={classNames('px-2.5 py-0.5 rounded-full text-xs', String(m.direction).toLowerCase()==='inbound' ? 'bg-emerald-50 text-emerald-700' : 'bg-blue-50 text-blue-700')}>
-                      {String(m.direction || '').toUpperCase()}
-                    </span>
-                  </td>
-                  <td className="px-3 py-2">{m.order_id ?? '—'}</td>
-                  <td className="px-3 py-2">{m.waybill ?? '—'}</td>
-                  <td className="px-3 py-2 max-w-xl truncate" title={m.subject || ''}>{m.subject || '—'}</td>
-                  <td className="px-3 py-2 max-w-xs truncate" title={m.from_addr || ''}>{m.from_addr || '—'}</td>
-                  <td className="px-3 py-2 max-w-xs truncate" title={Array.isArray(m.to_addrs)? m.to_addrs.join(', ') : (m.to_addrs || '')}>{Array.isArray(m.to_addrs)? m.to_addrs.join(', ') : (m.to_addrs || '—')}</td>
-                </tr>
-              ))}
+              {visible.map((m, idx) => {
+                const key = makeKey(m);
+                const isRead = readIds.has(key);
+                const faded = isRead ? 'opacity-50' : '';
+                return (
+                  <tr
+                    key={`${m.__kind || 'item'}:${m.id ?? ''}:${m.provider_thread_id ?? ''}:${m.message_id ?? ''}:${m.created_at ?? ''}:${idx}`}
+                    className={`border-t hover:bg-slate-50 cursor-pointer ${faded}`}
+                    onClick={() => { markRead(m); onOpenOrder(Number(m.order_id), String(m.waybill || undefined)); }}
+                    title={isRead ? 'Read — click to open order' : 'Unread — click to open order'}
+                  >
+                    <td className="px-3 py-2 whitespace-nowrap">{fmtIST(m.created_at)}</td>
+                    <td className="px-3 py-2">
+                      <span className={classNames('px-2.5 py-0.5 rounded-full text-xs', String(m.direction).toLowerCase()==='inbound' ? 'bg-emerald-50 text-emerald-700' : 'bg-blue-50 text-blue-700')}>
+                        {String(m.direction || '').toUpperCase()}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2">{m.order_id ?? '—'}</td>
+                    <td className="px-3 py-2">{m.waybill ?? '—'}</td>
+                    <td className="px-3 py-2 max-w-xl truncate" title={m.subject || ''}>{m.subject || '—'}</td>
+                    <td className="px-3 py-2 max-w-xs truncate" title={m.from_addr || ''}>{m.from_addr || '—'}</td>
+                    <td className="px-3 py-2 max-w-xs truncate" title={Array.isArray(m.to_addrs)? m.to_addrs.join(', ') : (m.to_addrs || '')}>{Array.isArray(m.to_addrs)? m.to_addrs.join(', ') : (m.to_addrs || '—')}</td>
+                    <td className="px-3 py-2">
+                      {isRead && (
+                        <button
+                          type="button"
+                          className="text-xs px-2 py-0.5 rounded-full ring-1 ring-slate-200 hover:bg-slate-100"
+                          onClick={(e) => { e.stopPropagation(); markUnread(m); }}
+                          title="Mark as unread"
+                        >
+                          Unread
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
