@@ -489,7 +489,7 @@ export default function TeamAnalyticsPage() {
   };
 
   return (
-    <div className="space-y-4 w-10xl max-w-10xl mx-auto px-3 sm:px-4">
+    <div className="space-y-4 w-full max-w-[1800px] mx-auto px-2 sm:px-3 md:px-4">
       <div className="flex items-center justify-between">
         <div>
           <div className="text-lg font-semibold">Team Analytics</div>

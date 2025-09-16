@@ -1719,26 +1719,6 @@ function TableView({ rows, onEdit: _onEdit, onQuickUpdate, total, page, pageSize
               </div>
             </th>
 
-            <th className="relative min-w-[140px] px-3 py-2">
-              <div className="flex items-center gap-2">
-                <SortHeader label="AWB" active={sortKey==='awb'} dir={sortDir} onClick={() => toggleSort('awb')} />
-                <button
-                  type="button"
-                  className="p-1 rounded hover:bg-slate-100"
-                  title="Filter AWB"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                    setMenuPos({ left: rect.right - 16, top: rect.bottom + 6 });
-                    setOpenFilter(openFilter === 'awb' ? null : 'awb');
-                  }}
-                  aria-label="Open AWB filter"
-                >
-                  <Filter className="w-4 h-4 text-slate-500" />
-                </button>
-              </div>
-            </th>
-
             <th className="relative min-w-[220px] px-3 py-2">
               <div className="flex items-center gap-2">
                 <SortHeader label="Current status" active={sortKey==='status'} dir={sortDir} onClick={() => toggleSort('status')} />
@@ -1761,18 +1741,38 @@ function TableView({ rows, onEdit: _onEdit, onQuickUpdate, total, page, pageSize
 
             <th className="relative px-3 py-2">
               <div className="flex items-center gap-2">
-                <SortHeader label="Courier" active={sortKey==='courier'} dir={sortDir} onClick={() => toggleSort('courier')} />
+                <SortHeader label="EDD" active={sortKey==='edd'} dir={sortDir} onClick={() => toggleSort('edd')} />
                 <button
                   type="button"
                   className="p-1 rounded hover:bg-slate-100"
-                  title="Filter Courier"
+                  title="Filter EDD"
                   onClick={(e) => {
                     e.stopPropagation();
                     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
                     setMenuPos({ left: rect.right - 16, top: rect.bottom + 6 });
-                    setOpenFilter(openFilter === 'courier' ? null : 'courier');
+                    setOpenFilter(openFilter === 'edd' ? null : 'edd');
                   }}
-                  aria-label="Open Courier filter"
+                  aria-label="Open EDD filter"
+                >
+                  <Filter className="w-4 h-4 text-slate-500" />
+                </button>
+              </div>
+            </th>
+
+            <th className="relative px-3 py-2">
+              <div className="flex items-center gap-2">
+                <span>Call Status</span>
+                <button
+                  type="button"
+                  className="p-1 rounded hover:bg-slate-100"
+                  title="Filter Call Status"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                    setMenuPos({ left: rect.right - 16, top: rect.bottom + 6 });
+                    setOpenFilter(openFilter === 'call' ? null : 'call');
+                  }}
+                  aria-label="Open Call Status filter"
                 >
                   <Filter className="w-4 h-4 text-slate-500" />
                 </button>
@@ -1798,25 +1798,27 @@ function TableView({ rows, onEdit: _onEdit, onQuickUpdate, total, page, pageSize
                 </button>
               </div>
             </th>
+
             <th className="relative px-3 py-2">
               <div className="flex items-center gap-2">
                 <span>Final Status</span>
               </div>
             </th>
-            <th className="relative px-3 py-2">
+
+            <th className="relative min-w-[140px] px-3 py-2">
               <div className="flex items-center gap-2">
-                <span>Call Status</span>
+                <SortHeader label="AWB" active={sortKey==='awb'} dir={sortDir} onClick={() => toggleSort('awb')} />
                 <button
                   type="button"
                   className="p-1 rounded hover:bg-slate-100"
-                  title="Filter Call Status"
+                  title="Filter AWB"
                   onClick={(e) => {
                     e.stopPropagation();
                     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
                     setMenuPos({ left: rect.right - 16, top: rect.bottom + 6 });
-                    setOpenFilter(openFilter === 'call' ? null : 'call');
+                    setOpenFilter(openFilter === 'awb' ? null : 'awb');
                   }}
-                  aria-label="Open Call Status filter"
+                  aria-label="Open AWB filter"
                 >
                   <Filter className="w-4 h-4 text-slate-500" />
                 </button>
@@ -1825,18 +1827,18 @@ function TableView({ rows, onEdit: _onEdit, onQuickUpdate, total, page, pageSize
 
             <th className="relative px-3 py-2">
               <div className="flex items-center gap-2">
-                <SortHeader label="EDD" active={sortKey==='edd'} dir={sortDir} onClick={() => toggleSort('edd')} />
+                <SortHeader label="Courier" active={sortKey==='courier'} dir={sortDir} onClick={() => toggleSort('courier')} />
                 <button
                   type="button"
                   className="p-1 rounded hover:bg-slate-100"
-                  title="Filter EDD"
+                  title="Filter Courier"
                   onClick={(e) => {
                     e.stopPropagation();
                     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
                     setMenuPos({ left: rect.right - 16, top: rect.bottom + 6 });
-                    setOpenFilter(openFilter === 'edd' ? null : 'edd');
+                    setOpenFilter(openFilter === 'courier' ? null : 'courier');
                   }}
-                  aria-label="Open EDD filter"
+                  aria-label="Open Courier filter"
                 >
                   <Filter className="w-4 h-4 text-slate-500" />
                 </button>
@@ -1874,77 +1876,18 @@ function TableView({ rows, onEdit: _onEdit, onQuickUpdate, total, page, pageSize
                     {r.order_id}
                   </button>
                 </td>
-                <td>
-                  <div className="flex items-center gap-2">
-                    <span className="font-mono">{r.waybill}</span>
-                    <button title="Copy AWB" onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(String(r.waybill)); }} className="p-1 rounded hover:bg-slate-100">
-                      <ClipboardCopy className="w-4 h-4" />
-                    </button>
-                    {url && (
-                      <a href={url} target="_blank" onClick={(e) => e.stopPropagation()} className="p-1 rounded hover:bg-slate-100" title="Open tracking">
-                        <ExternalLink className="w-4 h-4" />
-                      </a>
-                    )}
-                  </div>
-                </td>
+                {/* Current status */}
                 <td>
                   <div className="font-medium">{r.delivery_status || '—'}</div>
                   <div className="text-xs text-slate-500 flex items-center gap-2">
                     <StatusBadge bucket={r.__bucket} /> <span>{r.rto_awb ? `RTO: ${r.rto_awb}` : ''}</span>
                   </div>
                 </td>
-                <td>{courierName(r.courier_account)}</td>
+                {/* EDD */}
                 <td>
-                  {(r as any).email_sent ? (
-                    <button
-                      className="px-2 py-1 rounded-full text-xs bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200 cursor-default"
-                      disabled
-                      title="Email already sent"
-                    >
-                      Sent
-                    </button>
-                  ) : (
-                    <button
-                      onClick={(e) => { e.stopPropagation(); onOpenRepeatRow(r); }}
-                      className="px-2 py-1 rounded-full text-xs ring-1 ring-slate-200 hover:bg-slate-50"
-                      title="Open to compose and send email"
-                    >
-                      Send Email
-                    </button>
-                  )}
+                  <Pill {...(r.__edd as any)} />
                 </td>
-                <td>
-                  <select
-                    value={r.final_status || ''}
-                    onClick={(e) => e.stopPropagation()}
-                    onChange={async (e) => {
-                      e.stopPropagation();
-                      const newVal = e.target.value || null;
-                      await onQuickUpdate(r.id, { final_status: newVal as any });
-                      try {
-                        const actor = localStorage.getItem('ndr_user') || '';
-                        await fetch(`${SUPABASE_URL}/ndr_user_activity`, {
-                          method: 'POST',
-                          headers: SUPABASE_HEADERS,
-                          body: JSON.stringify({
-                            order_id: r.order_id,
-                            waybill: String(r.waybill || ''),
-                            actor,
-                            action: 'final_status_update',
-                            details: { final_status: newVal },
-                          }),
-                        });
-                      } catch {}
-                    }}
-                    className="ring-1 ring-slate-200 rounded-full px-2 py-1 text-xs bg-white hover:bg-slate-50"
-                    title="Update final status"
-                  >
-                    <option value="">Select…</option>
-                    {FINAL_STATUS_OPTIONS.map(opt => (
-                      <option key={opt} value={opt}>{opt}</option>
-                    ))}
-                  </select>
-                </td>
+                {/* Call Status */}
                 <td>
                   <select
                     value={r.__call_status}
@@ -1990,9 +1933,75 @@ function TableView({ rows, onEdit: _onEdit, onQuickUpdate, total, page, pageSize
                     ))}
                   </select>
                 </td>
+                {/* Email Sent */}
                 <td>
-                  <Pill {...(r.__edd as any)} />
+                  {(r as any).email_sent ? (
+                    <button
+                      className="px-2 py-1 rounded-full text-xs bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200 cursor-default"
+                      disabled
+                      title="Email already sent"
+                    >
+                      Sent
+                    </button>
+                  ) : (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); onOpenRepeatRow(r); }}
+                      className="px-2 py-1 rounded-full text-xs ring-1 ring-slate-200 hover:bg-slate-50"
+                      title="Open to compose and send email"
+                    >
+                      Send Email
+                    </button>
+                  )}
                 </td>
+                {/* Final Status */}
+                <td>
+                  <select
+                    value={r.final_status || ''}
+                    onClick={(e) => e.stopPropagation()}
+                    onChange={async (e) => {
+                      e.stopPropagation();
+                      const newVal = e.target.value || null;
+                      await onQuickUpdate(r.id, { final_status: newVal as any });
+                      try {
+                        const actor = localStorage.getItem('ndr_user') || '';
+                        await fetch(`${SUPABASE_URL}/ndr_user_activity`, {
+                          method: 'POST',
+                          headers: SUPABASE_HEADERS,
+                          body: JSON.stringify({
+                            order_id: r.order_id,
+                            waybill: String(r.waybill || ''),
+                            actor,
+                            action: 'final_status_update',
+                            details: { final_status: newVal },
+                          }),
+                        });
+                      } catch {}
+                    }}
+                    className="ring-1 ring-slate-200 rounded-full px-2 py-1 text-xs bg-white hover:bg-slate-50"
+                    title="Update final status"
+                  >
+                    <option value="">Select…</option>
+                    {FINAL_STATUS_OPTIONS.map(opt => (
+                      <option key={opt} value={opt}>{opt}</option>
+                    ))}
+                  </select>
+                </td>
+                {/* AWB */}
+                <td>
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono">{r.waybill}</span>
+                    <button title="Copy AWB" onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(String(r.waybill)); }} className="p-1 rounded hover:bg-slate-100">
+                      <ClipboardCopy className="w-4 h-4" />
+                    </button>
+                    {url && (
+                      <a href={url} target="_blank" onClick={(e) => e.stopPropagation()} className="p-1 rounded hover:bg-slate-100" title="Open tracking">
+                        <ExternalLink className="w-4 h-4" />
+                      </a>
+                    )}
+                  </div>
+                </td>
+                {/* Courier */}
+                <td>{courierName(r.courier_account)}</td>
               </tr>
             );
           })}

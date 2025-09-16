@@ -141,13 +141,14 @@ function App() {
           <p className="text-gray-600 mt-1">{pageDescriptions[activeTab]}</p>
         </header>
 
-        <main className={`flex-grow p-6 overflow-y-auto bg-gray-50 ${ 
+        <main className={`flex-grow p-3 md:p-6 overflow-y-auto bg-gray-50 ${ 
           activeTab === 'order' ? 'flex justify-center items-start' : '' 
         }`}>
           <div className={`w-full ${ 
             activeTab === 'order' ? 'max-w-6xl' : 
             activeTab === 'tracking' || activeTab === 'manifest' ? 'max-w-3xl' : 
             activeTab === 'campaign' ? 'max-w-5xl' : 
+            activeTab === 'team_analytics' ? 'max-w-[95vw]' : 
             activeTab === 'gstinvoice' || activeTab === 'orderhistory' || activeTab === 'ndr' ? 'max-w-7xl' : 'max-w-4xl'
           } mx-auto`}>
             {activeTab === 'order' && <OrderForm />}
