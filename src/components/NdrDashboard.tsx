@@ -1460,6 +1460,7 @@ function TableView({ rows, onEdit: _onEdit, onQuickUpdate, total, page, pageSize
       alert('Provide at least Order ID or AWB');
       return;
     }
+    const actor = (localStorage.getItem('ndr_user') || '').trim();
     const payload: Partial<NdrRow> & any = {
       order_id: orderIdNum || null,
       waybill: newNdr.waybill ? String(newNdr.waybill) : null,
@@ -1470,6 +1471,9 @@ function TableView({ rows, onEdit: _onEdit, onQuickUpdate, total, page, pageSize
       event_time: newNdr.event_time ? new Date(newNdr.event_time).toISOString() : new Date().toISOString(),
       Partner_EDD: newNdr.Partner_EDD ? new Date(newNdr.Partner_EDD).toISOString() : null,
       notes: JSON.stringify({ phone: newNdr.phone || undefined, customer_issue: newNdr.customer_issue || undefined }),
+      // auto-assign to the logged-in user if available
+      assigned_to: actor || null,
+      assigned_at: actor ? new Date().toISOString() : null,
     };
     try {
       setCreatingNdr(true);
@@ -1479,6 +1483,20 @@ function TableView({ rows, onEdit: _onEdit, onQuickUpdate, total, page, pageSize
         const txt = await res.text();
         throw new Error(`Create failed: ${res.status} ${res.statusText} — ${txt}`);
       }
+      // Log assignment event for analytics/history
+      try {
+        await fetch(`${SUPABASE_URL}/ndr_user_activity`, {
+          method: 'POST',
+          headers: SUPABASE_HEADERS,
+          body: JSON.stringify({
+            order_id: orderIdNum || null,
+            waybill: newNdr.waybill ? String(newNdr.waybill) : null,
+            actor,
+            action: 'assign',
+            details: { assigned_to: actor || null, via: 'create_ndr' }
+          }),
+        });
+      } catch {}
       setShowNewNdr(false);
       setNewNdr({});
       // Notify parent to refresh
@@ -1488,6 +1506,58 @@ function TableView({ rows, onEdit: _onEdit, onQuickUpdate, total, page, pageSize
       alert(e?.message || 'Create failed');
     } finally {
       setCreatingNdr(false);
+    }
+  }
+
+  // Delete a single NDR by id
+  async function deleteRow(id: number) {
+    const ok = window.confirm('Delete this NDR record? This cannot be undone.');
+    if (!ok) return;
+    try {
+      const url = `${SUPABASE_URL}/${SUPABASE_TABLE}?id=eq.${id}`;
+      const res = await fetch(url, { method: 'DELETE', headers: SUPABASE_HEADERS });
+      if (!res.ok) {
+        const txt = await res.text();
+        throw new Error(`Delete failed: ${res.status} ${res.statusText} — ${txt}`);
+      }
+      // Log delete action
+      try {
+        const actor = localStorage.getItem('ndr_user') || '';
+        await fetch(`${SUPABASE_URL}/ndr_user_activity`, {
+          method: 'POST',
+          headers: SUPABASE_HEADERS,
+          body: JSON.stringify({ order_id: null, waybill: null, actor, action: 'delete', details: { ndr_id: id, via: 'table_row' } }),
+        });
+      } catch {}
+      try { window.dispatchEvent(new CustomEvent('ndr-refresh')); } catch {}
+    } catch (e: any) {
+      alert(e?.message || 'Delete failed');
+    }
+  }
+
+  // Bulk delete selected
+  async function deleteSelected() {
+    if (selectedIds.length === 0) return;
+    const ok = window.confirm(`Delete ${selectedIds.length} selected record(s)? This cannot be undone.`);
+    if (!ok) return;
+    try {
+      await Promise.all(selectedIds.map(async (id) => {
+        const url = `${SUPABASE_URL}/${SUPABASE_TABLE}?id=eq.${id}`;
+        await fetch(url, { method: 'DELETE', headers: SUPABASE_HEADERS });
+      }));
+      // Log one bulk delete event
+      try {
+        const actor = localStorage.getItem('ndr_user') || '';
+        await fetch(`${SUPABASE_URL}/ndr_user_activity`, {
+          method: 'POST',
+          headers: SUPABASE_HEADERS,
+          body: JSON.stringify({ order_id: null, waybill: null, actor, action: 'delete_bulk', details: { count: selectedIds.length } }),
+        });
+      } catch {}
+      onClearSelection();
+      try { window.dispatchEvent(new CustomEvent('ndr-refresh')); } catch {}
+    } catch (e: any) {
+      alert(e?.message || 'Delete failed');
     }
   }
 
@@ -1707,6 +1777,14 @@ function TableView({ rows, onEdit: _onEdit, onQuickUpdate, total, page, pageSize
           >
             <Download className="w-4 h-4" /> Export selected ({selectedIds.length})
           </button>
+          <button
+            className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg ring-1 ring-rose-200 text-sm text-rose-700 hover:bg-rose-50 disabled:opacity-50"
+            onClick={deleteSelected}
+            disabled={selectedIds.length === 0}
+            title="Delete selected rows"
+          >
+            Delete selected
+          </button>
           {/* New manual NDR */}
           <button
             className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-slate-900 text-white text-sm hover:bg-slate-800"
@@ -1918,6 +1996,7 @@ function TableView({ rows, onEdit: _onEdit, onQuickUpdate, total, page, pageSize
                 </button>
               </div>
             </th>
+            <th className="px-3 py-2">Actions</th>
           </tr>
         </thead>
         <tbody className="divide-y">
@@ -2076,6 +2155,17 @@ function TableView({ rows, onEdit: _onEdit, onQuickUpdate, total, page, pageSize
                 </td>
                 {/* Courier */}
                 <td>{courierName(r.courier_account)}</td>
+                {/* Actions */}
+                <td>
+                  <button
+                    type="button"
+                    className="px-2 py-1 rounded-full text-xs ring-1 ring-rose-200 text-rose-700 hover:bg-rose-50"
+                    onClick={(e) => { e.stopPropagation(); deleteRow(r.id); }}
+                    title="Delete this record"
+                  >
+                    Delete
+                  </button>
+                </td>
               </tr>
             );
           })}
