@@ -16,6 +16,28 @@ function toISODate(d: Date) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
+// Accept both YYYY-MM-DD (native input) and DD-MM-YYYY (manual/locale) and normalize to YYYY-MM-DD
+function normalizeDateInput(s: string): string {
+  if (!s) return toISODate(new Date());
+  // already ISO-like
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  // DD-MM-YYYY
+  const m = s.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+  if (m) return `${m[3]}-${m[2]}-${m[1]}`;
+  // fallback
+  const d = new Date(s);
+  if (!isNaN(d.getTime())) return toISODate(d);
+  return toISODate(new Date());
+}
+
+// Convert local YYYY-MM-DD dates to inclusive UTC boundaries
+function buildUtcRange(fromLocalIsoDate: string, toLocalIsoDate: string) {
+  // Compose explicit UTC timestamps to avoid timezone drift
+  const fromUtcISO = new Date(`${fromLocalIsoDate}T00:00:00Z`).toISOString();
+  const toUtcISO = new Date(`${toLocalIsoDate}T23:59:59.999Z`).toISOString();
+  return { fromUtc: fromUtcISO, toUtc: toUtcISO };
+}
+
 export default function TeamAnalyticsPage() {
   const [teams, setTeams] = useState<Array<{ id: number; name: string }>>([]);
   const [teamId, setTeamId] = useState<number | null>(() => {
@@ -71,15 +93,33 @@ export default function TeamAnalyticsPage() {
     if (!teamId) return;
     setLoading(true);
     try {
-      const fromIso = `${from}T00:00:00`;
-      const toIso = `${to}T23:59:59.999`;
-      // fetch NDR assignment slice (assigned_to, assigned_at, status, notes)
-      const ndrUrl = `${SUPABASE_URL}/ndr?assigned_at=gte.${encodeURIComponent(fromIso)}&assigned_at=lte.${encodeURIComponent(toIso)}&select=assigned_to,assigned_at,status,final_status,notes,order_id,waybill,courier_account,delivery_status,email_sent,called&order=assigned_at.asc`;
+      const fromNorm = normalizeDateInput(from);
+      const toNorm = normalizeDateInput(to);
+      // Local inclusive day bounds (match NdrDashboard filtering behavior)
+      const fromIso = `${fromNorm}T00:00:00`;
+      const toIso = `${toNorm}T23:59:59.999`;
+      // Prefer event_time for range filtering
+      const tsFilter = `and(event_time.gte.${fromIso},event_time.lte.${toIso})`;
+      const memOr = members.length ? `or(${members.map(m => `assigned_to.eq.${encodeURIComponent(m.member)}`).join(',')})` : '';
+      const filter = memOr ? `and(${tsFilter},${memOr})` : tsFilter;
+      const ndrUrl = `${SUPABASE_URL}/ndr?and=(${filter})&select=assigned_to,assigned_at,created_at,event_time,status,final_status,notes,order_id,waybill,courier_account,delivery_status,email_sent,called&order=event_time.asc`;
       const ndrRes = await fetch(ndrUrl, { headers: SUPABASE_HEADERS });
       const ndrArr = ndrRes.ok ? await ndrRes.json() : [];
-      setNdrRows(Array.isArray(ndrArr) ? ndrArr : []);
+      // client-side guard identical to NdrDashboard: use event_time with inclusive local bounds
+      const fromMs = new Date(fromIso).getTime();
+      const toMs = new Date(toIso).getTime();
+      const ndrFiltered = Array.isArray(ndrArr)
+        ? ndrArr.filter((r: any) => {
+            if (!r?.event_time) return false;
+            const t = new Date(r.event_time).getTime();
+            return !isNaN(t) && t >= fromMs && t <= toMs;
+          })
+        : [];
+      setNdrRows(ndrFiltered);
       // fetch activities by team members
-      const actorFilter = members.length ? `&actor=in.(${members.map(m => `"${encodeURIComponent(m.member)}"`).join(',')})` : "";
+      const actorFilter = members.length
+        ? `&or=(${members.map(m => `actor.eq.${encodeURIComponent(m.member)}`).join(',')})`
+        : "";
       const actUrl = `${SUPABASE_URL}/ndr_user_activity?created_at=gte.${encodeURIComponent(fromIso)}&created_at=lte.${encodeURIComponent(toIso)}${actorFilter}&select=actor,action,created_at&order=created_at.asc`;
       const actRes = await fetch(actUrl, { headers: SUPABASE_HEADERS });
       const actArr = actRes.ok ? await actRes.json() : [];
@@ -92,12 +132,27 @@ export default function TeamAnalyticsPage() {
     if (!teamId) { setDailyRows([]); return; }
     setDailyLoading(true);
     try {
-      const fromIso = `${from}T00:00:00`;
-      const toIso = `${to}T23:59:59.999`;
-      const url = `${SUPABASE_URL}/ndr?assigned_at=gte.${encodeURIComponent(fromIso)}&assigned_at=lte.${encodeURIComponent(toIso)}&select=assigned_to,assigned_at,notes,courier_account,email_sent,status,final_status&order=assigned_at.asc`;
+      const fromNorm = normalizeDateInput(from);
+      const toNorm = normalizeDateInput(to);
+      // Local inclusive day bounds (match NdrDashboard)
+      const fromIso = `${fromNorm}T00:00:00`;
+      const toIso = `${toNorm}T23:59:59.999`;
+      const tsFilter2 = `and(event_time.gte.${fromIso},event_time.lte.${toIso})`;
+      const memOr2 = members.length ? `or(${members.map(m => `assigned_to.eq.${encodeURIComponent(m.member)}`).join(',')})` : '';
+      const filter2 = memOr2 ? `and(${tsFilter2},${memOr2})` : tsFilter2;
+      const url = `${SUPABASE_URL}/ndr?and=(${filter2})&select=assigned_to,assigned_at,created_at,event_time,notes,courier_account,email_sent,status,final_status&order=event_time.asc`;
       const res = await fetch(url, { headers: SUPABASE_HEADERS });
       const arr = res.ok ? await res.json() : [];
-      setDailyRows(Array.isArray(arr) ? arr : []);
+      const fromMs = new Date(fromIso).getTime();
+      const toMs = new Date(toIso).getTime();
+      const filtered = Array.isArray(arr)
+        ? arr.filter((r: any) => {
+            if (!r?.event_time) return false;
+            const t = new Date(r.event_time).getTime();
+            return !isNaN(t) && t >= fromMs && t <= toMs;
+          })
+        : [];
+      setDailyRows(filtered);
     } finally { setDailyLoading(false); }
   }
 
