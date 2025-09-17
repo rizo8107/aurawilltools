@@ -235,10 +235,15 @@ export default function TeamAnalyticsPage() {
   const dailyResolvedAgentWise = useMemo(() => {
     const m = new Map<string, number>();
     for (const r of filteredDailyRows) {
-      const agent = (r.assigned_to || '').trim();
-      if (!agent) continue;
-      const status = String((r as any).final_status || r.status || '').toLowerCase();
-      if (status === 'resolved') m.set(agent, (m.get(agent) || 0) + 1);
+      const agent = (r.assigned_to || '').trim() || 'Unassigned';
+      const finalRaw = String((r as any).final_status || '').trim().toLowerCase();
+      const statusRaw = String(r.status || '').trim().toLowerCase();
+      // consider resolved when:
+      // - internal status is 'resolved' (case-insensitive), or
+      // - final_status is set to anything meaningful (not empty/other/open/in progress/escalated)
+      const finalResolved = !!finalRaw && !['other','open','in progress','in-progress','inprogress','escalated'].includes(finalRaw);
+      const statusResolved = statusRaw === 'resolved' || statusRaw === 'closed' || statusRaw === 'close';
+      if (finalResolved || statusResolved) m.set(agent, (m.get(agent) || 0) + 1);
     }
     return Array.from(m.entries()).sort((a,b)=>b[1]-a[1]);
   }, [filteredDailyRows]);
@@ -351,8 +356,13 @@ export default function TeamAnalyticsPage() {
       const m = (r.assigned_to || "").trim();
       const idx = memberList.indexOf(m);
       if (idx < 0) continue;
-      const s = (r.status || "Other");
-      const key = statuses.includes(s) ? s : "Other";
+      const raw = String(r.status || '').trim().toLowerCase();
+      let key: string;
+      if (raw === 'open') key = 'Open';
+      else if (raw === 'in progress' || raw === 'in-progress' || raw === 'inprogress') key = 'In Progress';
+      else if (raw === 'resolved' || raw === 'close' || raw === 'closed') key = 'Resolved';
+      else if (raw === 'escalated' || raw === 'escalate') key = 'Escalated';
+      else key = 'Other';
       layers[key][idx] += 1;
     }
     return { statuses, layers };
