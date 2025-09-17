@@ -136,12 +136,12 @@ function App() {
 
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col overflow-hidden">
-        <header className="bg-white shadow-sm p-6">
+        <header className="bg-white shadow-sm p-3 md:p-4">
           <h2 className="text-2xl font-semibold text-gray-800">{navigationItems.find(item => item.id === activeTab)?.label}</h2>
           <p className="text-gray-600 mt-1">{pageDescriptions[activeTab]}</p>
         </header>
 
-        <main className={`flex-grow p-3 md:p-6 overflow-y-auto bg-gray-50 ${ 
+        <main className={`flex-grow p-0 md:p-2 overflow-y-auto bg-gray-50 ${ 
           activeTab === 'order' ? 'flex justify-center items-start' : '' 
         }`}>
           <div className={`w-full ${ 
@@ -149,8 +149,9 @@ function App() {
             activeTab === 'tracking' || activeTab === 'manifest' ? 'max-w-3xl' : 
             activeTab === 'campaign' ? 'max-w-5xl' : 
             activeTab === 'team_analytics' ? 'max-w-[95vw]' : 
-            activeTab === 'gstinvoice' || activeTab === 'orderhistory' || activeTab === 'ndr' ? 'max-w-7xl' : 'max-w-4xl'
-          } mx-auto`}>
+            activeTab === 'ndr' ? 'max-w-none' : 
+            activeTab === 'gstinvoice' || activeTab === 'orderhistory' ? 'max-w-7xl' : 'max-w-4xl'
+          } ${activeTab === 'ndr' ? '' : 'mx-auto'}`}>
             {activeTab === 'order' && <OrderForm />}
             {activeTab === 'printslip' && <PrintSlip />}
             {activeTab === 'tracking' && <UpdateTracking />}

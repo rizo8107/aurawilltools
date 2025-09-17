@@ -311,6 +311,8 @@ export default function NdrDashboard() {
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
 
+  // New NDR state lives inside TableView (per-table UI)
+
   // Per-column multi-select filters
   const [colFilters, setColFilters] = useState<Record<ColumnKey, string[]>>({
     order: [],
@@ -547,6 +549,13 @@ export default function NdrDashboard() {
   useEffect(() => {
     const t = setInterval(load, 5 * 60 * 1000);
     return () => clearInterval(t);
+  }, []);
+
+  // Refresh handler for creations from child components
+  useEffect(() => {
+    function onRefresh() { try { load(); } catch {} }
+    window.addEventListener('ndr-refresh', onRefresh as any);
+    return () => window.removeEventListener('ndr-refresh', onRefresh as any);
   }, []);
 
   const enriched = useMemo(
@@ -815,6 +824,8 @@ export default function NdrDashboard() {
     URL.revokeObjectURL(url);
   }
 
+  // (moved to TableView)
+
   const couriers = useMemo(() => Array.from(new Set(enriched.map((r: any) => courierName(r.courier_account)))).filter(Boolean), [enriched]);
   const buckets = ["All", "Pending", "CNA", "Premises Closed", "Address Issue", "RTO", "Delivered", "Other"];
 
@@ -973,7 +984,7 @@ export default function NdrDashboard() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-slate-50 to-white text-slate-800">
+    <div className="min-h-screen bg-gradient-to-b from-slate-50 to-white text-slate-800 w-full max-w-none mx-auto px-2 sm:px-3 md:px-4">
       {/* Toast */}
       {toast && (
         <div
@@ -1384,6 +1395,23 @@ function TableView({ rows, onEdit: _onEdit, onQuickUpdate, total, page, pageSize
   const [showPctAssign, setShowPctAssign] = useState<boolean>(false);
   const [pctValues, setPctValues] = useState<Record<string, number>>({});
 
+  // New NDR (local to table)
+  const [showNewNdr, setShowNewNdr] = useState<boolean>(false);
+  const [creatingNdr, setCreatingNdr] = useState<boolean>(false);
+  const [newNdr, setNewNdr] = useState<{ order_id?: string; waybill?: string; courier_account?: string; delivery_status?: string; location?: string; remark?: string; event_time?: string; Partner_EDD?: string; phone?: string; customer_issue?: string }>({});
+
+  // Options derived from current table
+  const courierOptions = useMemo(() => {
+    const set = new Set<string>();
+    rows.forEach(r => { const c = courierName(r.courier_account); if (c && c !== '—') set.add(c); });
+    return Array.from(set).sort();
+  }, [rows]);
+  const statusOptions = useMemo(() => {
+    const set = new Set<string>();
+    rows.forEach(r => { const s = String(r.delivery_status || '').trim(); if (s) set.add(s); });
+    return Array.from(set).sort();
+  }, [rows]);
+
   // Load team members for active team into local state
   async function loadTeamMembersLocal() {
     try {
@@ -1423,6 +1451,44 @@ function TableView({ rows, onEdit: _onEdit, onQuickUpdate, total, page, pageSize
   function validatePctTotal(): { ok: boolean; total: number } {
     const total = Object.values(pctValues).reduce((a: number, b: number) => a + (Number.isFinite(b) ? b : 0), 0);
     return { ok: total === 100, total };
+  }
+
+  // Create a new manual NDR row
+  async function createNdr() {
+    const orderIdNum = newNdr.order_id ? Number(newNdr.order_id) : undefined;
+    if (!orderIdNum && !String(newNdr.waybill || '').trim()) {
+      alert('Provide at least Order ID or AWB');
+      return;
+    }
+    const payload: Partial<NdrRow> & any = {
+      order_id: orderIdNum || null,
+      waybill: newNdr.waybill ? String(newNdr.waybill) : null,
+      courier_account: newNdr.courier_account || null,
+      delivery_status: newNdr.delivery_status || null,
+      location: newNdr.location || null,
+      remark: newNdr.remark || null,
+      event_time: newNdr.event_time ? new Date(newNdr.event_time).toISOString() : new Date().toISOString(),
+      Partner_EDD: newNdr.Partner_EDD ? new Date(newNdr.Partner_EDD).toISOString() : null,
+      notes: JSON.stringify({ phone: newNdr.phone || undefined, customer_issue: newNdr.customer_issue || undefined }),
+    };
+    try {
+      setCreatingNdr(true);
+      const url = `${SUPABASE_URL}/${SUPABASE_TABLE}`;
+      const res = await fetch(url, { method: 'POST', headers: SUPABASE_HEADERS, body: JSON.stringify(payload) });
+      if (!res.ok) {
+        const txt = await res.text();
+        throw new Error(`Create failed: ${res.status} ${res.statusText} — ${txt}`);
+      }
+      setShowNewNdr(false);
+      setNewNdr({});
+      // Notify parent to refresh
+      try { window.dispatchEvent(new CustomEvent('ndr-refresh')); } catch {}
+      alert('New NDR created');
+    } catch (e: any) {
+      alert(e?.message || 'Create failed');
+    } finally {
+      setCreatingNdr(false);
+    }
   }
 
   async function onAssignByPercentages() {
@@ -1640,6 +1706,14 @@ function TableView({ rows, onEdit: _onEdit, onQuickUpdate, total, page, pageSize
             title="Export selected rows"
           >
             <Download className="w-4 h-4" /> Export selected ({selectedIds.length})
+          </button>
+          {/* New manual NDR */}
+          <button
+            className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-slate-900 text-white text-sm hover:bg-slate-800"
+            onClick={() => setShowNewNdr(true)}
+            title="Create a manual NDR"
+          >
+            + New NDR
           </button>
           {/* Assign to team member */}
           <div className="flex items-center gap-2 ring-1 ring-slate-200 rounded-xl px-2 py-1 bg-white">
@@ -2025,6 +2099,73 @@ function TableView({ rows, onEdit: _onEdit, onQuickUpdate, total, page, pageSize
             {openFilter === 'email' && <FilterMenu colKey="email" title="Email Sent" />}
             {openFilter === 'call' && <FilterMenu colKey="call" title="Call Status" />}
             {openFilter === 'edd' && <FilterMenu colKey="edd" title="EDD" />}
+          </div>
+        </div>,
+        document.body
+      )}
+      {/* New NDR modal */}
+      {showNewNdr && typeof document !== 'undefined' && ReactDOM.createPortal(
+        <div className="fixed inset-0 z-[200]" onClick={() => setShowNewNdr(false)} aria-hidden>
+          <div className="pointer-events-auto" style={{ position: 'fixed', right: 16, top: 72, maxWidth: 'min(720px, 96vw)' }} onClick={(e) => e.stopPropagation()}>
+            <div className="w-full rounded-2xl bg-white shadow-xl ring-1 ring-slate-200 p-4">
+              <div className="text-sm font-semibold mb-3">New NDR</div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <label className="text-sm block">
+                  Order ID
+                  <input className="mt-1 w-full ring-1 ring-slate-200 rounded-lg px-3 py-2" value={newNdr.order_id || ''} onChange={(e)=>setNewNdr(v=>({ ...v, order_id: e.target.value }))} placeholder="e.g., 123456" />
+                </label>
+                <label className="text-sm block">
+                  AWB
+                  <input className="mt-1 w-full ring-1 ring-slate-200 rounded-lg px-3 py-2" value={newNdr.waybill || ''} onChange={(e)=>setNewNdr(v=>({ ...v, waybill: e.target.value }))} placeholder="e.g., 999999999" />
+                </label>
+                <label className="text-sm block">
+                  Courier Partner
+                  <select className="mt-1 w-full ring-1 ring-slate-200 rounded-lg px-3 py-2 bg-white" value={newNdr.courier_account || ''} onChange={(e)=>setNewNdr(v=>({ ...v, courier_account: e.target.value }))}>
+                    <option value="">Select…</option>
+                    {courierOptions.map(opt => (
+                      <option key={opt} value={opt}>{opt}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="text-sm block">
+                  Current Status
+                  <select className="mt-1 w-full ring-1 ring-slate-200 rounded-lg px-3 py-2 bg-white" value={newNdr.delivery_status || ''} onChange={(e)=>setNewNdr(v=>({ ...v, delivery_status: e.target.value }))}>
+                    <option value="">Select…</option>
+                    {statusOptions.map(opt => (
+                      <option key={opt} value={opt}>{opt}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="text-sm block">
+                  Location
+                  <input className="mt-1 w-full ring-1 ring-slate-200 rounded-lg px-3 py-2" value={newNdr.location || ''} onChange={(e)=>setNewNdr(v=>({ ...v, location: e.target.value }))} placeholder="Last scan location" />
+                </label>
+                <label className="text-sm block">
+                  Remark
+                  <input className="mt-1 w-full ring-1 ring-slate-200 rounded-lg px-3 py-2" value={newNdr.remark || ''} onChange={(e)=>setNewNdr(v=>({ ...v, remark: e.target.value }))} placeholder="Internal remark" />
+                </label>
+                <label className="text-sm block">
+                  Event Time
+                  <input type="datetime-local" className="mt-1 w-full ring-1 ring-slate-200 rounded-lg px-3 py-2" value={newNdr.event_time || ''} onChange={(e)=>setNewNdr(v=>({ ...v, event_time: e.target.value }))} />
+                </label>
+                <label className="text-sm block">
+                  EDD
+                  <input type="date" className="mt-1 w-full ring-1 ring-slate-200 rounded-lg px-3 py-2" value={newNdr.Partner_EDD || ''} onChange={(e)=>setNewNdr(v=>({ ...v, Partner_EDD: e.target.value }))} />
+                </label>
+                <label className="text-sm block">
+                  Customer Phone
+                  <input className="mt-1 w-full ring-1 ring-slate-200 rounded-lg px-3 py-2" value={newNdr.phone || ''} onChange={(e)=>setNewNdr(v=>({ ...v, phone: e.target.value }))} placeholder="Customer phone" />
+                </label>
+                <label className="text-sm block sm:col-span-2">
+                  Issue (Customer)
+                  <textarea className="mt-1 w-full ring-1 ring-slate-200 rounded-lg px-3 py-2 min-h-[80px]" value={newNdr.customer_issue || ''} onChange={(e)=>setNewNdr(v=>({ ...v, customer_issue: e.target.value }))} placeholder="e.g., wants reattempt tomorrow" />
+                </label>
+              </div>
+              <div className="mt-3 flex items-center justify-end gap-2">
+                <button className="px-3 py-1.5 rounded-lg ring-1 ring-slate-200 text-sm" onClick={()=>setShowNewNdr(false)} title="Cancel">Cancel</button>
+                <button className="px-3 py-1.5 rounded-lg bg-slate-900 text-white text-sm disabled:opacity-50" disabled={creatingNdr} onClick={createNdr} title="Create NDR">{creatingNdr ? 'Creating…' : 'Create'}</button>
+              </div>
+            </div>
           </div>
         </div>,
         document.body
