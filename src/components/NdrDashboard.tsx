@@ -89,7 +89,7 @@ function toBucket(row: NdrRow): string {
 
 function parseNotes(
   notes: string | null
-): { phone?: string; customer_issue?: string; action_taken?: string; action_to_be_taken?: string; bucket_override?: string; call_status?: string } {
+): { phone?: string; customer_issue?: string; action_taken?: string; action_to_be_taken?: string; bucket_override?: string; call_status?: string; lead_tag?: boolean } {
   if (!notes) return {};
   try {
     const obj = JSON.parse(notes);
@@ -565,6 +565,11 @@ export default function NdrDashboard() {
         const derivedBucket = toBucket(r);
         const finalBucket = (notes.bucket_override as string) || derivedBucket;
         const edd = eddStatus(r.Partner_EDD);
+        // New/Updated tags
+        const created = r.created_at ? new Date(r.created_at).getTime() : NaN;
+        const eventT = r.event_time ? new Date(r.event_time).getTime() : NaN;
+        const isNew = !isNaN(created) ? (Date.now() - created) <= 48 * 60 * 60 * 1000 : false; // within last 48h
+        const isEventUpdated = !isNaN(created) && !isNaN(eventT) ? (eventT - created) > 5 * 60 * 1000 : false; // event_time more than 5min after created_at
         return {
           ...r,
           __bucket: finalBucket,
@@ -575,6 +580,9 @@ export default function NdrDashboard() {
           __bucket_override: notes.bucket_override,
           // Only the explicit saved call status. If absent (null), keep empty string so 'Empty' filter matches.
           __call_status: notes.call_status || "",
+          __lead_tag: Boolean(notes.lead_tag),
+          __is_new: isNew,
+          __event_updated: isEventUpdated,
         } as any;
       }),
     [rows]
@@ -2020,6 +2028,17 @@ function TableView({ rows, onEdit: _onEdit, onQuickUpdate, total, page, pageSize
                 <td>
                   <div className="font-medium">{fmtIST(r.event_time)}</div>
                   <div className="text-xs text-slate-500">{r.location || '—'}</div>
+                  <div className="mt-1 flex items-center gap-1 flex-wrap">
+                    {r.__is_new && (
+                      <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-amber-50 text-amber-700 ring-1 ring-amber-200" title={`Created at ${fmtIST(r.created_at)}`}>New</span>
+                    )}
+                    {r.__event_updated && (
+                      <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-blue-50 text-blue-700 ring-1 ring-blue-200" title={`Event updated after creation (${fmtIST(r.created_at)} → ${fmtIST(r.event_time)})`}>Updated</span>
+                    )}
+                    {r.__lead_tag && (
+                      <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-fuchsia-50 text-fuchsia-700 ring-1 ring-fuchsia-200" title="Tagged as Lead">Lead</span>
+                    )}
+                  </div>
                 </td>
                 <td className="font-medium">
                   <button
@@ -2165,6 +2184,20 @@ function TableView({ rows, onEdit: _onEdit, onQuickUpdate, total, page, pageSize
                     title="Delete this record"
                   >
                     Delete
+                  </button>
+                  <button
+                    type="button"
+                    className={classNames("ml-2 px-2 py-1 rounded-full text-xs ring-1 hover:bg-slate-50", r.__lead_tag ? 'ring-fuchsia-200 text-fuchsia-700 bg-fuchsia-50' : 'ring-slate-200')}
+                    onClick={async (e) => {
+                      e.stopPropagation();
+                      const notes = parseNotes(r.notes);
+                      const next = !notes.lead_tag;
+                      notes.lead_tag = next;
+                      await onQuickUpdate(r.id, { notes: JSON.stringify(notes) });
+                    }}
+                    title={r.__lead_tag ? "Untag Lead" : "Tag as Lead"}
+                  >
+                    {r.__lead_tag ? 'Untag Lead' : 'Tag Lead'}
                   </button>
                 </td>
               </tr>
