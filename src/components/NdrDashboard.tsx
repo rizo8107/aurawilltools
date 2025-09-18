@@ -741,7 +741,8 @@ export default function NdrDashboard() {
         .filter((x) => x.created_at)
         .map((x) => ({ ...x, assigned: x.order_id ? allowedOrders.has(Number(x.order_id)) : false }))
         .sort((a, b) => new Date(b.created_at as any).getTime() - new Date(a.created_at as any).getTime());
-      setEmailFeed(mergedAll);
+      // Only keep emails linked to orders assigned to the logged-in user
+      setEmailFeed(mergedAll.filter((x) => x.assigned));
     } catch {
       setEmailFeed([]);
     } finally {
@@ -753,7 +754,7 @@ export default function NdrDashboard() {
     if (view === 'emails') {
       loadEmailFeed();
     }
-  }, [view]);
+  }, [view, currentUser, rows.length]);
 
   // Load activity feed when Activity view is open
   async function loadActivity() {
