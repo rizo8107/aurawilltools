@@ -34,9 +34,12 @@ interface FeedbackForm {
   age: string;
   wouldRecommend: 'Yes' | 'No' | '';
   generalFeedback: string;
-  monthlyDelivery: 'Yes' | 'No' | '';
+  monthlyDelivery: 'Yes' | 'No' | 'Not now' | '';
   willGiveReview: 'Yes' | 'No' | '';
   sharedLink: 'Yes' | 'No' | '';
+  // New flags
+  sendReviewLink: boolean;
+  sendCommunityLink: boolean;
   reviewReceived: 'Yes' | 'No' | '';
   usingInCoverOrContainer: string;
   orderId: string;
@@ -87,6 +90,8 @@ export default function RepeatCampaign({ initialOrderNumber = '', hideFeedback =
     monthlyDelivery: '',
     willGiveReview: '',
     sharedLink: '',
+    sendReviewLink: false,
+    sendCommunityLink: false,
     reviewReceived: '',
     usingInCoverOrContainer: '',
     orderId: '',
@@ -428,6 +433,8 @@ export default function RepeatCampaign({ initialOrderNumber = '', hideFeedback =
         monthlyDelivery: '',
         willGiveReview: '',
         sharedLink: '',
+        sendReviewLink: false,
+        sendCommunityLink: false,
         reviewReceived: '',
         usingInCoverOrContainer: '',
         orderId: feedbackForm.orderId,
@@ -794,11 +801,10 @@ export default function RepeatCampaign({ initialOrderNumber = '', hideFeedback =
                         onChange={handleFeedbackChange}
                         className="w-full p-2 border border-gray-300 rounded-lg"
                         required
-                        aria-label="User profile"
-                        title="Who used this product"
+                        aria-label="Family user"
+                        title="Who in family uses the health mix"
                       />
                     </div>
-
                     <div>
                       <label className="block text-gray-700 text-sm font-medium mb-1">
                         Gender (for records)
@@ -808,15 +814,56 @@ export default function RepeatCampaign({ initialOrderNumber = '', hideFeedback =
                         value={feedbackForm.gender}
                         onChange={handleFeedbackChange}
                         className="w-full p-2 border border-gray-300 rounded-lg"
-                        required
                         aria-label="Gender"
-                        title="Users gender"
+                        title="Gender"
                       >
                         <option value="">Select Gender</option>
                         <option value="Male">Male</option>
                         <option value="Female">Female</option>
                         <option value="Other">Other</option>
                       </select>
+                    </div>
+
+                    {/* Monthly Subscription */}
+                    <div>
+                      <label className="block text-gray-700 text-sm font-medium mb-1">
+                        Monthly Subscription
+                      </label>
+                      <select
+                        name="monthlyDelivery"
+                        value={feedbackForm.monthlyDelivery}
+                        onChange={handleFeedbackChange}
+                        className="w-full p-2 border border-gray-300 rounded-lg"
+                        aria-label="Monthly subscription"
+                        title="Monthly subscription preference"
+                      >
+                        <option value="">Select an option</option>
+                        <option value="Yes">Yes</option>
+                        <option value="No">No</option>
+                        <option value="Not now">Not now</option>
+                      </select>
+                    </div>
+
+                    {/* Send links checkboxes */}
+                    <div className="flex items-start gap-4">
+                      <label className="inline-flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          checked={feedbackForm.sendReviewLink}
+                          onChange={(e) => setFeedbackForm(prev => ({ ...prev, sendReviewLink: e.target.checked }))}
+                          aria-label="Send review link"
+                        />
+                        <span className="text-sm text-gray-700">Send review link</span>
+                      </label>
+                      <label className="inline-flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          checked={feedbackForm.sendCommunityLink}
+                          onChange={(e) => setFeedbackForm(prev => ({ ...prev, sendCommunityLink: e.target.checked }))}
+                          aria-label="Send community link"
+                        />
+                        <span className="text-sm text-gray-700">Send community link</span>
+                      </label>
                     </div>
 
                     <div>
