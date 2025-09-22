@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Search, AlertCircle, CheckCircle, Clock, Calendar, Package, DollarSign, User, Phone, Mail, ArrowRight, X } from 'lucide-react';
+import { Search, AlertCircle, CheckCircle, Clock, Calendar, Package, DollarSign, User, Phone, Mail, ArrowRight } from 'lucide-react';
 
 // Define interfaces for the response data
 interface Product {
@@ -23,11 +23,12 @@ interface CustomerData {
 
 interface FeedbackForm {
   firstTimeReason: string;
+  heardFrom: string; // Where did you first hear/notice our Health Mix?
   reorderReason: string;
-  likedFeatures: string;
+  likedFeatures: string; // What you like most
   usageRecipe: string;
   usageTime: string;
-  perceivedDifference: string;
+  perceivedDifference: string; // Changes noticed after using
   userProfile: string;
   gender: 'Male' | 'Female' | 'Other' | '';
   age: string;
@@ -39,6 +40,7 @@ interface FeedbackForm {
   reviewReceived: 'Yes' | 'No' | '';
   usingInCoverOrContainer: string;
   orderId: string;
+  newProductExpectation: string; // Expectations for new product benefits
 }
 
 
@@ -48,13 +50,7 @@ interface RepeatCampaignProps {
   hideFeedback?: boolean;
 }
 
-// Define a list of callers for the dropdown
-const CALLERS = [
-  'Priya',
-  'Megha',
-  'Sri',
-  'Ram'
-];
+// Caller selection removed; agent taken from localStorage('ndr_user') if present
 
 export default function RepeatCampaign({ initialOrderNumber = '', hideFeedback = false }: RepeatCampaignProps) {
   const [orderId, setOrderId] = useState(initialOrderNumber || '');
@@ -65,13 +61,11 @@ export default function RepeatCampaign({ initialOrderNumber = '', hideFeedback =
   const [messageType, setMessageType] = useState<'success' | 'error' | 'info' | ''>('');
   const [callStatus, setCallStatus] = useState('');
   const [callStatusType, setCallStatusType] = useState<'success' | 'error' | 'info' | ''>('');
+  // Previous feedback fetched from call_feedback
+  const [prevFeedback, setPrevFeedback] = useState<any | null>(null);
   const [selectedCallStatus, setSelectedCallStatus] = useState('');
   
-  // Caller selection state
-  const [showCallerDialog, setShowCallerDialog] = useState(false);
-  const [selectedCaller, setSelectedCaller] = useState('');
-  const [callerError, setCallerError] = useState('');
-  const [storedCaller, setStoredCaller] = useState<string | null>(null);
+  // Caller selection removed
   
   // State for the feedback form
   // Reference to track if initial search has been performed
@@ -79,6 +73,7 @@ export default function RepeatCampaign({ initialOrderNumber = '', hideFeedback =
 
   const [feedbackForm, setFeedbackForm] = useState<FeedbackForm>({
     firstTimeReason: '',
+    heardFrom: '',
     reorderReason: '',
     likedFeatures: '',
     usageRecipe: '',
@@ -94,7 +89,8 @@ export default function RepeatCampaign({ initialOrderNumber = '', hideFeedback =
     sharedLink: '',
     reviewReceived: '',
     usingInCoverOrContainer: '',
-    orderId: ''
+    orderId: '',
+    newProductExpectation: '',
   });
   
   const orderInputRef = useRef<HTMLInputElement>(null);
@@ -114,52 +110,40 @@ export default function RepeatCampaign({ initialOrderNumber = '', hideFeedback =
     }
   }, []);
   
-  // Effect to automatically search when initialOrderNumber is provided
-  // Check for stored caller in localStorage on component mount
-  useEffect(() => {
-    const savedCaller = localStorage.getItem('caller_name');
-    if (savedCaller) {
-      setSelectedCaller(savedCaller);
-      setStoredCaller(savedCaller);
-    }
-  }, []);
+  // Caller selection removed
 
   useEffect(() => {
-    // Only perform the search if initialOrderNumber is provided and not empty
-    // and we haven't already performed the initial search
+    // Auto search without blocking for caller selection
     if (initialOrderNumber && !initialSearchDone.current) {
       initialSearchDone.current = true;
-      
-      // Check if we have a caller name before searching
-      const savedCaller = localStorage.getItem('caller_name');
-      if (savedCaller || hideFeedback) {
-        // When hideFeedback is true (embedded in NDR), do not block on caller selection
-        handleOrderSearch(null);
-      } else {
-        // Show caller selection dialog first (only when not embedded)
-        setShowCallerDialog(true);
-      }
+      handleOrderSearch(null);
     }
   }, [initialOrderNumber, hideFeedback]); // eslint-disable-line react-hooks/exhaustive-deps
   
-  // Handle caller selection
-  const handleCallerSelect = () => {
-    if (!selectedCaller) {
-      setCallerError('Please select your name');
-      return;
-    }
-    
-    // Store caller name in localStorage
-    localStorage.setItem('caller_name', selectedCaller);
-    setStoredCaller(selectedCaller);
-    setShowCallerDialog(false);
-    setCallerError('');
-    
-    // If there's an order ID, proceed with search
-    if (orderId.trim()) {
-      handleOrderSearch(null);
-    }
-  };
+  // Load previous feedback from call_feedback for this order_number
+  useEffect(() => {
+    const loadPrev = async () => {
+      const onum = (feedbackForm.orderId || orderId || '').trim();
+      if (!onum) { setPrevFeedback(null); return; }
+      try {
+        const url = `https://app-supabase.9krcxo.easypanel.host/rest/v1/call_feedback?order_number=eq.${encodeURIComponent(onum)}&select=*&order=created_at.desc&limit=1`;
+        const res = await fetch(url, {
+          headers: {
+            'apikey': 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNzUwMDEyMjAwLCJleHAiOjE5MDc3Nzg2MDB9.eJ81pv114W4ZLvg0E-AbNtNZExPoLYbxGdeWTY5PVVs',
+            'Authorization': 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNzUwMDEyMjAwLCJleHAiOjE5MDc3Nzg2MDB9.eJ81pv114W4ZLvg0E-AbNtNZExPoLYbxGdeWTY5PVVs'
+          }
+        });
+        if (!res.ok) { setPrevFeedback(null); return; }
+        const arr = await res.json();
+        setPrevFeedback(Array.isArray(arr) && arr.length ? arr[0] : null);
+      } catch {
+        setPrevFeedback(null);
+      }
+    };
+    loadPrev();
+  }, [feedbackForm.orderId, orderId]);
+  
+  // Caller selection removed
   
   const handleOrderSearch = async (e: React.FormEvent | null) => {
     // Only prevent default if e is not null (i.e., if called from form submission)
@@ -169,12 +153,6 @@ export default function RepeatCampaign({ initialOrderNumber = '', hideFeedback =
     
     if (!orderId.trim()) {
       setError('Please enter an order ID');
-      return;
-    }
-    
-    // Check if caller is selected (only enforce when not embedded)
-    if (!storedCaller && !hideFeedback) {
-      setShowCallerDialog(true);
       return;
     }
     
@@ -189,7 +167,7 @@ export default function RepeatCampaign({ initialOrderNumber = '', hideFeedback =
         },
         body: JSON.stringify({ 
           Order: orderId,
-          caller: storedCaller // Include caller name in the request with the correct parameter name
+          // agent field removed from payload; backend webhook can infer if needed
         }),
       });
       
@@ -282,34 +260,66 @@ export default function RepeatCampaign({ initialOrderNumber = '', hideFeedback =
     setCallStatus('Initiating call...');
     setCallStatusType('info');
 
-    if (!phoneNumber || phoneNumber.length < 10) {
-      setCallStatus('Invalid phone number.');
-      setCallStatusType('error');
-      return;
-    }
-
-    const apiUrl = `https://app.callerdesk.io/api/click_to_call_v2?calling_party_a=09025500829&calling_party_b=${phoneNumber}&deskphone=08062863034&authcode=aee60239bd42b6427d82b94bbb676a3d&call_from_did=1`;
-
     try {
-      const response = await fetch(apiUrl);
-      const data = await response.json();
+      const custnumber = String(phoneNumber || '').replace(/\D/g, '');
+      if (!custnumber || custnumber.length < 10) {
+        setCallStatus('Invalid phone number.');
+        setCallStatusType('error');
+        return;
+      }
 
-      const successText = 'Call to Customer Initiate Successfully';
-      
-      // The API can return a success message even if the HTTP status or API status field suggests an error.
-      // We prioritize checking the message content for the specific success text.
-      if (data && data.message && data.message.includes(successText)) {
-        setCallStatus(data.message); // Display the exact success message from the API
+      // Resolve exenumber from team_members via Supabase REST (client anon)
+      const SUPABASE_URL = 'https://app-supabase.9krcxo.easypanel.host';
+      const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNzUwMDEyMjAwLCJleHAiOjE5MDc3Nzg2MDB9.eJ81pv114W4ZLvg0E-AbNtNZExPoLYbxGdeWTY5PVVs';
+      const sbHeaders = { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}` };
+      const member = (typeof window !== 'undefined' ? (localStorage.getItem('ndr_user') || '') : '').trim();
+      const teamId = (typeof window !== 'undefined' ? (localStorage.getItem('ndr_active_team_id') || '') : '').trim();
+
+      const tmUrl = `${SUPABASE_URL}/rest/v1/team_members?select=member,phone${teamId ? `&team_id=eq.${encodeURIComponent(teamId)}` : ''}`;
+      const tmRes = await fetch(tmUrl, { headers: sbHeaders });
+      if (!tmRes.ok) {
+        const t = await tmRes.text();
+        throw new Error(`team_members ${tmRes.status}: ${t}`);
+      }
+      let tmRows = (await tmRes.json()) as Array<{ member?: string; phone?: string | number }>;
+      const want = member.toLowerCase();
+      let row = tmRows.find(r => String(r.member || '').trim().toLowerCase() === want);
+      if (!row) {
+        const allRes = await fetch(`${SUPABASE_URL}/rest/v1/team_members?select=member,phone`, { headers: sbHeaders });
+        if (allRes.ok) {
+          tmRows = (await allRes.json()) as Array<{ member?: string; phone?: string | number }>;
+          row = tmRows.find(r => String(r.member || '').trim().toLowerCase() === want);
+        }
+      }
+      const exenumber = (row?.phone ?? '').toString();
+      if (!exenumber || exenumber.replace(/\D/g, '').length < 6) {
+        setCallStatus('Your agent phone (exenumber) is not configured in team_members.');
+        setCallStatusType('error');
+        return;
+      }
+
+      // Mcube outbound call
+      const mcubeRes = await fetch('https://api.mcube.com/Restmcube-api/outbound-calls', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJUSEVfQ0xBSU0iLCJhdWQiOiJUSEVfQVVESUVOQ0UiLCJpYXQiOjE3NTY4ODkxNjcsImV4cF9kYXRhIjoxNzg4NDI1MTY3LCJkYXRhIjp7ImJpZCI6Ijc3MjQifX0.fPDu0Kt-AbnnLGsHJ_LdJfiP970viKCD3eRSDVCSzdo',
+        },
+        body: JSON.stringify({ exenumber, custnumber, refurl: '1' }),
+      });
+
+      let payload: unknown = null;
+      try { payload = await mcubeRes.json(); } catch { /* ignore non-json */ }
+      if (mcubeRes.ok) {
+        setCallStatus('Call initiated successfully.');
         setCallStatusType('success');
       } else {
-        // If the specific success text is not found, we treat it as a failure.
-        const errorMessage = data.message || 'An unknown error occurred.';
-        setCallStatus(`Failed: ${errorMessage}`);
+        const txt = (typeof payload === 'object' && payload && 'message' in payload) ? (payload as any).message : (await mcubeRes.text());
+        setCallStatus(`Failed to initiate call: ${txt || mcubeRes.status}`);
         setCallStatusType('error');
       }
     } catch (err) {
-      // This block catches network errors or issues with JSON parsing.
-      console.error('Click-to-call network/parsing error:', err);
+      console.error('Mcube click-to-call error:', err);
       const errorMessage = err instanceof Error ? err.message : String(err);
       setCallStatus(`Failed to initiate call: ${errorMessage}`);
       setCallStatusType('error');
@@ -365,10 +375,46 @@ export default function RepeatCampaign({ initialOrderNumber = '', hideFeedback =
       
       setMessage('Feedback submitted successfully!');
       setMessageType('success');
+
+      // Also store a normalized analytics record in call_feedback (Option B)
+      try {
+        const supabaseUrl = 'https://app-supabase.9krcxo.easypanel.host/rest/v1/rpc/insert_call_feedback';
+        const agentName = (typeof window !== 'undefined' ? (localStorage.getItem('ndr_user') || '') : '') || '';
+        const cf = {
+          order_id: null,
+          order_number: feedbackForm.orderId || orderId || null,
+          customer_phone: customerData.customer_phone || null,
+          agent: agentName,
+          call_status: selectedCallStatus || null,
+          heard_from: feedbackForm.heardFrom,
+          first_time_reason: feedbackForm.firstTimeReason,
+          reorder_reason: feedbackForm.reorderReason,
+          liked_features: feedbackForm.likedFeatures,
+          usage_recipe: feedbackForm.usageRecipe,
+          usage_time: feedbackForm.usageTime,
+          family_user: feedbackForm.userProfile,
+          gender: feedbackForm.gender,
+          age: feedbackForm.age,
+          new_product_expectation: feedbackForm.generalFeedback || '',
+        };
+        await fetch(supabaseUrl, {
+          method: 'POST',
+          headers: {
+            'apikey': 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNzUwMDEyMjAwLCJleHAiOjE5MDc3Nzg2MDB9.eJ81pv114W4ZLvg0E-AbNtNZExPoLYbxGdeWTY5PVVs',
+            'Authorization': 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNzUwMDEyMjAwLCJleHAiOjE5MDc3Nzg2MDB9.eJ81pv114W4ZLvg0E-AbNtNZExPoLYbxGdeWTY5PVVs',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ p: cf }),
+        });
+      } catch (err) {
+        // Non-blocking. The primary submission succeeded; analytics insert failed.
+        console.error('insert_call_feedback failed', err);
+      }
       
       // Reset form fields except orderId
       setFeedbackForm({
         firstTimeReason: '',
+        heardFrom: '',
         reorderReason: '',
         likedFeatures: '',
         usageRecipe: '',
@@ -384,7 +430,8 @@ export default function RepeatCampaign({ initialOrderNumber = '', hideFeedback =
         sharedLink: '',
         reviewReceived: '',
         usingInCoverOrContainer: '',
-        orderId: feedbackForm.orderId
+        orderId: feedbackForm.orderId,
+        newProductExpectation: '',
       });
       
       // Scroll to top to show success message
@@ -415,74 +462,7 @@ export default function RepeatCampaign({ initialOrderNumber = '', hideFeedback =
         </div>
       )}
       
-      {/* Caller Selection Dialog (hidden when embedded from NDR) */}
-      {!hideFeedback && showCallerDialog && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-6 w-full max-w-md">
-            <div className="flex justify-between items-center mb-4">
-              <h2 className="text-xl font-semibold">Select Your Name</h2>
-              <button 
-                onClick={() => setShowCallerDialog(false)} 
-                className="text-gray-500 hover:text-gray-700"
-                aria-label="Close dialog"
-              >
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-            
-            <p className="text-gray-600 mb-4">
-              Please select your name to track who is handling this order.
-            </p>
-            
-            <div className="mb-4">
-              <label htmlFor="caller-select" className="block text-sm font-medium text-gray-700 mb-1">
-                Your Name
-              </label>
-              <select
-                id="caller-select"
-                value={selectedCaller}
-                onChange={(e) => setSelectedCaller(e.target.value)}
-                className="w-full p-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                <option value="">-- Select your name --</option>
-                {CALLERS.map((caller) => (
-                  <option key={caller} value={caller}>{caller}</option>
-                ))}
-              </select>
-              {callerError && (
-                <p className="text-red-500 text-sm mt-1">{callerError}</p>
-              )}
-            </div>
-            
-            <div className="flex justify-end">
-              <button
-                onClick={handleCallerSelect}
-                className="bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
-              >
-                Confirm
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-      
-      {/* Current Caller Display (hidden when embedded from NDR) */}
-      {!hideFeedback && storedCaller && (
-        <div className="bg-blue-50 border border-blue-200 rounded-md p-3 mb-6 flex justify-between items-center">
-          <div className="flex items-center">
-            <User className="h-5 w-5 text-blue-500 mr-2" />
-            <span className="text-blue-800">Current caller: <strong>{storedCaller}</strong></span>
-          </div>
-          <button 
-            onClick={() => {
-              if (!hideFeedback) setShowCallerDialog(true);
-            }}
-            className="text-blue-600 hover:text-blue-800 text-sm font-medium"
-          >
-            Change
-          </button>
-        </div>
-      )}
+      {/* Caller selection and display removed */}
       
       {/* Order Search Form */}
       <div className="mb-6">
@@ -525,6 +505,27 @@ export default function RepeatCampaign({ initialOrderNumber = '', hideFeedback =
         <div className="flex flex-col lg:flex-row gap-6">
           {/* Left Column: Customer Info and Timeline */}
           <div className={hideFeedback ? "w-full" : "lg:w-1/2"}>
+            {/* Previous Feedback Card */}
+            {prevFeedback && (
+              <div className="bg-white rounded-lg shadow-md p-4 mb-6">
+                <h3 className="text-lg font-semibold mb-2">Previous Feedback</h3>
+                <div className="text-sm text-gray-700 grid grid-cols-1 md:grid-cols-2 gap-2">
+                  <div><span className="text-gray-500">Logged at:</span> {new Date(prevFeedback.created_at).toLocaleString()}</div>
+                  <div><span className="text-gray-500">Agent:</span> {prevFeedback.agent || '—'}</div>
+                  <div><span className="text-gray-500">Call Status:</span> {prevFeedback.call_status || '—'}</div>
+                  <div><span className="text-gray-500">Heard From:</span> {prevFeedback.heard_from || '—'}</div>
+                  <div className="md:col-span-2"><span className="text-gray-500">First-time Reason:</span> {prevFeedback.first_time_reason || '—'}</div>
+                  <div className="md:col-span-2"><span className="text-gray-500">Re-order Reason:</span> {prevFeedback.reorder_reason || '—'}</div>
+                  <div className="md:col-span-2"><span className="text-gray-500">Liked / Changes:</span> {prevFeedback.liked_features || '—'}</div>
+                  <div><span className="text-gray-500">Usage Recipe:</span> {prevFeedback.usage_recipe || '—'}</div>
+                  <div><span className="text-gray-500">Usage Time:</span> {prevFeedback.usage_time || '—'}</div>
+                  <div><span className="text-gray-500">Family User:</span> {prevFeedback.family_user || '—'}</div>
+                  <div><span className="text-gray-500">Gender:</span> {prevFeedback.gender || '—'}</div>
+                  <div><span className="text-gray-500">Age:</span> {prevFeedback.age || '—'}</div>
+                  <div className="md:col-span-2"><span className="text-gray-500">New Product Expectation:</span> {prevFeedback.new_product_expectation || '—'}</div>
+                </div>
+              </div>
+            )}
             {/* Customer Information Card */}
             <div className="bg-white rounded-lg shadow-md p-6 mb-6">
               <h2 className="text-xl font-semibold mb-4">Customer Information</h2>
@@ -685,157 +686,187 @@ export default function RepeatCampaign({ initialOrderNumber = '', hideFeedback =
               <div className="bg-white rounded-lg shadow-md p-6 h-full">
                 <h2 className="text-xl font-semibold mb-4">Customer Feedback Form</h2>
                 <form onSubmit={submitFeedback}>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-                  <div>
-                    <label className="block text-gray-700 text-sm font-medium mb-1">
-                      For what reason did you buy the health mix for the first time?
-                    </label>
-                    <input
-                  type="text"
-                  name="firstTimeReason"
-                  value={feedbackForm.firstTimeReason}
-                  onChange={handleFeedbackChange}
-                  className="w-full p-2 border border-gray-300 rounded-lg"
-                  required
-                  aria-label="First time purchase reason"
-                  title="Reason for first purchase"
-                />
-              </div>
-              
-              <div>
-                <label className="block text-gray-700 text-sm font-medium mb-1">
-                  Reason for ordering again?
-                </label>
-                <input
-                  type="text"
-                  name="reorderReason"
-                  value={feedbackForm.reorderReason}
-                  onChange={handleFeedbackChange}
-                  className="w-full p-2 border border-gray-300 rounded-lg"
-                  required
-                  aria-label="Reason for reordering"
-                  title="Reason for ordering again"
-                />
-              </div>
-              
-              <div>
-                <label className="block text-gray-700 text-sm font-medium mb-1">
-                What changes did you notice, and what did you like about the health mix?
-                </label>
-                <input
-                  type="text"
-                  name="likedFeatures"
-                  value={feedbackForm.likedFeatures}
-                  onChange={handleFeedbackChange}
-                  className="w-full p-2 border border-gray-300 rounded-lg"
-                  required
-                  aria-label="Liked features"
-                  title="What you liked about the health mix"
-                />
-              </div>
-              
-              <div>
-                <label className="block text-gray-700 text-sm font-medium mb-1">
-                  How did you use it? (Recipe)
-                </label>
-                <input
-                  type="text"
-                  name="usageRecipe"
-                  value={feedbackForm.usageRecipe}
-                  onChange={handleFeedbackChange}
-                  className="w-full p-2 border border-gray-300 rounded-lg"
-                  required
-                  aria-label="Usage recipe"
-                  title="How you used the health mix"
-                />
-              </div>
-              
-              <div>
-                <label className="block text-gray-700 text-sm font-medium mb-1">
-                  When did you use it? (Time of the day)
-                </label>
-                <input
-                  type="text"
-                  name="usageTime"
-                  value={feedbackForm.usageTime}
-                  onChange={handleFeedbackChange}
-                  className="w-full p-2 border border-gray-300 rounded-lg"
-                  required
-                  aria-label="Time of usage"
-                  title="When you used the health mix"
-                />
-              </div>
-              
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                    <div>
+                      <label className="block text-gray-700 text-sm font-medium mb-1">
+                        First-time purchase reason: May I know what made you purchase the Health Mix for the first time?
+                      </label>
+                      <input
+                        type="text"
+                        name="firstTimeReason"
+                        value={feedbackForm.firstTimeReason}
+                        onChange={handleFeedbackChange}
+                        className="w-full p-2 border border-gray-300 rounded-lg"
+                        required
+                        aria-label="First time purchase reason"
+                        title="Reason for first purchase"
+                      />
+                    </div>
 
-              <div>
-                <label className="block text-gray-700 text-sm font-medium mb-1">
-                  Who used this?
-                </label>
-                <input
-                  type="text"
-                  name="userProfile"
-                  value={feedbackForm.userProfile}
-                  onChange={handleFeedbackChange}
-                  className="w-full p-2 border border-gray-300 rounded-lg"
-                  required
-                  aria-label="User profile"
-                  title="Who used this product"
-                />
-              </div>
-              
-              <div>
-                <label className="block text-gray-700 text-sm font-medium mb-1">
-                  Gender
-                </label>
-                <select
-                  name="gender"
-                  value={feedbackForm.gender}
-                  onChange={handleFeedbackChange}
-                  className="w-full p-2 border border-gray-300 rounded-lg"
-                  required
-                  aria-label="Gender"
-                  title="Users gender"
-                >
-                  <option value="">Select Gender</option>
-                  <option value="Male">Male</option>
-                  <option value="Female">Female</option>
-                  <option value="Other">Other</option>
-                </select>
-              </div>
+                    <div>
+                      <label className="block text-gray-700 text-sm font-medium mb-1">
+                        Where did you first hear about or notice our Health Mix?
+                      </label>
+                      <input
+                        type="text"
+                        name="heardFrom"
+                        value={feedbackForm.heardFrom}
+                        onChange={handleFeedbackChange}
+                        className="w-full p-2 border border-gray-300 rounded-lg"
+                        required
+                        aria-label="Where did you first hear the Health Mix"
+                        title="Where did you first hear/notice our Health Mix"
+                      />
+                    </div>
 
-              <div>
-                <label className="block text-gray-700 text-sm font-medium mb-1">
-                  Age
-                </label>
-                <input
-                  type="text"
-                  name="age"
-                  value={feedbackForm.age}
-                  onChange={handleFeedbackChange}
-                  className="w-full p-2 border border-gray-300 rounded-lg"
-                  required
-                  aria-label="Age"
-                  title="Users age"
-                />
+                    <div>
+                      <label className="block text-gray-700 text-sm font-medium mb-1">
+                        Reason for re-ordering: What made you order it again?
+                      </label>
+                      <input
+                        type="text"
+                        name="reorderReason"
+                        value={feedbackForm.reorderReason}
+                        onChange={handleFeedbackChange}
+                        className="w-full p-2 border border-gray-300 rounded-lg"
+                        required
+                        aria-label="Reason for reordering"
+                        title="Reason for ordering again"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-gray-700 text-sm font-medium mb-1">
+                        Benefits & changes noticed: Have you noticed any changes after using it? What do you like most about the mix?
+                      </label>
+                      <input
+                        type="text"
+                        name="likedFeatures"
+                        value={feedbackForm.likedFeatures}
+                        onChange={handleFeedbackChange}
+                        className="w-full p-2 border border-gray-300 rounded-lg"
+                        required
+                        aria-label="Liked features"
+                        title="What you liked about the health mix"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-gray-700 text-sm font-medium mb-1">
+                        Usage details: How are you using the Health Mix? (Any specific recipe or method)
+                      </label>
+                      <input
+                        type="text"
+                        name="usageRecipe"
+                        value={feedbackForm.usageRecipe}
+                        onChange={handleFeedbackChange}
+                        className="w-full p-2 border border-gray-300 rounded-lg"
+                        required
+                        aria-label="Usage recipe"
+                        title="How you used the health mix"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-gray-700 text-sm font-medium mb-1">
+                        At what time of the day do you usually use it?
+                      </label>
+                      <input
+                        type="text"
+                        name="usageTime"
+                        value={feedbackForm.usageTime}
+                        onChange={handleFeedbackChange}
+                        className="w-full p-2 border border-gray-300 rounded-lg"
+                        required
+                        aria-label="Time of usage"
+                        title="When you used the health mix"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-gray-700 text-sm font-medium mb-1">
+                        Who in your family is using this Health Mix?
+                      </label>
+                      <input
+                        type="text"
+                        name="userProfile"
+                        value={feedbackForm.userProfile}
+                        onChange={handleFeedbackChange}
+                        className="w-full p-2 border border-gray-300 rounded-lg"
+                        required
+                        aria-label="User profile"
+                        title="Who used this product"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-gray-700 text-sm font-medium mb-1">
+                        Gender (for records)
+                      </label>
+                      <select
+                        name="gender"
+                        value={feedbackForm.gender}
+                        onChange={handleFeedbackChange}
+                        className="w-full p-2 border border-gray-300 rounded-lg"
+                        required
+                        aria-label="Gender"
+                        title="Users gender"
+                      >
+                        <option value="">Select Gender</option>
+                        <option value="Male">Male</option>
+                        <option value="Female">Female</option>
+                        <option value="Other">Other</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-gray-700 text-sm font-medium mb-1">
+                        Age (for records)
+                      </label>
+                      <input
+                        type="text"
+                        name="age"
+                        value={feedbackForm.age}
+                        onChange={handleFeedbackChange}
+                        className="w-full p-2 border border-gray-300 rounded-lg"
+                        required
+                        aria-label="Age"
+                        title="Users age"
+                      />
+                    </div>
+
+                    <div className="md:col-span-2">
+                      <label className="block text-gray-700 text-sm font-medium mb-1">
+                        Expectation for new product: If we launch a new product, what health improvements or benefits would you like to see?
+                      </label>
+                      <textarea
+                        name="newProductExpectation"
+                        value={feedbackForm.newProductExpectation}
+                        onChange={handleFeedbackChange}
+                        className="w-full p-2 border border-gray-300 rounded-lg min-h-[80px]"
+                        required
+                        aria-label="Expectation for new product"
+                        title="What benefits you expect from future products"
+                      />
+                    </div>
+                  </div>
+
+                  <button
+                    type="submit"
+                    className="bg-green-600 hover:bg-green-700 text-white px-6 py-2 rounded-lg flex items-center justify-center transition-colors"
+                    disabled={loading}
+                  >
+                    {loading ? (
+                      <span className="inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin mr-2"></span>
+                    ) : (
+                      <ArrowRight className="w-4 h-4 mr-2" />
+                    )}
+                    Submit Feedback
+                  </button>
+                </form>
               </div>
             </div>
-
-              <button
-                type="submit"
-                className="bg-green-600 hover:bg-green-700 text-white px-6 py-2 rounded-lg flex items-center justify-center transition-colors"
-                disabled={loading}
-              >
-                {loading ? (
-                  <span className="inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin mr-2"></span>
-                ) : (
-                  <ArrowRight className="w-4 h-4 mr-2" />
-                )}
-                Submit Feedback
-              </button>
-            </form>
-            </div>
-          </div>
-        )}
+          )}
         </div>
       )}
     </div>

@@ -5,6 +5,7 @@ import UpdateTracking from './components/UpdateTracking';
 import CreateManifest from './components/CreateManifest';
 import RepeatCampaign from './components/RepeatCampaign';
 import RepeatOrdersTable from './components/RepeatOrdersTable';
+import RepeatDashboard from './components/RepeatDashboard';
 import OrderList from './components/OrderList';
 import GstInvoiceGenerator from './components/GstInvoice';
 import Auth from './components/Auth';
@@ -14,8 +15,9 @@ import NdrLogin from './components/NdrLogin';
 import NdrAllocationPage from './components/NdrAllocationPage';
 import TeamAnalyticsPage from './components/TeamAnalyticsPage';
 import { Package, Printer, Truck, FileText, Users, LogOut, FileSpreadsheet, RefreshCw } from 'lucide-react';
+import RepeatNew from './components/Repeat_new';
 
-type TabType = 'order' | 'printslip' | 'tracking' | 'manifest' | 'campaign' | 'repeatorders' | 'orderhistory' | 'gstinvoice' | 'ndr' | 'teams' | 'allocation' | 'team_analytics';
+type TabType = 'order' | 'printslip' | 'tracking' | 'manifest' | 'campaign' | 'repeatorders' | 'repeatorders_new' | 'repeat_dashboard' | 'orderhistory' | 'gstinvoice' | 'ndr' | 'teams' | 'allocation' | 'team_analytics';
 
 function App() {
   const [activeTab, setActiveTab] = useState<TabType>('order');
@@ -57,7 +59,8 @@ function App() {
     { id: 'tracking', label: 'Update Tracking', icon: <Truck size={20} /> },
     { id: 'manifest', label: 'Create Manifest', icon: <FileText size={20} /> },
     { id: 'campaign', label: 'Repeat Campaign', icon: <Users size={20} /> },
-    { id: 'repeatorders', label: 'Repeat Orders', icon: <RefreshCw size={20} /> },
+    { id: 'repeatorders_new', label: 'Repeat Orders (New)', icon: <RefreshCw size={20} /> },
+    { id: 'repeat_dashboard', label: 'Repeat Dashboard', icon: <Users size={20} /> },
     { id: 'ndr', label: 'NDR Dashboard', icon: <Truck size={20} /> },
     { id: 'teams', label: 'Teams', icon: <Users size={20} /> },
     { id: 'allocation', label: 'Allocation', icon: <Users size={20} /> },
@@ -72,6 +75,8 @@ function App() {
     manifest: 'Create and manage shipping manifests',
     campaign: 'Manage repeat customer campaigns and feedback',
     repeatorders: 'View and manage customers with repeat orders',
+    repeatorders_new: 'Repeat orders with team identity and auto-allocation controls',
+    repeat_dashboard: 'Assigned repeat customers for the logged-in agent',
     orderhistory: 'View, filter, and print past orders',
     gstinvoice: 'Generate GST invoices for orders',
     ndr: 'Monitor & resolve non-delivery shipments',
@@ -150,8 +155,9 @@ function App() {
             activeTab === 'campaign' ? 'max-w-5xl' : 
             activeTab === 'team_analytics' ? 'max-w-[95vw]' : 
             activeTab === 'ndr' ? 'max-w-none' : 
+            activeTab === 'repeat_dashboard' ? 'max-w-none' : 
             activeTab === 'gstinvoice' || activeTab === 'orderhistory' ? 'max-w-7xl' : 'max-w-4xl'
-          } ${activeTab === 'ndr' ? '' : 'mx-auto'}`}>
+          } ${(activeTab === 'ndr' || activeTab === 'repeat_dashboard') ? '' : 'mx-auto'}`}>
             {activeTab === 'order' && <OrderForm />}
             {activeTab === 'printslip' && <PrintSlip />}
             {activeTab === 'tracking' && <UpdateTracking />}
@@ -162,6 +168,21 @@ function App() {
             {activeTab === 'repeatorders' && 
               <RepeatOrdersTable />
             }
+            {activeTab === 'repeatorders_new' && 
+              <RepeatNew />
+            }
+            {activeTab === 'repeat_dashboard' && (
+              (() => {
+                // gate like NDR
+                const user = localStorage.getItem('ndr_user');
+                const teamId = localStorage.getItem('ndr_active_team_id');
+                const session = localStorage.getItem('ndr_session');
+                if (!user || !teamId || !session) {
+                  return <NdrLogin onAuthenticated={() => setNdrSessionKey((v) => v + 1)} />;
+                }
+                return <RepeatDashboard />;
+              })()
+            )}
             {activeTab === 'orderhistory' && <OrderList />}
             {activeTab === 'gstinvoice' && <GstInvoiceGenerator />}
             {activeTab === 'ndr' && (

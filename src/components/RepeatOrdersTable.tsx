@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Search, User, ShoppingCart, BarChart2, Phone, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from 'lucide-react';
+import { Search, User, ShoppingCart, BarChart2, Phone, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, ShieldCheck } from 'lucide-react';
 import OrderDetailsDialog from './OrderDetailsDialog';
 
+// Matches enriched RPC get_repeat_orders_with_assignments (preferred)
 interface RepeatOrder {
   email: string;
   phone: string;
@@ -11,11 +12,23 @@ interface RepeatOrder {
   first_order: string;
   last_order: string;
   call_status?: 'Called' | 'Busy' | 'Cancelled' | 'No Response' | 'Wrong Number' | 'Invalid Number' | '';
+  assigned_to?: string | null;
+  assigned_at?: string | null;
+  team_id?: number | null;
 }
 
 
 
 export default function RepeatOrdersTable() {
+  // Supabase REST base and headers (anon for client-side; consider proxy for production)
+  const SUPABASE_URL = 'https://app-supabase.9krcxo.easypanel.host';
+  const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNzUwMDEyMjAwLCJleHAiOjE5MDc3Nzg2MDB9.eJ81pv114W4ZLvg0E-AbNtNZExPoLYbxGdeWTY5PVVs';
+  const sbHeaders = {
+    apikey: SUPABASE_ANON_KEY,
+    Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+    'Content-Type': 'application/json',
+  };
+
   // Data and loading states
   const [orders, setOrders] = useState<RepeatOrder[]>([]);
   const [filteredOrders, setFilteredOrders] = useState<RepeatOrder[]>([]);
@@ -23,6 +36,16 @@ export default function RepeatOrdersTable() {
   const [error, setError] = useState('');
   const [callStatus, setCallStatus] = useState('');
   const [callStatusType, setCallStatusType] = useState<'success' | 'error' | 'info' | ''>('');
+  // NDR session / user / team context
+  const [session] = useState<string>(() => {
+    try { return localStorage.getItem('ndr_session') || ''; } catch { return ''; }
+  });
+  const [currentUser] = useState<string>(() => {
+    try { return localStorage.getItem('ndr_user') || ''; } catch { return ''; }
+  });
+  const [activeTeamId] = useState<string>(() => {
+    try { return localStorage.getItem('ndr_active_team_id') || ''; } catch { return ''; }
+  });
   
   // Dialog state
   const [isDialogOpen, setIsDialogOpen] = useState(false);
@@ -161,18 +184,25 @@ export default function RepeatOrdersTable() {
     setError('');
     
     try {
-      const response = await fetch('https://app-supabase.9krcxo.easypanel.host/rest/v1/rpc/get_repeat_orders', {
+      // Guard: require login + team
+      if (!session || !currentUser || !activeTeamId) {
+        setOrders([]);
+        setFilteredOrders([]);
+        setError('Login and set a team to view your assigned repeat orders.');
+        return;
+      }
+
+      // Prefer enriched RPC that returns assignment fields and supports agent filter
+      const rpcUrl = `${SUPABASE_URL}/rest/v1/rpc/get_repeat_orders_with_assignments`;
+      const response = await fetch(rpcUrl, {
         method: 'POST',
-        headers: {
-          'apikey': 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNzUwMDEyMjAwLCJleHAiOjE5MDc3Nzg2MDB9.eJ81pv114W4ZLvg0E-AbNtNZExPoLYbxGdeWTY5PVVs',
-          'Authorization': 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNzUwMDEyMjAwLCJleHAiOjE5MDc3Nzg2MDB9.eJ81pv114W4ZLvg0E-AbNtNZExPoLYbxGdeWTY5PVVs',
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({})
+        headers: sbHeaders,
+        body: JSON.stringify({ p_team_id: Number(activeTeamId), p_agent: currentUser })
       });
       
       if (!response.ok) {
-        throw new Error(`Error: ${response.status}`);
+        const txt = await response.text();
+        throw new Error(`get_repeat_orders_with_assignments ${response.status}: ${txt}`);
       }
       
       const data: RepeatOrder[] = await response.json();
@@ -234,36 +264,82 @@ export default function RepeatOrdersTable() {
     fetchRepeatOrders();
   }, [fetchRepeatOrders]);
 
-  const handleCall = async (phoneNumber: string) => {
+  const handleCall = async (custNumber: string) => {
     setCallStatus('Initiating call...');
     setCallStatusType('info');
 
-    if (!phoneNumber || phoneNumber.length < 10) {
-      setCallStatus('Invalid phone number.');
-      setCallStatusType('error');
-      return;
-    }
-
-    const apiUrl = `https://app.callerdesk.io/api/click_to_call_v2?calling_party_a=09363744463&calling_party_b=${phoneNumber}&deskphone=08062863034&authcode=aee60239bd42b6427d82b94bbb676a3d&call_from_did=1`;
-
     try {
-      const response = await fetch(apiUrl);
-      const data = await response.json();
+      if (!session || !currentUser || !activeTeamId) {
+        setCallStatus('Login and set a team to place calls.');
+        setCallStatusType('error');
+        return;
+      }
+      if (!custNumber || String(custNumber).replace(/\D/g, '').length < 10) {
+        setCallStatus('Invalid customer number.');
+        setCallStatusType('error');
+        return;
+      }
 
-      const successText = 'Call to Customer Initiate Successfully';
-      
-      if (data && data.message && data.message.includes(successText)) {
-        setCallStatus(data.message);
+      // 1) Fetch agent exenumber (phone) from team_members (case-insensitive match on member)
+      const tmUrl = `${SUPABASE_URL}/rest/v1/team_members?select=member,phone&team_id=eq.${encodeURIComponent(
+        String(activeTeamId)
+      )}`;
+      const tmRes = await fetch(tmUrl, { headers: sbHeaders });
+      if (!tmRes.ok) {
+        const t = await tmRes.text();
+        throw new Error(`team_members ${tmRes.status}: ${t}`);
+      }
+      let tmRows = (await tmRes.json()) as Array<{ member?: string; phone?: string | number }>;
+      const want = String(currentUser || '').trim().toLowerCase();
+      let row = tmRows.find(r => String(r.member || '').trim().toLowerCase() === want);
+      // Fallback: search across all teams if not found for active team
+      if (!row) {
+        const tmAllUrl = `${SUPABASE_URL}/rest/v1/team_members?select=member,phone`;
+        const tmAllRes = await fetch(tmAllUrl, { headers: sbHeaders });
+        if (tmAllRes.ok) {
+          tmRows = (await tmAllRes.json()) as Array<{ member?: string; phone?: string | number }>;
+          row = tmRows.find(r => String(r.member || '').trim().toLowerCase() === want);
+        }
+      }
+      const exenumber = (row?.phone ?? '').toString();
+      if (!exenumber || exenumber.replace(/\D/g, '').length < 6) {
+        setCallStatus('Your agent phone (exenumber) is not configured in team_members.');
+        setCallStatusType('error');
+        return;
+      }
+
+      // 2) Place outbound call via Mcube API
+      const mcubeUrl = 'https://api.mcube.com/Restmcube-api/outbound-calls';
+      const mcubeAuth = 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJUSEVfQ0xBSU0iLCJhdWQiOiJUSEVfQVVESUVOQ0UiLCJpYXQiOjE3NTY4ODkxNjcsImV4cF9kYXRhIjoxNzg4NDI1MTY3LCJkYXRhIjp7ImJpZCI6Ijc3MjQifX0.fPDu0Kt-AbnnLGsHJ_LdJfiP970viKCD3eRSDVCSzdo';
+      const mcubeRes = await fetch(mcubeUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: mcubeAuth,
+        },
+        body: JSON.stringify({
+          exenumber,
+          custnumber: custNumber,
+          refurl: '1',
+        }),
+      });
+
+      const ok = mcubeRes.ok;
+      let payload: unknown = null;
+      try { payload = await mcubeRes.json(); } catch { /* ignore non-json */ }
+
+      if (ok) {
+        setCallStatus('Call initiated successfully.');
         setCallStatusType('success');
       } else {
-        const errorMessage = data.message || 'An unknown error occurred.';
-        setCallStatus(`Failed: ${errorMessage}`);
+        const txt = (typeof payload === 'object' && payload && 'message' in payload) ? (payload as any).message : (await mcubeRes.text());
+        setCallStatus(`Failed to initiate call: ${txt || mcubeRes.status}`);
         setCallStatusType('error');
       }
     } catch (err) {
-      console.error('Click-to-call network/parsing error:', err);
-      const errorMessage = err instanceof Error ? err.message : String(err);
-      setCallStatus(`Failed to initiate call: ${errorMessage}`);
+      console.error('Mcube click-to-call error:', err);
+      const msg = err instanceof Error ? err.message : String(err);
+      setCallStatus(`Failed to initiate call: ${msg}`);
       setCallStatusType('error');
     }
   };
@@ -321,7 +397,12 @@ export default function RepeatOrdersTable() {
     <div className="bg-gray-100 min-h-screen font-sans py-4 -mx-40">
       <header className="mb-6">
         <h1 className="text-3xl font-bold text-gray-900">Repeat Customers</h1>
-        <p className="text-gray-600 mt-1">Analyze, filter, and manage customers with repeat orders.</p>
+        <p className="text-gray-600 mt-1">Showing only leads assigned to you via NDR login and allocation rules.</p>
+        <div className="mt-2 text-sm text-gray-700 flex items-center gap-4">
+          <div><span className="text-gray-500">Current user:</span> <strong>{currentUser || '—'}</strong></div>
+          <div><span className="text-gray-500">Active team:</span> <strong>{activeTeamId || '—'}</strong></div>
+          <div className="flex items-center gap-1 text-emerald-700"><ShieldCheck className="w-4 h-4"/> Session: {session ? 'active' : 'not set'}</div>
+        </div>
       </header>
 
       {/* Analytics Section */}
