@@ -189,7 +189,16 @@ export default function RepeatDashboard() {
         throw new Error(`get_repeat_orders_with_assignments ${res.status}: ${txt}`);
       }
       const data = (await res.json()) as RepeatRow[] | unknown;
-      setRows(Array.isArray(data) ? (data as RepeatRow[]) : []);
+      const arr: RepeatRow[] = Array.isArray(data) ? (data as RepeatRow[]) : [];
+      // Hard agent filter on client to avoid showing others' leads even if RPC returns broader set
+      const want = String(currentUser || '').trim().toLowerCase();
+      const teamNum = Number(activeTeamId) || undefined;
+      const mine = arr.filter(r => {
+        const a = String(r.assigned_to || '').trim().toLowerCase();
+        const tOk = teamNum ? Number(r.team_id || 0) === teamNum : true;
+        return a === want && tOk;
+      });
+      setRows(mine);
       setPage(1); // reset to first page after refresh
     } catch (e: any) {
       setRows([]);

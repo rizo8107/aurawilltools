@@ -696,22 +696,6 @@ export default function RepeatCampaign({ initialOrderNumber = '', hideFeedback =
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
                     <div>
                       <label className="block text-gray-700 text-sm font-medium mb-1">
-                        First-time purchase reason: May I know what made you purchase the Health Mix for the first time?
-                      </label>
-                      <input
-                        type="text"
-                        name="firstTimeReason"
-                        value={feedbackForm.firstTimeReason}
-                        onChange={handleFeedbackChange}
-                        className="w-full p-2 border border-gray-300 rounded-lg"
-                        required
-                        aria-label="First time purchase reason"
-                        title="Reason for first purchase"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-gray-700 text-sm font-medium mb-1">
                         Where did you first hear about or notice our Health Mix?
                       </label>
                       <input
@@ -728,7 +712,23 @@ export default function RepeatCampaign({ initialOrderNumber = '', hideFeedback =
 
                     <div>
                       <label className="block text-gray-700 text-sm font-medium mb-1">
-                        Reason for re-ordering: What made you order it again?
+                        May I know what made you purchase the Health Mix for the first time?
+                      </label>
+                      <input
+                        type="text"
+                        name="firstTimeReason"
+                        value={feedbackForm.firstTimeReason}
+                        onChange={handleFeedbackChange}
+                        className="w-full p-2 border border-gray-300 rounded-lg"
+                        required
+                        aria-label="First time purchase reason"
+                        title="Reason for first purchase"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-gray-700 text-sm font-medium mb-1">
+                        What made you order it again?
                       </label>
                       <input
                         type="text"
@@ -744,7 +744,7 @@ export default function RepeatCampaign({ initialOrderNumber = '', hideFeedback =
 
                     <div>
                       <label className="block text-gray-700 text-sm font-medium mb-1">
-                        Benefits & changes noticed: Have you noticed any changes after using it? What do you like most about the mix?
+                       Have you noticed any changes after using it? What do you like most about the mix?
                       </label>
                       <input
                         type="text"
@@ -760,7 +760,7 @@ export default function RepeatCampaign({ initialOrderNumber = '', hideFeedback =
 
                     <div>
                       <label className="block text-gray-700 text-sm font-medium mb-1">
-                        Usage details: How are you using the Health Mix? (Any specific recipe or method)
+                        How are you using the Health Mix? (Any specific recipe or method)
                       </label>
                       <input
                         type="text"
