@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ShieldCheck, Play, RefreshCcw, Search, AlertTriangle, Loader2, Phone, ExternalLink,
-  Filter, X, ChevronLeft, ChevronRight, Info
+  Filter, X, ChevronLeft, ChevronRight, Info, Download
 } from 'lucide-react';
 import OrderDetailsDialog from './OrderDetailsDialog';
 import { SUPABASE_URL, sbHeadersObj as sbHeaders } from '../lib/supabaseClient';
@@ -137,16 +137,19 @@ export default function RepeatDashboard() {
   const [callMsg, setCallMsg] = useState<string>('');
   const [callTone, setCallTone] = useState<'success'|'error'|'info'|''>('');
   const [q, setQ] = useState<string>('');
-  const [lastRunAt, setLastRunAt] = useState<string>('');
-  const [isDialogOpen, setIsDialogOpen] = useState(false);
-  const [selectedOrderNumber, setSelectedOrderNumber] = useState<string>('');
-
-  /** Advanced filters */
   const [filterStatus, setFilterStatus] = useState<string>('');
   const [filterFrom, setFilterFrom] = useState<string>('');
   const [filterTo, setFilterTo] = useState<string>('');
   const [minOrders, setMinOrders] = useState<string>('');
   const [maxOrders, setMaxOrders] = useState<string>('');
+  // Admin-only: member filter by assigned_to
+  const [memberFilter, setMemberFilter] = useState<string>('');
+  const [teamMembers, setTeamMembers] = useState<string[]>([]);
+  // Misc UI state
+  const [showFilters, setShowFilters] = useState<boolean>(false);
+  const [lastRunAt, setLastRunAt] = useState<string>('');
+  const [isDialogOpen, setIsDialogOpen] = useState<boolean>(false);
+  const [selectedOrderNumber, setSelectedOrderNumber] = useState<string>('');
 
   /** View: list vs analytics */
   const [view, setView] = useState<'leads' | 'analytics'>('leads');
@@ -155,6 +158,37 @@ export default function RepeatDashboard() {
   const [fbAgent, setFbAgent] = useState<string>('all'); // 'me' | 'all'
   const [fbFrom, setFbFrom] = useState<string>('');
   const [fbTo, setFbTo] = useState<string>('');
+  // Agent filter for the filled leads table (client-side)
+  const [fbAgentFilter, setFbAgentFilter] = useState<string>('');
+  // Agent-wise aggregation of feedback (current loaded scope/date)
+  const fbByAgent = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const f of feedback) {
+      const a = String(f.agent || '—').trim() || '—';
+      counts[a] = (counts[a] || 0) + 1;
+    }
+    return Object.entries(counts).sort((a,b)=>b[1]-a[1]);
+  }, [feedback]);
+
+  // Filtered feedback list for the table
+  const filteredFeedback = useMemo(() => {
+    if (!fbAgentFilter) return feedback;
+    const want = fbAgentFilter.trim().toLowerCase();
+    return feedback.filter(f => String(f.agent || '').trim().toLowerCase() === want);
+  }, [feedback, fbAgentFilter]);
+
+  // Export agent summary CSV
+  const exportAgentSummary = useCallback(() => {
+    const rows = [['Agent','Count'], ...fbByAgent.map(([a,c]) => [a, String(c)])];
+    const csv = rows.map(r => r.map(x => `"${String(x).replace(/"/g,'""')}"`).join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `agent_summary_${Date.now()}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [fbByAgent]);
 
   // Force non-admins to stay on 'leads'
   useEffect(() => {
@@ -245,6 +279,25 @@ export default function RepeatDashboard() {
     loadAssigned();
   }, [loadAssigned]);
 
+  // Load team members for member filter (admin only)
+  useEffect(() => {
+    (async () => {
+      if (!isAdmin) { setTeamMembers([]); return; }
+      const tid = String(activeTeamId || '').trim();
+      if (!tid) { setTeamMembers([]); return; }
+      try {
+        const url = `${SUPABASE_URL}/rest/v1/team_members?team_id=eq.${encodeURIComponent(tid)}&select=member&order=member.asc`;
+        const res = await fetch(url, { headers: sbHeaders });
+        if (!res.ok) throw new Error(await res.text());
+        const data = (await res.json()) as Array<{ member?: string }>;
+        const uniq = Array.from(new Set((data || []).map(r => String(r.member || '').trim()).filter(Boolean)));
+        setTeamMembers(uniq);
+      } catch {
+        setTeamMembers([]);
+      }
+    })();
+  }, [isAdmin, activeTeamId, SUPABASE_URL, sbHeaders]);
+
   /** Allocation */
   const runAllocation = useCallback(async () => {
     if (!activeTeamId) return;
@@ -276,16 +329,22 @@ export default function RepeatDashboard() {
 
   /** Filtering */
   const filtered = useMemo(() => {
-    const baseUser = rows.filter((r) => String(r.assigned_to || '') === currentUser);
+    // Admin: see all rows. Non-admin: only their own assigned leads.
+    const baseUser = isAdmin ? rows : rows.filter((r) => String(r.assigned_to || '') === currentUser);
+
+    // Admin member filter by assigned_to
+    const memberFiltered = isAdmin && memberFilter
+      ? baseUser.filter(r => String(r.assigned_to || '') === memberFilter)
+      : baseUser;
 
     const textFiltered = debouncedQuery
-      ? baseUser.filter((r) => {
+      ? memberFiltered.filter((r) => {
           const hay = [r.email, r.phone, ...(r.order_numbers || [])]
             .join(' ')
             .toLowerCase();
           return hay.includes(debouncedQuery);
         })
-      : baseUser;
+      : memberFiltered;
 
     const byStatus = filterStatus
       ? filterStatus === 'Not Called'
@@ -316,7 +375,7 @@ export default function RepeatDashboard() {
     });
 
     return byCount;
-  }, [rows, currentUser, debouncedQuery, filterStatus, filterFrom, filterTo, minOrders, maxOrders]);
+  }, [rows, isAdmin, memberFilter, currentUser, debouncedQuery, filterStatus, filterFrom, filterTo, minOrders, maxOrders]);
 
   /** Analytics */
   const stats = useMemo(() => {
@@ -612,9 +671,10 @@ export default function RepeatDashboard() {
       <div className="bg-white rounded-xl shadow p-3">
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
           {/* Search */}
-          <div className="relative w-full lg:max-w-md">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+          <div className="relative flex-1 min-w-[260px]">
+            <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
             <input
+              type="text"
               value={q}
               onChange={(e) => setQ(e.target.value)}
               placeholder="Search by email, phone, or order number"
@@ -625,9 +685,23 @@ export default function RepeatDashboard() {
 
           {/* Filters */}
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-8 gap-2 w-full lg:w-auto">
-            <div className="inline-flex items-center gap-2 text-gray-600 text-sm px-2 py-2">
+            <button className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border" onClick={() => setShowFilters((prev) => !prev)}>
               <Filter className="w-4 h-4" /> Filters
-            </div>
+            </button>
+            {isAdmin && (
+              <select
+                className="px-2 py-2 rounded-lg border text-sm"
+                value={memberFilter}
+                onChange={(e) => { setMemberFilter(e.target.value); setPage(1); }}
+                aria-label="Member"
+                title="Filter by assigned member"
+              >
+                <option value="">All members</option>
+                {teamMembers.map(m => (
+                  <option key={m} value={m}>{m}</option>
+                ))}
+              </select>
+            )}
             <select
               value={filterStatus}
               onChange={(e) => setFilterStatus(e.target.value)}
@@ -898,6 +972,13 @@ export default function RepeatDashboard() {
       </div>
       )}
 
+      {/* Admin note in Leads view */}
+      {view === 'leads' && isAdmin && (
+        <div className="text-xs text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-lg p-2 mb-3">
+          Admin mode: showing all repeat campaign leads. Use filters to narrow down.
+        </div>
+      )}
+
       {/* Analytics view */}
       {view === 'analytics' && isAdmin && (
         <div className="bg-white rounded-xl shadow p-4 space-y-4">
@@ -909,7 +990,15 @@ export default function RepeatDashboard() {
             <input aria-label="Analytics from date" type="date" value={fbFrom} onChange={(e)=>setFbFrom(e.target.value)} className="border rounded-lg px-2 py-2 text-sm"/>
             <input aria-label="Analytics to date" type="date" value={fbTo} onChange={(e)=>setFbTo(e.target.value)} className="border rounded-lg px-2 py-2 text-sm"/>
             <IconButton onClick={loadFeedback}><RefreshCcw className="w-4 h-4"/>Reload</IconButton>
+            <IconButton title="Export agent summary CSV" onClick={exportAgentSummary}><Download className="w-4 h-4"/>Export summary</IconButton>
           </div>
+
+          {fbAgentFilter && (
+            <div className="text-xs text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-lg p-2">
+              Filtering filled leads by agent: <strong>{fbAgentFilter}</strong>
+              <button className="ml-2 px-2 py-0.5 border rounded text-xs" onClick={() => setFbAgentFilter('')}>Clear</button>
+            </div>
+          )}
 
           {fbStats.totalForms === 0 && (
             <div className="text-sm text-gray-600 bg-gray-50 border border-gray-200 rounded-lg p-3">
@@ -944,6 +1033,32 @@ export default function RepeatDashboard() {
               <div className="text-xs text-gray-500">Monthly Delivery (Yes)</div>
               <div className="text-xl font-semibold">{fbStats.monthlyYes}</div>
             </div>
+          </div>
+
+          {/* Agent-wise counts */}
+          <div>
+            <div className="text-sm font-medium mb-2">Filled by agent</div>
+            {fbByAgent.length === 0 ? (
+              <div className="text-xs text-gray-500">No data in current scope/date.</div>
+            ) : (
+              <div className="space-y-1">
+                {fbByAgent.map(([agent,count]) => (
+                  <button
+                    key={agent}
+                    type="button"
+                    className="flex items-center gap-2 w-full text-left hover:bg-indigo-50 rounded px-1"
+                    onClick={() => setFbAgentFilter(prev => prev === agent ? '' : agent)}
+                    title="Click to filter the filled leads table by this agent"
+                  >
+                    <div className="w-40 text-xs text-gray-600 truncate" title={agent}>{agent}</div>
+                    <div className="flex-1 bg-gray-100 rounded h-3 overflow-hidden">
+                      <div className="bg-indigo-500 h-3" style={{width: `${fbStats.totalForms? Math.round((Number(count)/fbStats.totalForms)*100):0}%`}}/>
+                    </div>
+                    <div className="w-10 text-right text-xs">{count}</div>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* Simple bar chart for Gender */}
@@ -1000,7 +1115,7 @@ export default function RepeatDashboard() {
                       <td className="px-3 py-3 text-center text-gray-600" colSpan={6}>No filled leads</td>
                     </tr>
                   ) : (
-                    [...feedback]
+                    [...filteredFeedback]
                       .sort((a, b) => new Date(b.created_at||'').getTime() - new Date(a.created_at||'').getTime())
                       .slice(0, 200)
                       .map((f, i) => (
