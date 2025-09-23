@@ -15,8 +15,9 @@ import NdrLogin from './components/NdrLogin';
 import NdrAllocationPage from './components/NdrAllocationPage';
 import TeamAnalyticsPage from './components/TeamAnalyticsPage';
 import { Package, Printer, Truck, FileText, Users, LogOut, FileSpreadsheet, RefreshCw } from 'lucide-react';
+import SegmentationPage from './components/SegmentationPage';
 
-type TabType = 'order' | 'printslip' | 'tracking' | 'manifest' | 'campaign' | 'repeatorders' | 'repeat_dashboard' | 'orderhistory' | 'gstinvoice' | 'ndr' | 'teams' | 'allocation' | 'team_analytics';
+type TabType = 'order' | 'printslip' | 'tracking' | 'manifest' | 'campaign' | 'repeatorders' | 'repeat_dashboard' | 'orderhistory' | 'gstinvoice' | 'ndr' | 'teams' | 'allocation' | 'team_analytics' | 'segmentation';
 
 function App() {
   const [activeTab, setActiveTab] = useState<TabType>('order');
@@ -63,6 +64,7 @@ function App() {
     { id: 'teams', label: 'Teams', icon: <Users size={20} /> },
     { id: 'allocation', label: 'Allocation', icon: <Users size={20} /> },
     { id: 'team_analytics', label: 'Team Analytics', icon: <Users size={20} /> },
+    { id: 'segmentation', label: 'Segmentation', icon: <FileText size={20} /> },
     { id: 'gstinvoice', label: 'GST Invoice', icon: <FileSpreadsheet size={20} /> },
   ];
 
@@ -81,6 +83,7 @@ function App() {
     teams: 'Create teams, add members, and set the active team for lead allocation',
     allocation: 'Define NDR allocation rules (percentage split, status filters) for the active team',
     team_analytics: 'Visualize team assignments, status split, and activity',
+    segmentation: 'Group and export orders by State/City/Pincode/Area',
   };
 
   // Handle logout
@@ -197,6 +200,7 @@ function App() {
             {activeTab === 'teams' && <TeamsPage />}
             {activeTab === 'allocation' && <NdrAllocationPage />}
             {activeTab === 'team_analytics' && <TeamAnalyticsPage />}
+            {activeTab === 'segmentation' && <SegmentationPage />}
           </div>
         </main>
         

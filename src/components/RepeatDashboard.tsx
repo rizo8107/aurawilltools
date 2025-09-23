@@ -148,15 +148,21 @@ export default function RepeatDashboard() {
   const [fbFrom, setFbFrom] = useState<string>('');
   const [fbTo, setFbTo] = useState<string>('');
 
-  const agentOptions = useMemo(() => {
-    const set = new Set<string>();
-    rows.forEach(r => { if (r.assigned_to) set.add(String(r.assigned_to)); });
-    return Array.from(set).sort();
-  }, [rows]);
+  // Note: agentOptions was unused; removed to avoid lint
 
   /** Pagination */
   const [page, setPage] = useState<number>(1);
   const [pageSize, setPageSize] = useState<number>(25);
+
+  /** Selection for export */
+  const makeKey = useCallback((r: RepeatRow) => `${r.email}__${r.phone}`, []);
+  const [selected, setSelected] = useState<Record<string, boolean>>({});
+  const isSelected = useCallback((r: RepeatRow) => !!selected[makeKey(r)], [selected, makeKey]);
+  const toggleRow = useCallback((r: RepeatRow) => {
+    const k = makeKey(r);
+    setSelected(prev => ({ ...prev, [k]: !prev[k] }));
+  }, [makeKey]);
+  // togglePageAll and exportLeads are declared after pageSlice/filtered are defined
 
   /** Debounced search */
   const [debouncedQuery, setDebouncedQuery] = useState<string>('');
@@ -178,10 +184,15 @@ export default function RepeatDashboard() {
         return;
       }
       const rpcUrl = `${SUPABASE_URL}/rest/v1/rpc/get_repeat_orders_with_assignments`;
+      const isAdmin = String(currentUser || '').trim().toLowerCase() === 'admin';
       const res = await fetch(rpcUrl, {
         method: 'POST',
         headers: sbHeaders,
-        body: JSON.stringify({ p_team_id: Number(activeTeamId), p_agent: currentUser }),
+        // For admin, request all by sending nulls (RPC should treat nulls as no filter)
+        body: JSON.stringify({
+          p_team_id: isAdmin ? null : Number(activeTeamId),
+          p_agent: isAdmin ? null : currentUser,
+        }),
       });
 
       if (!res.ok) {
@@ -190,15 +201,20 @@ export default function RepeatDashboard() {
       }
       const data = (await res.json()) as RepeatRow[] | unknown;
       const arr: RepeatRow[] = Array.isArray(data) ? (data as RepeatRow[]) : [];
-      // Hard agent filter on client to avoid showing others' leads even if RPC returns broader set
-      const want = String(currentUser || '').trim().toLowerCase();
-      const teamNum = Number(activeTeamId) || undefined;
-      const mine = arr.filter(r => {
-        const a = String(r.assigned_to || '').trim().toLowerCase();
-        const tOk = teamNum ? Number(r.team_id || 0) === teamNum : true;
-        return a === want && tOk;
-      });
-      setRows(mine);
+      if (isAdmin) {
+        // Admin sees all rows returned by RPC
+        setRows(arr);
+      } else {
+        // Hard agent filter on client to avoid showing others' leads even if RPC returns broader set
+        const want = String(currentUser || '').trim().toLowerCase();
+        const teamNum = Number(activeTeamId) || undefined;
+        const mine = arr.filter(r => {
+          const a = String(r.assigned_to || '').trim().toLowerCase();
+          const tOk = teamNum ? Number(r.team_id || 0) === teamNum : true;
+          return a === want && tOk;
+        });
+        setRows(mine);
+      }
       setPage(1); // reset to first page after refresh
     } catch (e: any) {
       setRows([]);
@@ -303,6 +319,48 @@ export default function RepeatDashboard() {
     const start = (pageSafe - 1) * pageSize;
     return filtered.slice(start, start + pageSize);
   }, [filtered, pageSafe, pageSize]);
+
+  const togglePageAll = useCallback(() => {
+    const allSelected = pageSlice.every(isSelected);
+    setSelected(prev => {
+      const next = { ...prev } as Record<string, boolean>;
+      pageSlice.forEach(r => { next[makeKey(r)] = !allSelected; });
+      return next;
+    });
+  }, [pageSlice, isSelected, makeKey]);
+
+  const exportLeads = useCallback(() => {
+    const rowsToExport = filtered.filter(r => isSelected(r));
+    const data = rowsToExport.length ? rowsToExport : filtered;
+    const headers = [
+      'email','phone','order_count','order_numbers','first_order','last_order','assigned_to','call_status','team_id'
+    ];
+    const lines = [headers.join(',')];
+    data.forEach(r => {
+      const values = [
+        r.email || '',
+        r.phone || '',
+        String(r.order_count ?? ''),
+        (r.order_numbers || []).join('|'),
+        r.first_order || '',
+        r.last_order || '',
+        r.assigned_to || '',
+        r.call_status || '',
+        r.team_id != null ? String(r.team_id) : ''
+      ];
+      const escaped = values.map(v => `"${String(v).replace(/"/g, '""')}"`);
+      lines.push(escaped.join(','));
+    });
+    const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `repeat-leads-${new Date().toISOString().slice(0,10)}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, [filtered, isSelected]);
 
   /** Actions */
   const handleCall = useCallback(async (custNumber: string) => {
@@ -549,7 +607,7 @@ export default function RepeatDashboard() {
           </div>
 
           {/* Filters */}
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-7 gap-2 w-full lg:w-auto">
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-8 gap-2 w-full lg:w-auto">
             <div className="inline-flex items-center gap-2 text-gray-600 text-sm px-2 py-2">
               <Filter className="w-4 h-4" /> Filters
             </div>
@@ -604,6 +662,10 @@ export default function RepeatDashboard() {
               <X className="w-4 h-4" />
               Reset
             </IconButton>
+            <IconButton onClick={exportLeads} className="justify-center" title="Export selected (or all filtered if none selected)">
+              <ExternalLink className="w-4 h-4" />
+              Export
+            </IconButton>
           </div>
 
           {/* Meta */}
@@ -643,6 +705,14 @@ export default function RepeatDashboard() {
         <table className="w-full text-sm">
           <thead className="bg-gray-50 text-gray-700 sticky top-0">
             <tr>
+              <th className="px-2 py-2">
+                <input
+                  type="checkbox"
+                  aria-label="Select current page"
+                  onChange={togglePageAll}
+                  checked={pageSlice.length>0 && pageSlice.every(isSelected)}
+                />
+              </th>
               <th className="text-left px-4 py-2">Customer</th>
               <th className="text-left px-4 py-2">Orders</th>
               <th className="text-left px-4 py-2">Range</th>
@@ -692,6 +762,14 @@ export default function RepeatDashboard() {
             ) : (
               pageSlice.map((r) => (
                 <tr key={`${r.email}-${r.phone}`} className="border-t">
+                  <td className="px-2 py-2 align-top">
+                    <input
+                      type="checkbox"
+                      aria-label={`Select ${r.email}`}
+                      checked={isSelected(r)}
+                      onChange={() => toggleRow(r)}
+                    />
+                  </td>
                   <td className="px-4 py-2 align-top">
                     <div className="font-semibold break-all">{r.email || '—'}</div>
                     <div className="text-gray-600 text-xs break-all">{r.phone || '—'}</div>

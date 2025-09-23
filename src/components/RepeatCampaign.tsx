@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Search, AlertCircle, CheckCircle, Clock, Calendar, Package, DollarSign, User, Phone, Mail, ArrowRight } from 'lucide-react';
+import { Search, AlertCircle, CheckCircle, Clock, Calendar, Package, DollarSign, User, Phone, Mail, ArrowRight, MapPin } from 'lucide-react';
 
 // Define interfaces for the response data
 interface Product {
@@ -7,18 +7,26 @@ interface Product {
   order_date: string;
   total_amount: string;
   products: string;
+  address?: string | null;
 }
 
 interface CustomerData {
   customer_name: string;
   customer_phone: string;
   customer_email: string;
+  customer_address?: string | null;
   total_orders: number;
   first_order_date: string;
   last_order_date: string;
   duration_between_first_and_last_order: string;
   orders: Product[];
   call_status?: string; 
+  // Optional address fields (best-effort based on webhook response)
+  address?: string | null;
+  city?: string | null;
+  state?: string | null;
+  pincode?: string | null;
+  area?: string | null;
 }
 
 interface FeedbackForm {
@@ -116,6 +124,24 @@ export default function RepeatCampaign({ initialOrderNumber = '', hideFeedback =
   }, []);
   
   // Caller selection removed
+
+  // Helper: parse free-form address into parts
+  const parseAddress = (addr?: string | null) => {
+    const out: { area?: string | null; city?: string | null; state?: string | null; pincode?: string | null } = {};
+    if (!addr) return out;
+    const parts = String(addr).split(',').map(x => x.trim()).filter(Boolean);
+    if (!parts.length) return out;
+    const last = parts[parts.length - 1];
+    const pin = last.match(/(\d{6})$/);
+    if (pin) {
+      out.pincode = pin[1];
+      parts[parts.length - 1] = last.replace(/\d{6}$/, '').replace(/[\,\s]+$/, '').trim();
+    }
+    out.state = parts[parts.length - 1] || null;
+    out.city = parts.length >= 2 ? parts[parts.length - 2] : null;
+    out.area = parts.length >= 3 ? parts.slice(0, parts.length - 2).join(', ') : null;
+    return out;
+  };
 
   useEffect(() => {
     // Auto search without blocking for caller selection
@@ -588,6 +614,25 @@ export default function RepeatCampaign({ initialOrderNumber = '', hideFeedback =
                     <p className="font-medium">{customerData.customer_email}</p>
                   </div>
                 </div>
+                <div className="flex items-start md:col-span-2">
+                  <MapPin className="w-5 h-5 text-gray-500 mr-2 mt-0.5" />
+                  <div>
+                    <p className="text-sm text-gray-500">Address</p>
+                    <p className="font-medium break-words">
+                      {(() => {
+                        const src = (customerData.customer_address || customerData.address || '').trim();
+                        const parsed = parseAddress(src);
+                        const city = customerData.city ?? parsed.city ?? '';
+                        const state = customerData.state ?? parsed.state ?? '';
+                        const pincode = customerData.pincode ?? parsed.pincode ?? '';
+                        const area = customerData.area ?? parsed.area ?? '';
+                        const parts = [src || area, city, state, pincode].filter(Boolean);
+                        const out = parts.join(', ');
+                        return out || '—';
+                      })()}
+                    </p>
+                  </div>
+                </div>
                 <div className="flex items-start">
                   <Package className="w-5 h-5 text-gray-500 mr-2 mt-0.5" />
                   <div>
@@ -676,6 +721,10 @@ export default function RepeatCampaign({ initialOrderNumber = '', hideFeedback =
                             <div className="mt-2 pt-2 border-t border-gray-200">
                               <h4 className="text-sm font-medium text-gray-700 mb-1">Products:</h4>
                               <p className="text-gray-600">{order.products}</p>
+                            </div>
+                            <div className="mt-2 pt-2 border-t border-gray-200">
+                              <h4 className="text-sm font-medium text-gray-700 mb-1">Address:</h4>
+                              <p className="text-gray-600 break-words">{order.address || '—'}</p>
                             </div>
                           </div>
                         </div>
