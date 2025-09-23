@@ -112,6 +112,7 @@ export default function RepeatDashboard() {
       return '';
     }
   });
+
   const [currentUser] = useState<string>(() => {
     try {
       return localStorage.getItem('ndr_user') || '';
@@ -119,6 +120,8 @@ export default function RepeatDashboard() {
       return '';
     }
   });
+  // Admin flag (after currentUser)
+  const isAdmin = useMemo(() => String(currentUser || '').trim().toLowerCase() === 'admin', [currentUser]);
   const [activeTeamId] = useState<string>(() => {
     try {
       return localStorage.getItem('ndr_active_team_id') || '';
@@ -152,6 +155,13 @@ export default function RepeatDashboard() {
   const [fbAgent, setFbAgent] = useState<string>('all'); // 'me' | 'all'
   const [fbFrom, setFbFrom] = useState<string>('');
   const [fbTo, setFbTo] = useState<string>('');
+
+  // Force non-admins to stay on 'leads'
+  useEffect(() => {
+    if (!isAdmin && view === 'analytics') {
+      setView('leads');
+    }
+  }, [isAdmin, view]);
 
   // Note: agentOptions was unused; removed to avoid lint
 
@@ -889,7 +899,7 @@ export default function RepeatDashboard() {
       )}
 
       {/* Analytics view */}
-      {view === 'analytics' && (
+      {view === 'analytics' && isAdmin && (
         <div className="bg-white rounded-xl shadow p-4 space-y-4">
           <div className="flex flex-wrap items-center gap-2">
             <select aria-label="Analytics agent scope" value={fbAgent} onChange={(e)=>setFbAgent(e.target.value)} className="border rounded-lg px-2 py-2 text-sm">
