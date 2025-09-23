@@ -28,6 +28,11 @@ interface FeedbackRow {
   id?: string;
   created_at?: string;
   agent?: string | null;
+  // Optional columns we may display if present
+  order_number?: string | number | null;
+  customer_phone?: string | null;
+  call_status?: string | null;
+  heard_from?: string | null;
   gender?: string | null;
   gender_text?: string | null;
   age?: string | null;
@@ -153,6 +158,8 @@ export default function RepeatDashboard() {
   /** Pagination */
   const [page, setPage] = useState<number>(1);
   const [pageSize, setPageSize] = useState<number>(25);
+  // Analytics: selected feedback for details dialog
+  const [fbDetail, setFbDetail] = useState<FeedbackRow | null>(null);
 
   /** Selection for export */
   const makeKey = useCallback((r: RepeatRow) => `${r.email}__${r.phone}`, []);
@@ -958,6 +965,55 @@ export default function RepeatDashboard() {
               )}
             </div>
           </div>
+
+          {/* Filled leads list */}
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-sm font-medium">Filled leads ({fbAgent === 'me' ? 'My forms' : 'All agents'})</div>
+              <div className="text-xs text-gray-600">Date range: {fbFrom || '—'} to {fbTo || '—'}</div>
+            </div>
+            <div className="overflow-x-auto border rounded-lg">
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50 text-gray-700">
+                  <tr>
+                    <th className="text-left px-3 py-2">Date</th>
+                    <th className="text-left px-3 py-2">Agent</th>
+                    <th className="text-left px-3 py-2">Order</th>
+                    <th className="text-left px-3 py-2">Phone</th>
+                    <th className="text-left px-3 py-2">Call Status</th>
+                    <th className="text-left px-3 py-2">Heard From</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {fbStats.totalForms === 0 ? (
+                    <tr>
+                      <td className="px-3 py-3 text-center text-gray-600" colSpan={6}>No filled leads</td>
+                    </tr>
+                  ) : (
+                    [...feedback]
+                      .sort((a, b) => new Date(b.created_at||'').getTime() - new Date(a.created_at||'').getTime())
+                      .slice(0, 200)
+                      .map((f, i) => (
+                        <tr
+                          key={f.id || i}
+                          className="border-t hover:bg-indigo-50 cursor-pointer"
+                          onClick={() => setFbDetail(f)}
+                          title="Click to view full details"
+                        >
+                          <td className="px-3 py-2 whitespace-nowrap">{formatDateTime(f.created_at)}</td>
+                          <td className="px-3 py-2">{f.agent || '—'}</td>
+                          <td className="px-3 py-2">{String(f.order_number ?? '—')}</td>
+                          <td className="px-3 py-2">{f.customer_phone || '—'}</td>
+                          <td className="px-3 py-2">{f.call_status || '—'}</td>
+                          <td className="px-3 py-2 truncate max-w-[240px]" title={f.heard_from || ''}>{f.heard_from || '—'}</td>
+                        </tr>
+                      ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+            <div className="text-xs text-gray-500 mt-1">Showing latest 200 forms in the selected scope and date range.</div>
+          </div>
         </div>
       )}
 
@@ -967,6 +1023,34 @@ export default function RepeatDashboard() {
         onClose={() => setIsDialogOpen(false)}
         orderNumber={selectedOrderNumber}
       />
+
+      {/* Feedback details dialog */}
+      {fbDetail && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => setFbDetail(null)}>
+          <div className="bg-white rounded-xl shadow-xl max-w-3xl w-full max-h-[80vh] overflow-auto" onClick={(e)=>e.stopPropagation()}>
+            <div className="p-4 border-b flex items-center justify-between">
+              <div className="font-semibold">Filled Lead Details</div>
+              <button className="text-sm px-3 py-1 border rounded-lg" onClick={() => setFbDetail(null)}>Close</button>
+            </div>
+            <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+              <div><div className="text-gray-500">Created</div><div className="font-medium">{formatDateTime(fbDetail.created_at)}</div></div>
+              <div><div className="text-gray-500">Agent</div><div className="font-medium">{fbDetail.agent || '—'}</div></div>
+              <div><div className="text-gray-500">Order Number</div><div className="font-medium">{String(fbDetail.order_number ?? '—')}</div></div>
+              <div><div className="text-gray-500">Customer Phone</div><div className="font-medium">{fbDetail.customer_phone || '—'}</div></div>
+              <div><div className="text-gray-500">Call Status</div><div className="font-medium">{fbDetail.call_status || '—'}</div></div>
+              <div className="md:col-span-2"><div className="text-gray-500">Heard From</div><div className="font-medium break-words">{fbDetail.heard_from || '—'}</div></div>
+              <div className="md:col-span-2"><div className="text-gray-500">First-time Reason</div><div className="font-medium break-words">{(fbDetail as any).first_time_reason || (fbDetail as any).firstTimeReason || '—'}</div></div>
+              <div className="md:col-span-2"><div className="text-gray-500">Reorder Reason</div><div className="font-medium break-words">{(fbDetail as any).reorder_reason || (fbDetail as any).reorderReason || '—'}</div></div>
+              <div className="md:col-span-2"><div className="text-gray-500">Liked Features</div><div className="font-medium break-words">{(fbDetail as any).liked_features || (fbDetail as any).likedFeatures || '—'}</div></div>
+              <div><div className="text-gray-500">Usage Recipe</div><div className="font-medium break-words">{(fbDetail as any).usage_recipe || '—'}</div></div>
+              <div><div className="text-gray-500">Usage Time</div><div className="font-medium break-words">{(fbDetail as any).usage_time || '—'}</div></div>
+              <div><div className="text-gray-500">Family User</div><div className="font-medium break-words">{(fbDetail as any).family_user || '—'}</div></div>
+              <div><div className="text-gray-500">Gender</div><div className="font-medium">{fbDetail.gender || (fbDetail as any).gender_text || '—'}</div></div>
+              <div><div className="text-gray-500">Age</div><div className="font-medium">{fbDetail.age || '—'}</div></div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
