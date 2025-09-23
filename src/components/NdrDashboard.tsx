@@ -369,19 +369,45 @@ export default function NdrDashboard() {
     });
   }
 
-  function switchUser() {
+  async function switchUser() {
     const next = window.prompt('Enter your handle (team member)', currentUser || '');
     if (next == null) return;
     const handle = next.trim();
     if (!handle) { setToast({ type: 'error', message: 'User cannot be empty' }); return; }
+    const pin = window.prompt('Enter PIN/password for this user');
+    if (pin == null) return; // cancelled
+    const teamId = localStorage.getItem('ndr_active_team_id');
+    if (!teamId) { setToast({ type: 'error', message: 'Select a team first (via NDR Login)' }); return; }
+
     try {
-      localStorage.setItem('ndr_user', handle);
-      // allow auto-allocation to run again for the new session/user if needed
-      localStorage.removeItem('ndr_auto_alloc_done');
-    } catch {}
-    setCurrentUser(handle);
-    setToast({ type: 'success', message: `Switched user to ${handle}` });
-    try { load(); } catch {}
+      // Validate PIN if column exists
+      const url = `${SUPABASE_URL}/team_members?team_id=eq.${teamId}&member=eq.${encodeURIComponent(handle)}&select=id,member,pin&limit=1`;
+      const res = await fetch(url, { headers: SUPABASE_HEADERS });
+      if (!res.ok) {
+        const t = await res.text();
+        throw new Error(`team_members ${res.status}: ${t}`);
+      }
+      const [row] = await res.json();
+      const hasPin = row && Object.prototype.hasOwnProperty.call(row, 'pin');
+      if (hasPin) {
+        if (!row?.pin || String(row.pin) !== String(pin)) {
+          setToast({ type: 'error', message: 'Invalid PIN' });
+          return;
+        }
+      }
+
+      // Persist user
+      try {
+        localStorage.setItem('ndr_user', handle);
+        // allow auto-allocation to run again for the new session/user if needed
+        localStorage.removeItem('ndr_auto_alloc_done');
+      } catch {}
+      setCurrentUser(handle);
+      setToast({ type: 'success', message: `Switched user to ${handle}` });
+      try { load(); } catch {}
+    } catch (e:any) {
+      setToast({ type: 'error', message: e?.message || 'Failed to validate PIN' });
+    }
   }
 
   async function load() {
