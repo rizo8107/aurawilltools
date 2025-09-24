@@ -36,6 +36,8 @@ const GstInvoiceGenerator = () => {
   const [billingStateCode, setBillingStateCode] = useState('29');
   const [billingGstin, setBillingGstin] = useState('29AAFCA1234A1Z5');
 
+  const gstRate = 0.05; // total GST for CGST + SGST
+  const halfGstRate = gstRate / 2; // 2.5%
   const initialInclusiveUnitPrice = 360;
   const [lineItems, setLineItems] = useState<LineItem[]>([
     {
@@ -43,7 +45,7 @@ const GstInvoiceGenerator = () => {
       name: 'Aurawill Health Mix - Daily boost of Wellness - 450 Grams',
       hsnSac: '19019010',
       qty: 2,
-      unitPrice: initialInclusiveUnitPrice / 1.18, // Store GST-exclusive price
+      unitPrice: initialInclusiveUnitPrice / (1 + gstRate), // store taxable value
       discount: 0,
     },
   ]);
@@ -94,7 +96,7 @@ const GstInvoiceGenerator = () => {
               break;
             case 'unitPrice': {
               const inclusivePrice = parseFloat(value) || 0;
-              newUnitPrice = inclusivePrice / 1.18;
+              newUnitPrice = inclusivePrice / (1 + gstRate);
               break;
             }
             case 'discount':
@@ -134,11 +136,11 @@ const GstInvoiceGenerator = () => {
   let taxAmount = 0;
 
   if (taxType === 'CGST/SGST') {
-    cgstAmount = taxableAmount * 0.09;
-    sgstAmount = taxableAmount * 0.09;
+    cgstAmount = taxableAmount * halfGstRate;
+    sgstAmount = taxableAmount * halfGstRate;
     taxAmount = cgstAmount + sgstAmount;
   } else { // IGST
-    igstAmountTotal = taxableAmount * 0.18;
+    igstAmountTotal = taxableAmount * gstRate;
     taxAmount = igstAmountTotal;
   }
   const grandTotal = taxableAmount + taxAmount;
@@ -352,10 +354,10 @@ const GstInvoiceGenerator = () => {
                     const taxableItemAmount = (item.qty * item.unitPrice) - item.discount;
                     let itemIgst = 0, itemCgst = 0, itemSgst = 0;
                     if (taxType === 'IGST') {
-                      itemIgst = taxableItemAmount * 0.18;
+                      itemIgst = taxableItemAmount * gstRate;
                     } else {
-                      itemCgst = taxableItemAmount * 0.09;
-                      itemSgst = taxableItemAmount * 0.09;
+                      itemCgst = taxableItemAmount * halfGstRate;
+                      itemSgst = taxableItemAmount * halfGstRate;
                     }
                     return (
                       <tr key={item.id}>
@@ -369,9 +371,9 @@ const GstInvoiceGenerator = () => {
                           <td className="border p-2 text-center">18</td>{/* IGST % */}
                           <td className="border p-2 text-right">{itemIgst.toFixed(2)}</td>{/* IGST Amt */}
                         </>}
-                        <td className="border p-2 text-center">{taxType === 'CGST/SGST' ? 9 : 0}</td>{/* CGST % */}
+                        <td className="border p-2 text-center">{taxType === 'CGST/SGST' ? (halfGstRate * 100) : 0}</td>{/* CGST % */}
                         <td className="border p-2 text-right">{itemCgst.toFixed(2)}</td>{/* CGST Amt */}
-                        <td className="border p-2 text-center">{taxType === 'CGST/SGST' ? 9 : 0}</td>{/* SGST % */}
+                        <td className="border p-2 text-center">{taxType === 'CGST/SGST' ? (halfGstRate * 100) : 0}</td>{/* SGST % */}
                         <td className="border p-2 text-right">{itemSgst.toFixed(2)}</td>{/* SGST Amt */}
                         <td className="border p-2 text-right">{taxableItemAmount.toFixed(2)}</td>{/* Taxable Amount */}
                       </tr>
