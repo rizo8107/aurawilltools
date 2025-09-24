@@ -372,6 +372,7 @@ export default function RepeatCampaign({ initialOrderNumber = '', hideFeedback =
     
     try {
       // Create a payload that includes both customer details and feedback data
+      const agentHandle = typeof window !== 'undefined' ? (localStorage.getItem('ndr_user') || '').trim() : '';
       const payload = {
         // Customer information
         customer_name: customerData.customer_name,
@@ -381,6 +382,7 @@ export default function RepeatCampaign({ initialOrderNumber = '', hideFeedback =
         first_order_date: customerData.first_order_date,
         last_order_date: customerData.last_order_date,
         duration_between_orders: customerData.duration_between_first_and_last_order,
+        agent_name: agentHandle,
         // Order history summary
         orders: customerData.orders.map(order => ({
           order_number: order.order_number,
