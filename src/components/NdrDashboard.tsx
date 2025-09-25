@@ -724,6 +724,72 @@ export default function NdrDashboard() {
 
   function clearSelection() { setSelectedIds([]); }
 
+  // Open Repeat drawer from anywhere via global event
+  useEffect(() => {
+    function onOpenNdrOrder(ev: Event) {
+      try {
+        const e = ev as CustomEvent<{ orderId?: string | number; awb?: string | number }>; 
+        const orderId = e.detail?.orderId ? Number(e.detail.orderId) : NaN;
+        const awb = e.detail?.awb ? String(e.detail.awb) : '';
+        const byOrder = (r: any) => !isNaN(orderId) && Number(r.order_id) === Number(orderId);
+        const byAwb = (r: any) => awb ? String(r.waybill || '') === awb : true;
+        let target = (rows as any[]).find(r => byOrder(r) && byAwb(r)) || (rows as any[]).find(byOrder);
+        const openDrawer = async () => {
+          if (!target && !isNaN(orderId)) {
+            try {
+              const url = `${SUPABASE_URL}/${SUPABASE_TABLE}?order_id=eq.${orderId}&select=*`;
+              const res = await fetch(url, { headers: SUPABASE_HEADERS });
+              if (res.ok) {
+                const arr = await res.json();
+                if (Array.isArray(arr) && arr.length) target = arr[0];
+              }
+            } catch {}
+          }
+          try { setRepeatOrderId(!isNaN(orderId) ? String(orderId) : ''); } catch {}
+          try { if (target) setRepeatRow(target as NdrRow); } catch {}
+          try { setRepeatOpen(true); } catch {}
+        };
+        void openDrawer();
+      } catch {}
+    }
+    window.addEventListener('open-ndr-order', onOpenNdrOrder as EventListener);
+    return () => window.removeEventListener('open-ndr-order', onOpenNdrOrder as EventListener);
+  }, [rows]);
+
+  // If App switched to NDR after a click, the event may have fired before mount.
+  // Read pending order from localStorage and open the drawer once.
+  useEffect(() => {
+    async function openFromStorage() {
+      try {
+        const rawId = localStorage.getItem('ndr_open_order_id');
+        const rawAwb = localStorage.getItem('ndr_open_awb') || '';
+        if (!rawId) return;
+        const orderId = Number(rawId);
+        const awb = String(rawAwb);
+        const byOrder = (r: any) => !isNaN(orderId) && Number(r.order_id) === Number(orderId);
+        const byAwb = (r: any) => awb ? String(r.waybill || '') === awb : true;
+        let target = (rows as any[]).find(r => byOrder(r) && byAwb(r)) || (rows as any[]).find(byOrder);
+        if (!target && !isNaN(orderId)) {
+          try {
+            const url = `${SUPABASE_URL}/${SUPABASE_TABLE}?order_id=eq.${orderId}&select=*`;
+            const res = await fetch(url, { headers: SUPABASE_HEADERS });
+            if (res.ok) {
+              const arr = await res.json();
+              if (Array.isArray(arr) && arr.length) target = arr[0];
+            }
+          } catch {}
+        }
+        try { setRepeatOrderId(!isNaN(orderId) ? String(orderId) : ''); } catch {}
+        try { if (target) setRepeatRow(target as NdrRow); } catch {}
+        try { setRepeatOpen(true); } catch {}
+      } finally {
+        try { localStorage.removeItem('ndr_open_order_id'); } catch {}
+        try { localStorage.removeItem('ndr_open_awb'); } catch {}
+      }
+    }
+    openFromStorage();
+  }, [rows]);
+
   // ---- Emails feed (inbound from email_activity, outbound from email_messages) ----
   async function loadEmailFeed() {
     try {

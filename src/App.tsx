@@ -37,6 +37,20 @@ function App() {
     }
   }, []);
 
+  // Listen for global request to open NDR order drawer
+  useEffect(() => {
+    function onOpenNdr(ev: Event) {
+      try {
+        // Ensure NDR dashboard is visible so its listener can open the drawer
+        setActiveTab('ndr');
+      } catch {
+        // ignore
+      }
+    }
+    window.addEventListener('open-ndr-order', onOpenNdr as EventListener);
+    return () => window.removeEventListener('open-ndr-order', onOpenNdr as EventListener);
+  }, []);
+
   // Listen for order open events from NDR Dashboard
   useEffect(() => {
     function onOpenRepeat(ev: Event) {

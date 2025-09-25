@@ -58,6 +58,15 @@ export default function TeamAnalyticsPage() {
   const [dailyAgent, setDailyAgent] = useState<string>('All');
   const [ndrRows, setNdrRows] = useState<Array<{ assigned_to: string | null; assigned_at: string | null; status: string | null; final_status?: string | null; notes: string | null; order_id?: number; waybill?: string | number; courier_account?: string | null; delivery_status?: string | null; email_sent?: boolean | null; called?: boolean | null }>>([]);
   const [activities, setActivities] = useState<Array<{ actor: string | null; action: string | null; created_at: string | null }>>([]);
+  // Drill-down dialog state
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [detailTitle, setDetailTitle] = useState('');
+  const [detailRows, setDetailRows] = useState<any[]>([]);
+  const [detailView, setDetailView] = useState<'all'|'assigned'|'raised'|'resolved'|'delivered'|'emailsent'>('all');
+  // Inline order drawer (open inside Team Analytics)
+  const [orderOpen, setOrderOpen] = useState(false);
+  const [orderLoading, setOrderLoading] = useState(false);
+  const [orderRow, setOrderRow] = useState<any | null>(null);
   // table-like filters
   const [qOrderId, setQOrderId] = useState<string>("");
   const [qAwb, setQAwb] = useState<string>("");
@@ -140,7 +149,7 @@ export default function TeamAnalyticsPage() {
       const tsFilter2 = `and(event_time.gte.${fromIso},event_time.lte.${toIso})`;
       const memOr2 = members.length ? `or(${members.map(m => `assigned_to.eq.${encodeURIComponent(m.member)}`).join(',')})` : '';
       const filter2 = memOr2 ? `and(${tsFilter2},${memOr2})` : tsFilter2;
-      const url = `${SUPABASE_URL}/ndr?and=(${filter2})&select=assigned_to,assigned_at,created_at,event_time,notes,courier_account,email_sent,status,final_status&order=event_time.asc`;
+      const url = `${SUPABASE_URL}/ndr?and=(${filter2})&select=assigned_to,assigned_at,created_at,event_time,notes,courier_account,email_sent,status,final_status,order_id,waybill,delivery_status,called&order=event_time.asc`;
       const res = await fetch(url, { headers: SUPABASE_HEADERS });
       const arr = res.ok ? await res.json() : [];
       const fromMs = new Date(fromIso).getTime();
@@ -314,6 +323,50 @@ export default function TeamAnalyticsPage() {
     try { const o = JSON.parse(notes); return o && typeof o === 'object' ? o : {}; } catch { return {}; }
   }
 
+  function normalizeFinalStatus(v: string) {
+    const t = v.trim().toLowerCase();
+    if (t === 'delivered') return 'Delivered';
+    if (t === 'fake delivery' || t === 'fakedelivery') return 'Fake delivery';
+    if (t === 'returned' || t === 'return') return 'Returned';
+    if (t === 'refund' || t === 'refunded') return 'Refund';
+    if (t === 'damage' || t === 'damaged') return 'Damage';
+    if (t === 'invalid number' || t === 'invalidnumber') return 'Invalid Number';
+    if (t === 'address/number issue' || t === 'address issue' || t === 'number issue') return 'Address/Number issue';
+    return 'Other';
+  }
+
+  function openDetail(title: string, rows: any[]) {
+    setDetailTitle(title);
+    setDetailRows(rows);
+    setDetailView('all');
+    setDetailOpen(true);
+  }
+
+  async function openOrderDrawer(orderId: number | string, awb?: string | number) {
+    try {
+      setOrderLoading(true);
+      setOrderRow(null);
+      const oid = Number(orderId);
+      const awbStr = awb != null ? String(awb) : '';
+      // Try to find from already loaded rows first
+      const byOrder = (r: any) => Number(r.order_id) === oid;
+      const byAwb = (r: any) => awbStr ? String(r.waybill || '') === awbStr : true;
+      let target = filteredDailyRows.find(r => byOrder(r) && byAwb(r)) || filteredDailyRows.find(byOrder) || filteredRows.find(byOrder);
+      if (!target && !Number.isNaN(oid)) {
+        const url = `${SUPABASE_URL}/ndr?order_id=eq.${oid}&select=*`;
+        const res = await fetch(url, { headers: SUPABASE_HEADERS });
+        if (res.ok) {
+          const arr = await res.json();
+          if (Array.isArray(arr) && arr.length) target = arr[0];
+        }
+      }
+      setOrderRow(target || { order_id: oid, waybill: awbStr });
+      setOrderOpen(true);
+    } finally {
+      setOrderLoading(false);
+    }
+  }
+
   // apply filters similar to table
   const filteredRows = useMemo(() => {
     return ndrRows.filter((r) => {
@@ -333,6 +386,53 @@ export default function TeamAnalyticsPage() {
       return true;
     });
   }, [ndrRows, qOrderId, qAwb, qStatus, qCourier, qEmail, qCall]);
+
+  // Overview metrics derived from filteredRows
+  const overview = useMemo(() => {
+    const total = filteredRows.length;
+    const assigned = filteredRows.filter(r => String(r.assigned_to || '').trim() !== '').length;
+    const emailSent = filteredRows.filter(r => r.email_sent === true).length;
+    const delivered = filteredRows.filter(r => normalizeFinalStatus(String((r as any).final_status || '')).toLowerCase() === 'delivered').length;
+    const resolved = filteredRows.filter(r => {
+      const s = String(r.status || '').trim().toLowerCase();
+      const fNorm = normalizeFinalStatus(String((r as any).final_status || ''));
+      return s === 'resolved' || s === 'closed' || s === 'close' || (fNorm && fNorm !== 'Other');
+    }).length;
+    const raisedWithDP = emailSent; // using emailSent as proxy for raised with delivery partner
+    return { total, assigned, raisedWithDP, resolved, delivered, emailSent };
+  }, [filteredRows]);
+
+  // Detail dialog overview (metrics for the current detailRows selection)
+  const detailOverview = useMemo(() => {
+    const rows = Array.isArray(detailRows) ? detailRows : [];
+    const total = rows.length;
+    const assigned = rows.filter((r: any) => String(r.assigned_to || '').trim() !== '').length;
+    const emailSent = rows.filter((r: any) => r.email_sent === true).length;
+    const delivered = rows.filter((r: any) => normalizeFinalStatus(String((r as any).final_status || '')).toLowerCase() === 'delivered').length;
+    const resolved = rows.filter((r: any) => {
+      const s = String(r.status || '').trim().toLowerCase();
+      const fNorm = normalizeFinalStatus(String((r as any).final_status || ''));
+      return s === 'resolved' || s === 'closed' || s === 'close' || (fNorm && fNorm !== 'Other');
+    }).length;
+    const raisedWithDP = emailSent;
+    return { total, assigned, raisedWithDP, resolved, delivered, emailSent };
+  }, [detailRows]);
+
+  // Apply local filter to detailRows based on which overview card is selected
+  const detailDisplayRows = useMemo(() => {
+    const rows = Array.isArray(detailRows) ? detailRows : [];
+    if (detailView === 'all') return rows;
+    if (detailView === 'assigned') return rows.filter((r: any) => String(r.assigned_to || '').trim() !== '');
+    if (detailView === 'emailsent') return rows.filter((r: any) => r.email_sent === true);
+    if (detailView === 'delivered') return rows.filter((r: any) => normalizeFinalStatus(String((r as any).final_status || '')).toLowerCase() === 'delivered');
+    if (detailView === 'resolved') return rows.filter((r: any) => {
+      const s = String(r.status || '').trim().toLowerCase();
+      const fNorm = normalizeFinalStatus(String((r as any).final_status || ''));
+      return s === 'resolved' || s === 'closed' || s === 'close' || (fNorm && fNorm !== 'Other');
+    });
+    if (detailView === 'raised') return rows.filter((r: any) => r.email_sent === true);
+    return rows;
+  }, [detailRows, detailView]);
 
   // derived datasets
   const memberList = useMemo(() => members.map(m => m.member), [members]);
@@ -588,6 +688,223 @@ export default function TeamAnalyticsPage() {
         </div>
       </div>
 
+      {/* Drill-down dialog (responsive modal) */}
+      {detailOpen && (
+        <div className="fixed inset-0 z-50">
+          <div className="absolute inset-0 bg-black/40" onClick={()=>setDetailOpen(false)} />
+          <div className="absolute inset-0 flex items-center justify-center p-1 md:p-3">
+            <div className="w-[calc(100vw-16px)] md:max-w-[1000px] max-h-[calc(100vh-16px)] md:max-h-[85vh] bg-white rounded-lg md:rounded-2xl shadow-2xl overflow-hidden">
+              <div className="flex items-center justify-between p-3 border-b">
+                <div className="font-semibold">{detailTitle}</div>
+                <button className="px-2 py-1 rounded hover:bg-slate-100" onClick={()=>setDetailOpen(false)}>Close</button>
+              </div>
+              <div className="p-2 md:p-3">
+              {/* Inline overview for the selected rows */}
+              <div className="mb-3">
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
+                  <button type="button" onClick={()=>setDetailView('all')} className={`text-left rounded-xl p-3 ring-1 ${detailView==='all'?'ring-indigo-300 bg-indigo-50':'ring-slate-200 hover:bg-slate-50'}`} title="Show all rows">
+                    <div className="text-xs text-slate-500">Total</div>
+                    <div className="text-lg font-semibold mt-1">{detailOverview.total}</div>
+                  </button>
+                  <button type="button" onClick={()=>setDetailView('assigned')} className={`text-left rounded-xl p-3 ring-1 ${detailView==='assigned'?'ring-indigo-300 bg-indigo-50':'ring-slate-200 hover:bg-slate-50'}`} title="Show assigned only">
+                    <div className="text-xs text-slate-500">Assigned</div>
+                    <div className="text-lg font-semibold mt-1">{detailOverview.assigned}</div>
+                  </button>
+                  <button type="button" onClick={()=>setDetailView('raised')} className={`text-left rounded-xl p-3 ring-1 ${detailView==='raised'?'ring-indigo-300 bg-indigo-50':'ring-slate-200 hover:bg-slate-50'}`} title="Show raised with DP">
+                    <div className="text-xs text-slate-500">Raised with DP</div>
+                    <div className="text-lg font-semibold mt-1">{detailOverview.raisedWithDP}</div>
+                  </button>
+                  <button type="button" onClick={()=>setDetailView('resolved')} className={`text-left rounded-xl p-3 ring-1 ${detailView==='resolved'?'ring-indigo-300 bg-indigo-50':'ring-slate-200 hover:bg-slate-50'}`} title="Show resolved only">
+                    <div className="text-xs text-slate-500">Resolved</div>
+                    <div className="text-lg font-semibold mt-1">{detailOverview.resolved}</div>
+                  </button>
+                  <button type="button" onClick={()=>setDetailView('delivered')} className={`text-left rounded-xl p-3 ring-1 ${detailView==='delivered'?'ring-indigo-300 bg-indigo-50':'ring-slate-200 hover:bg-slate-50'}`} title="Show delivered only">
+                    <div className="text-xs text-slate-500">Delivered</div>
+                    <div className="text-lg font-semibold mt-1">{detailOverview.delivered}</div>
+                  </button>
+                  <button type="button" onClick={()=>setDetailView('emailsent')} className={`text-left rounded-xl p-3 ring-1 ${detailView==='emailsent'?'ring-indigo-300 bg-indigo-50':'ring-slate-200 hover:bg-slate-50'}`} title="Show where email sent">
+                    <div className="text-xs text-slate-500">Emails Sent</div>
+                    <div className="text-lg font-semibold mt-1">{detailOverview.emailSent}</div>
+                  </button>
+                </div>
+              </div>
+              <div className="max-h-[60vh] md:max-h-[65vh] overflow-auto rounded-lg ring-1 ring-slate-200">
+              <table className="w-full min-w-[900px] text-xs md:text-sm border-collapse">
+                <thead className="sticky top-0 z-10 bg-slate-50">
+                  <tr>
+                    <th className="border p-2 text-left">Assigned To</th>
+                    <th className="border p-2 text-left">Assigned At</th>
+                    <th className="border p-2 text-left">Order ID</th>
+                    <th className="border p-2 text-left">AWB</th>
+                    <th className="border p-2 text-left">Courier</th>
+                    <th className="border p-2 text-left">Delivery Status</th>
+                    <th className="border p-2 text-left">Status</th>
+                    <th className="border p-2 text-left">Final Status</th>
+                    <th className="border p-2 text-left">Email Sent</th>
+                    <th className="border p-2 text-left">Call Status</th>
+                    <th className="border p-2 text-left">Issue</th>
+                    <th className="border p-2 text-left">Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {detailDisplayRows.length === 0 ? (
+                    <tr><td className="p-4 text-center text-slate-500" colSpan={12}>No rows</td></tr>
+                  ) : detailDisplayRows.map((r, i) => {
+                    const n = parseNotes(r.notes || null) as any;
+                    return (
+                      <tr key={i} className="border-t">
+                        <td className="border p-2">{r.assigned_to || ''}</td>
+                        <td className="border p-2">{r.assigned_at || ''}</td>
+                        <td className="border p-2">
+                          {r.order_id ? (
+                            <button
+                              className="text-indigo-600 hover:underline"
+                              title="Open order details"
+                              onClick={() => openOrderDrawer(r.order_id, r.waybill)}
+                            >
+                              {String(r.order_id)}
+                            </button>
+                          ) : ''}
+                        </td>
+                        <td className="border p-2">{r.waybill ?? ''}</td>
+                        <td className="border p-2">{courierName(r.courier_account || '')}</td>
+                        <td className="border p-2">{r.delivery_status || ''}</td>
+                        <td className="border p-2">{r.status || ''}</td>
+                        <td className="border p-2">{(r as any).final_status || ''}</td>
+                        <td className="border p-2">{r.email_sent === true ? 'Yes' : r.email_sent === false ? 'No' : ''}</td>
+                        <td className="border p-2">{n.call_status || (r.called === true ? 'Yes' : r.called === false ? 'No' : '')}</td>
+                        <td className="border p-2">{n.customer_issue || ''}</td>
+                        <td className="border p-2">{n.action_taken || ''}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Order details dialog (responsive modal) */}
+      {orderOpen && (
+        <div className="fixed inset-0 z-50">
+          <div className="absolute inset-0 bg-black/40" onClick={()=>setOrderOpen(false)} />
+          <div className="absolute inset-0 flex items-center justify-center p-1 md:p-3">
+            <div className="w-[calc(100vw-16px)] md:max-w-[720px] max-h-[calc(100vh-16px)] md:max-h-[85vh] bg-white rounded-lg md:rounded-2xl shadow-2xl overflow-auto">
+              <div className="flex items-center justify-between p-3 border-b">
+                <div className="font-semibold">Order Details</div>
+                <button className="px-2 py-1 rounded hover:bg-slate-100" onClick={()=>setOrderOpen(false)}>Close</button>
+              </div>
+              <div className="p-2 md:p-3">
+                {orderLoading ? (
+                  <div className="text-sm text-slate-600">Loading…</div>
+                ) : orderRow ? (
+                  <div className="space-y-3 text-sm">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      <div>
+                        <div className="text-xs text-slate-500">Order ID</div>
+                        <div className="font-medium">{orderRow.order_id ?? ''}</div>
+                      </div>
+                      <div>
+                        <div className="text-xs text-slate-500">AWB</div>
+                        <div className="font-medium">{orderRow.waybill ?? ''}</div>
+                      </div>
+                      <div>
+                        <div className="text-xs text-slate-500">Courier</div>
+                        <div className="font-medium">{courierName(orderRow.courier_account || '')}</div>
+                      </div>
+                      <div>
+                        <div className="text-xs text-slate-500">Delivery Status</div>
+                        <div className="font-medium">{orderRow.delivery_status || ''}</div>
+                      </div>
+                      <div>
+                        <div className="text-xs text-slate-500">Status</div>
+                        <div className="font-medium">{orderRow.status || ''}</div>
+                      </div>
+                      <div>
+                        <div className="text-xs text-slate-500">Final Status</div>
+                        <div className="font-medium">{orderRow.final_status || ''}</div>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      <div>
+                        <div className="text-xs text-slate-500">Assigned To</div>
+                        <div className="font-medium">{orderRow.assigned_to || ''}</div>
+                      </div>
+                      <div>
+                        <div className="text-xs text-slate-500">Assigned At</div>
+                        <div className="font-medium">{orderRow.assigned_at || ''}</div>
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-xs text-slate-500">Notes (parsed)</div>
+                      {(() => {
+                        const n = parseNotes(orderRow.notes || null) as any;
+                        return (
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                            <div>
+                              <div className="text-xs text-slate-500">Phone</div>
+                              <div className="font-medium">{n.phone || ''}</div>
+                            </div>
+                            <div>
+                              <div className="text-xs text-slate-500">Call Status</div>
+                              <div className="font-medium">{n.call_status || (orderRow.called === true ? 'Yes' : orderRow.called === false ? 'No' : '')}</div>
+                            </div>
+                            <div className="sm:col-span-2">
+                              <div className="text-xs text-slate-500">Issue</div>
+                              <div className="font-medium">{n.customer_issue || ''}</div>
+                            </div>
+                            <div className="sm:col-span-2">
+                              <div className="text-xs text-slate-500">Action</div>
+                              <div className="font-medium">{n.action_taken || ''}</div>
+                            </div>
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-sm text-slate-600">No order found.</div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Report Overview (Selected Date Range) */}
+      <div className="p-4 rounded-2xl ring-1 ring-slate-200 bg-white mb-3">
+        <div className="font-semibold mb-2">Overview</div>
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
+          <div className="rounded-xl ring-1 ring-slate-200 p-3">
+            <div className="text-xs text-slate-500">Total Leads</div>
+            <div className="text-xl font-semibold mt-1">{overview.total}</div>
+          </div>
+          <div className="rounded-xl ring-1 ring-slate-200 p-3">
+            <div className="text-xs text-slate-500">Assigned</div>
+            <div className="text-xl font-semibold mt-1">{overview.assigned}</div>
+          </div>
+          <div className="rounded-xl ring-1 ring-slate-200 p-3">
+            <div className="text-xs text-slate-500">Raised with DP</div>
+            <div className="text-xl font-semibold mt-1">{overview.raisedWithDP}</div>
+          </div>
+          <div className="rounded-xl ring-1 ring-slate-200 p-3">
+            <div className="text-xs text-slate-500">Resolved</div>
+            <div className="text-xl font-semibold mt-1">{overview.resolved}</div>
+          </div>
+          <div className="rounded-xl ring-1 ring-slate-200 p-3">
+            <div className="text-xs text-slate-500">Delivered</div>
+            <div className="text-xl font-semibold mt-1">{overview.delivered}</div>
+          </div>
+          <div className="rounded-xl ring-1 ring-slate-200 p-3">
+            <div className="text-xs text-slate-500">Emails Sent</div>
+            <div className="text-xl font-semibold mt-1">{overview.emailSent}</div>
+          </div>
+        </div>
+      </div>
+
       {/* Daily Report (Previous Day) */}
       <div className="p-4 rounded-2xl ring-1 ring-slate-200 bg-white">
         <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
@@ -617,10 +934,19 @@ export default function TeamAnalyticsPage() {
             <div className="text-xs text-slate-500">Delivery partner wise (top)</div>
             <div className="mt-2 space-y-1 max-h-40 overflow-auto">
               {dailyPartnerWise.length === 0 ? <div className="text-sm text-slate-500">No data</div> : dailyPartnerWise.map(([k,v]) => (
-                <div key={k} className="flex items-center justify-between text-sm">
+                <button
+                  key={k}
+                  type="button"
+                  className="w-full flex items-center justify-between text-sm hover:bg-slate-50 rounded px-1"
+                  title="View leads for this courier partner"
+                  onClick={() => openDetail(
+                    `Courier • ${k}`,
+                    filteredDailyRows.filter(r => courierName(r.courier_account||'')===k)
+                  )}
+                >
                   <span>{k}</span>
                   <span className="font-medium">{v}</span>
-                </div>
+                </button>
               ))}
             </div>
           </div>
@@ -628,10 +954,19 @@ export default function TeamAnalyticsPage() {
             <div className="text-xs text-slate-500">Agent wise assigned</div>
             <div className="mt-2 space-y-1 max-h-40 overflow-auto">
               {dailyAgentWise.length === 0 ? <div className="text-sm text-slate-500">No data</div> : dailyAgentWise.map(([k,v]) => (
-                <div key={k} className="flex items-center justify-between text-sm">
+                <button
+                  key={k}
+                  type="button"
+                  className="w-full flex items-center justify-between text-sm hover:bg-slate-50 rounded px-1"
+                  title="View leads assigned to this agent"
+                  onClick={() => openDetail(
+                    `Assigned • ${k}`,
+                    filteredDailyRows.filter(r => (r.assigned_to||'').trim()===k)
+                  )}
+                >
                   <span>{k}</span>
                   <span className="font-medium">{v}</span>
-                </div>
+                </button>
               ))}
             </div>
           </div>
@@ -639,10 +974,19 @@ export default function TeamAnalyticsPage() {
             <div className="text-xs text-slate-500">Agent wise raised with Delivery partner</div>
             <div className="mt-2 space-y-1 max-h-40 overflow-auto">
               {dailyRaisedAgentWise.length === 0 ? <div className="text-sm text-slate-500">No data</div> : dailyRaisedAgentWise.map(([k,v]) => (
-                <div key={k} className="flex items-center justify-between text-sm">
+                <button
+                  key={k}
+                  type="button"
+                  className="w-full flex items-center justify-between text-sm hover:bg-slate-50 rounded px-1"
+                  title="View leads raised with delivery partner by this agent"
+                  onClick={() => openDetail(
+                    `Raised with partner • ${k}`,
+                    filteredDailyRows.filter(r => (r.assigned_to||'').trim()===k && r.email_sent===true)
+                  )}
+                >
                   <span>{k}</span>
                   <span className="font-medium">{v}</span>
-                </div>
+                </button>
               ))}
             </div>
           </div>
@@ -650,10 +994,27 @@ export default function TeamAnalyticsPage() {
             <div className="text-xs text-slate-500">Agent wise resolved</div>
             <div className="mt-2 space-y-1 max-h-40 overflow-auto">
               {dailyResolvedAgentWise.length === 0 ? <div className="text-sm text-slate-500">No data</div> : dailyResolvedAgentWise.map(([k,v]) => (
-                <div key={k} className="flex items-center justify-between text-sm">
+                <button
+                  key={k}
+                  type="button"
+                  className="w-full flex items-center justify-between text-sm hover:bg-slate-50 rounded px-1"
+                  title="View leads resolved by this agent"
+                  onClick={() => openDetail(
+                    `Resolved • ${k}`,
+                    filteredDailyRows.filter(r => {
+                      const agent = (r.assigned_to||'').trim();
+                      if (agent !== k) return false;
+                      const finalRaw = String((r as any).final_status || '').trim().toLowerCase();
+                      const statusRaw = String(r.status || '').trim().toLowerCase();
+                      const finalResolved = !!finalRaw && !['other','open','in progress','in-progress','inprogress','escalated'].includes(finalRaw);
+                      const statusResolved = statusRaw === 'resolved' || statusRaw === 'closed' || statusRaw === 'close';
+                      return finalResolved || statusResolved;
+                    })
+                  )}
+                >
                   <span>{k}</span>
                   <span className="font-medium">{v}</span>
-                </div>
+                </button>
               ))}
             </div>
           </div>
@@ -664,10 +1025,19 @@ export default function TeamAnalyticsPage() {
                 <div className="text-sm text-slate-500">No data</div>
               ) : (
                 dailyFinalStatusSummary.map(([k,v]) => (
-                  <div key={k} className="flex items-center justify-between text-sm">
+                  <button
+                    key={k}
+                    type="button"
+                    className="w-full flex items-center justify-between text-sm hover:bg-slate-50 rounded px-1"
+                    title="View leads under this final status"
+                    onClick={() => openDetail(
+                      `Final status • ${k}`,
+                      filteredDailyRows.filter(r => normalizeFinalStatus(String((r as any).final_status || '')) === k)
+                    )}
+                  >
                     <span>{k}</span>
                     <span className="font-medium">{v}</span>
-                  </div>
+                  </button>
                 ))
               )}
             </div>
