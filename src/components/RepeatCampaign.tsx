@@ -52,6 +52,7 @@ interface FeedbackForm {
   usingInCoverOrContainer: string;
   orderId: string;
   newProductExpectation: string; // Expectations for new product benefits
+  remark?: string; // Additional remark
 }
 
 
@@ -104,6 +105,7 @@ export default function RepeatCampaign({ initialOrderNumber = '', hideFeedback =
     usingInCoverOrContainer: '',
     orderId: '',
     newProductExpectation: '',
+    remark: '',
   });
   
   const orderInputRef = useRef<HTMLInputElement>(null);
@@ -429,6 +431,7 @@ export default function RepeatCampaign({ initialOrderNumber = '', hideFeedback =
           gender: feedbackForm.gender,
           age: feedbackForm.age,
           new_product_expectation: feedbackForm.generalFeedback || '',
+          remark: feedbackForm.remark || null,
         };
         await fetch(supabaseUrl, {
           method: 'POST',
@@ -467,6 +470,7 @@ export default function RepeatCampaign({ initialOrderNumber = '', hideFeedback =
         usingInCoverOrContainer: '',
         orderId: feedbackForm.orderId,
         newProductExpectation: '',
+        remark: '',
       });
       
       // Scroll to top to show success message
@@ -934,25 +938,40 @@ export default function RepeatCampaign({ initialOrderNumber = '', hideFeedback =
                     </div>
 
                     <div className="md:col-span-2">
-                      <label className="block text-gray-700 text-sm font-medium mb-1">
-                        Expectation for new product: If we launch a new product, what health improvements or benefits would you like to see?
-                      </label>
-                      <textarea
-                        name="newProductExpectation"
-                        value={feedbackForm.newProductExpectation}
-                        onChange={handleFeedbackChange}
-                        className="w-full p-2 border border-gray-300 rounded-lg min-h-[80px]"
-                        required
-                        aria-label="Expectation for new product"
-                        title="What benefits you expect from future products"
-                      />
-                    </div>
+                    <label className="block text-gray-700 text-sm font-medium mb-1">
+                      Expectation for new product: If we launch a new product, what health improvements or benefits would you like to see?
+                    </label>
+                    <textarea
+                      name="newProductExpectation"
+                      value={feedbackForm.newProductExpectation}
+                      onChange={handleFeedbackChange}
+                      className="w-full p-2 border border-gray-300 rounded-lg min-h-[80px]"
+                      required
+                      aria-label="Expectation for new product"
+                      title="What benefits you expect from future products"
+                    />
+                  </div>
+
+                  {/* Remark */}
+                  <div className="md:col-span-2">
+                    <label className="block text-gray-700 text-sm font-medium mb-1">
+                      Remark
+                    </label>
+                    <textarea
+                      name="remark"
+                      value={feedbackForm.remark || ''}
+                      onChange={handleFeedbackChange}
+                      className="w-full p-2 border border-gray-300 rounded-lg min-h-[60px]"
+                      placeholder="Any additional note"
+                      aria-label="Remark"
+                      title="Additional remark"
+                    />
+                  </div>
                   </div>
 
                   <button
                     type="submit"
                     className="bg-green-600 hover:bg-green-700 text-white px-6 py-2 rounded-lg flex items-center justify-center transition-colors"
-                    disabled={loading}
                   >
                     {loading ? (
                       <span className="inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin mr-2"></span>
