@@ -25,7 +25,7 @@ const SUPABASE_HEADERS: Record<string, string> = {
 };
 
 // Column keys used for sorting/filtering per column
-type ColumnKey = 'order' | 'awb' | 'status' | 'courier' | 'email' | 'call' | 'edd';
+type ColumnKey = 'order' | 'awb' | 'status' | 'courier' | 'email' | 'call' | 'edd' | 'final_status';
 
 // ---- Types -------------------------------------------------
 export type NdrRow = {
@@ -325,6 +325,7 @@ export default function NdrDashboard() {
     email: [],
     call: [],
     edd: [],
+    final_status: [],
   });
 
   const [editorOpen, setEditorOpen] = useState(false);
@@ -659,7 +660,7 @@ export default function NdrDashboard() {
         const callVal = String(r.__call_status || '');
         if (!colFilters.call.includes(callVal)) return false;
       }
-      if (colFilters.edd.length && !colFilters.edd.includes(String(r.__edd?.label || '—'))) return false;
+      if (colFilters.final_status.length && !colFilters.final_status.includes(String(r.final_status || ''))) return false;
       // date range filter on event_time (inclusive day bounds)
       if (fromDate || toDate) {
         const ev = r.event_time ? new Date(r.event_time) : null;
@@ -963,6 +964,7 @@ export default function NdrDashboard() {
       // so 'Empty' truly reflects rows with no selected value in the UI.
       call: Array.from(new Set((enriched as any[]).map((r: any) => (r.__call_status || '')))).map((x:any) => String(x)),
       edd: uniq((enriched as any[]).map((r: any) => (r.__edd?.label || '—'))),
+      final_status: uniq((enriched as any[]).map((r: any) => (r.final_status || ''))),
     } as Record<ColumnKey, string[]>;
   }, [enriched]);
 
@@ -2058,6 +2060,20 @@ function TableView({ rows, onEdit: _onEdit, onQuickUpdate, total, page, pageSize
             <th className="relative px-3 py-2">
               <div className="flex items-center gap-2">
                 <span>Final Status</span>
+                <button
+                  type="button"
+                  className="p-1 rounded hover:bg-slate-100"
+                  title="Filter Final Status"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                    setMenuPos({ left: rect.right - 16, top: rect.bottom + 6 });
+                    setOpenFilter(openFilter === 'final_status' ? null : 'final_status');
+                  }}
+                  aria-label="Open Final Status filter"
+                >
+                  <Filter className="w-4 h-4 text-slate-500" />
+                </button>
               </div>
             </th>
 
@@ -2318,6 +2334,7 @@ function TableView({ rows, onEdit: _onEdit, onQuickUpdate, total, page, pageSize
             {openFilter === 'email' && <FilterMenu colKey="email" title="Email Sent" />}
             {openFilter === 'call' && <FilterMenu colKey="call" title="Call Status" />}
             {openFilter === 'edd' && <FilterMenu colKey="edd" title="EDD" />}
+            {openFilter === 'final_status' && <FilterMenu colKey="final_status" title="Final Status" />}
           </div>
         </div>,
         document.body
