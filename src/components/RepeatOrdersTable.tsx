@@ -560,7 +560,12 @@ export default function RepeatOrdersTable() {
                         <button
                           onClick={() => {
                             if (order.order_numbers && order.order_numbers.length > 0) {
-                              setSelectedOrderNumber(order.order_numbers[0]);
+                              // Prefer showing the previous order (N-1) to surface the latest collected feedback
+                              // If only one order exists, fall back to that one.
+                              const targetOrderNumber = order.order_numbers.length > 1
+                                ? order.order_numbers[1]
+                                : order.order_numbers[0];
+                              setSelectedOrderNumber(targetOrderNumber);
                               setIsDialogOpen(true);
                             }
                           }}
