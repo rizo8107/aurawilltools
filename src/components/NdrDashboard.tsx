@@ -964,7 +964,8 @@ export default function NdrDashboard() {
       // so 'Empty' truly reflects rows with no selected value in the UI.
       call: Array.from(new Set((enriched as any[]).map((r: any) => (r.__call_status || '')))).map((x:any) => String(x)),
       edd: uniq((enriched as any[]).map((r: any) => (r.__edd?.label || '—'))),
-      final_status: uniq((enriched as any[]).map((r: any) => (r.final_status || ''))),
+      // Include explicit empty string for final_status so 'Empty' can be selected in filter
+      final_status: Array.from(new Set((enriched as any[]).map((r: any) => (r.final_status || '')))).map((x:any) => String(x)),
     } as Record<ColumnKey, string[]>;
   }, [enriched]);
 

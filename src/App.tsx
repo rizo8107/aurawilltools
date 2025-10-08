@@ -15,9 +15,10 @@ import NdrLogin from './components/NdrLogin';
 import NdrAllocationPage from './components/NdrAllocationPage';
 import TeamAnalyticsPage from './components/TeamAnalyticsPage';
 import { Package, Printer, Truck, FileText, Users, LogOut, FileSpreadsheet, RefreshCw } from 'lucide-react';
+import ManualOrdersDashboard from './components/ManualOrdersDashboard';
 import SegmentationPage from './components/SegmentationPage';
 
-type TabType = 'order' | 'printslip' | 'tracking' | 'manifest' | 'campaign' | 'repeatorders' | 'repeat_dashboard' | 'orderhistory' | 'gstinvoice' | 'ndr' | 'teams' | 'allocation' | 'team_analytics' | 'segmentation';
+type TabType = 'order' | 'printslip' | 'tracking' | 'manifest' | 'campaign' | 'repeatorders' | 'repeat_dashboard' | 'orderhistory' | 'gstinvoice' | 'ndr' | 'teams' | 'allocation' | 'team_analytics' | 'segmentation' | 'manual_orders';
 
 function App() {
   const [activeTab, setActiveTab] = useState<TabType>('order');
@@ -80,6 +81,7 @@ function App() {
     { id: 'team_analytics', label: 'Team Analytics', icon: <Users size={20} /> },
     { id: 'segmentation', label: 'Segmentation', icon: <FileText size={20} /> },
     { id: 'gstinvoice', label: 'GST Invoice', icon: <FileSpreadsheet size={20} /> },
+    { id: 'manual_orders', label: 'Manual Orders', icon: <FileText size={20} /> },
   ];
 
   const pageDescriptions: Record<TabType, string> = {
@@ -98,6 +100,7 @@ function App() {
     allocation: 'Define NDR allocation rules (percentage split, status filters) for the active team',
     team_analytics: 'Visualize team assignments, status split, and activity',
     segmentation: 'Group and export orders by State/City/Pincode/Area',
+    manual_orders: 'Create manual orders, update status, and record agent notes with full audit trail',
   };
 
   // Handle logout
@@ -169,10 +172,9 @@ function App() {
             activeTab === 'tracking' || activeTab === 'manifest' ? 'max-w-3xl' : 
             activeTab === 'campaign' ? 'max-w-5xl' : 
             activeTab === 'team_analytics' ? 'max-w-[95vw]' : 
-            activeTab === 'ndr' ? 'max-w-none' : 
-            activeTab === 'repeat_dashboard' ? 'max-w-none' : 
+            activeTab === 'ndr' || activeTab === 'repeat_dashboard' || activeTab === 'manual_orders' ? 'max-w-none' : 
             activeTab === 'gstinvoice' || activeTab === 'orderhistory' ? 'max-w-7xl' : 'max-w-4xl'
-          } ${(activeTab === 'ndr' || activeTab === 'repeat_dashboard') ? '' : 'mx-auto'}`}>
+          } ${(activeTab === 'ndr' || activeTab === 'repeat_dashboard' || activeTab === 'manual_orders') ? '' : 'mx-auto'}`}>
             {activeTab === 'order' && <OrderForm />}
             {activeTab === 'printslip' && <PrintSlip />}
             {activeTab === 'tracking' && <UpdateTracking />}
@@ -215,6 +217,7 @@ function App() {
             {activeTab === 'allocation' && <NdrAllocationPage />}
             {activeTab === 'team_analytics' && <TeamAnalyticsPage />}
             {activeTab === 'segmentation' && <SegmentationPage />}
+            {activeTab === 'manual_orders' && <ManualOrdersDashboard />}
           </div>
         </main>
         
