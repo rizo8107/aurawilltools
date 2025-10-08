@@ -71,6 +71,9 @@ export default function ManualOrdersDashboard() {
   const [createdByFilter, setCreatedByFilter] = useState<string>('');
   const [startDate, setStartDate] = useState<string>('');
   const [endDate, setEndDate] = useState<string>('');
+  const [onlyDuplicates, setOnlyDuplicates] = useState<boolean>(false);
+  const [servicableFilter, setServicableFilter] = useState<'all' | 'yes' | 'no'>('all');
+  const [showColumnFilters, setShowColumnFilters] = useState<boolean>(false);
 
   const [orders, setOrders] = useState<ManualOrder[]>([]);
   const [loading, setLoading] = useState(false);
@@ -109,6 +112,65 @@ export default function ManualOrdersDashboard() {
   // pagination
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
+  // table sorting
+  const [sortKey, setSortKey] = useState<
+    '' | 'order_date' | 'order_id' | 'count' | 'status' | 'quantity' | 'shipping_partner' | 'servicable' | 'tracking_code' | 'customer_name' | 'phone_number' | 'source' | 'created_by' | 'created_at'
+  >('');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
+
+  // column text filters
+  const [orderIdText, setOrderIdText] = useState('');
+  const [trackingText, setTrackingText] = useState('');
+  const [customerText, setCustomerText] = useState('');
+  const [phoneText, setPhoneText] = useState('');
+  // qty filter
+  const [qtyFilter, setQtyFilter] = useState<string>('');
+  const qtyOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const o of orders) {
+      const q = Number(o.quantity);
+      if (!Number.isNaN(q) && q > 0) set.add(String(q));
+    }
+    return Array.from(set).sort((a,b)=>Number(a)-Number(b));
+  }, [orders]);
+
+  // Inline status updater (order_dispatches_raw)
+  const updateRowStatus = useCallback(async (row: ManualOrder, nextStatus: string) => {
+    const prev = orders;
+    // optimistic local update
+    setOrders(prev.map(r => (r.id === row.id ? { ...r, status: nextStatus } : r)));
+    // build filter: prefer id, else tracking_code, else order_id
+    const where = row.id ? `id=eq.${encodeURIComponent(String(row.id))}` : (
+      row.tracking_code ? `tracking_code=eq.${encodeURIComponent(String(row.tracking_code))}` : (
+        row.order_id != null ? `order_id=eq.${Number(row.order_id)}` : ''
+      )
+    );
+    if (!where) { setError('Cannot update: no identifier'); setOrders(prev); return; }
+    try {
+      const url = `${SUPABASE_URL}/rest/v1/order_dispatches_raw?${where}`;
+      const res = await fetch(url, {
+        method: 'PATCH',
+        headers: { ...SB_HEADERS, 'Content-Type': 'application/json', 'Prefer': 'return=representation' },
+        body: JSON.stringify({ status: nextStatus, Status: nextStatus })
+      });
+      if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+    } catch (e:any) {
+      setError(String(e.message || e));
+      // revert optimistic update
+      setOrders(prev);
+    }
+  }, [orders]);
+
+  // Pre-compute duplicate counts by order_id
+  const dupCounts = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const o of orders) {
+      const key = o.order_id != null ? String(o.order_id) : '';
+      if (!key) continue;
+      m.set(key, (m.get(key) || 0) + 1);
+    }
+    return m;
+  }, [orders]);
 
   const filtered = useMemo(() => {
     const s = q.trim().toLowerCase();
@@ -117,9 +179,31 @@ export default function ManualOrdersDashboard() {
         const hay = [o.customer_name, o.phone_number, o.order_id, o.tracking_code, o.address, o.source].join(' ').toLowerCase();
         if (!hay.includes(s)) return false;
       }
+      if (orderIdText.trim()) {
+        const t = orderIdText.trim().toLowerCase();
+        if (!String(o.order_id ?? '').toLowerCase().includes(t)) return false;
+      }
+      if (trackingText.trim()) {
+        const t = trackingText.trim().toLowerCase();
+        if (!String(o.tracking_code ?? '').toLowerCase().includes(t)) return false;
+      }
+      if (customerText.trim()) {
+        const t = customerText.trim().toLowerCase();
+        if (!String(o.customer_name ?? '').toLowerCase().includes(t)) return false;
+      }
+      if (phoneText.trim()) {
+        const t = phoneText.trim().toLowerCase();
+        if (!String(o.phone_number ?? '').toLowerCase().includes(t)) return false;
+      }
       if (statusFilter.length && !statusFilter.includes(String(o.status))) return false;
       if (sourceFilter.length && !sourceFilter.includes(String(o.source))) return false;
       if (partnerFilter.length && !partnerFilter.includes(String(o.shipping_partner || ''))) return false;
+      if (qtyFilter && Number(o.quantity) !== Number(qtyFilter)) return false;
+      if (servicableFilter !== 'all') {
+        const val = o.servicable;
+        if (servicableFilter === 'yes' && val !== true) return false;
+        if (servicableFilter === 'no' && val !== false) return false;
+      }
       if (createdByFilter && String(o.created_by || '') !== createdByFilter) return false;
       if (startDate || endDate) {
         const d = o.order_date ? new Date(o.order_date) : null;
@@ -127,14 +211,55 @@ export default function ManualOrdersDashboard() {
         if (startDate && d < new Date(`${startDate}T00:00:00`)) return false;
         if (endDate && d > new Date(`${endDate}T23:59:59.999`)) return false;
       }
+      if (onlyDuplicates) {
+        const k = o.order_id != null ? String(o.order_id) : '';
+        if (!k) return false;
+        if ((dupCounts.get(k) || 0) <= 1) return false;
+      }
       return true;
     });
-  }, [orders, q, statusFilter, sourceFilter, partnerFilter, createdByFilter, startDate, endDate]);
+  }, [orders, q, orderIdText, trackingText, customerText, phoneText, qtyFilter, statusFilter, sourceFilter, partnerFilter, servicableFilter, createdByFilter, startDate, endDate, onlyDuplicates, dupCounts]);
+
+  // Sort by latest date by default (order_date desc, fallback to created_at desc)
+  const sortedFiltered = useMemo(() => {
+    const val = (o: ManualOrder) => {
+      switch (sortKey) {
+        case 'order_date': return o.order_date ? new Date(o.order_date).getTime() : 0;
+        case 'order_id': return Number(o.order_id ?? 0);
+        case 'count': return o.order_id != null ? (dupCounts.get(String(o.order_id)) || 0) : 0;
+        case 'status': return String(o.status || '');
+        case 'quantity': return Number(o.quantity || 0);
+        case 'shipping_partner': return String(o.shipping_partner || '');
+        case 'servicable': return o.servicable === true ? 2 : (o.servicable === false ? 1 : 0);
+        case 'tracking_code': return String(o.tracking_code || '');
+        case 'customer_name': return String(o.customer_name || '');
+        case 'phone_number': return String(o.phone_number || '');
+        case 'source': return String(o.source || '');
+        case 'created_by': return String(o.created_by || '');
+        case 'created_at': return o.created_at ? new Date(o.created_at).getTime() : 0;
+        default: {
+          const od = o.order_date ? new Date(o.order_date).getTime() : NaN;
+          const ca = o.created_at ? new Date(o.created_at).getTime() : NaN;
+          return !isNaN(od) ? od : (!isNaN(ca) ? ca : 0);
+        }
+      }
+    };
+    const arr = [...filtered];
+    arr.sort((a, b) => {
+      const va = val(a) as any;
+      const vb = val(b) as any;
+      let cmp = 0;
+      if (typeof va === 'number' && typeof vb === 'number') cmp = va - vb;
+      else cmp = String(va).localeCompare(String(vb));
+      return sortDir === 'asc' ? cmp : -cmp;
+    });
+    return arr;
+  }, [filtered, sortKey, sortDir, dupCounts]);
 
   const pageRows = useMemo(() => {
     const start = (page - 1) * pageSize;
-    return filtered.slice(start, start + pageSize);
-  }, [filtered, page, pageSize]);
+    return sortedFiltered.slice(start, start + pageSize);
+  }, [sortedFiltered, page, pageSize]);
 
   const kpi = useMemo(() => {
     const today = new Date(); today.setHours(0,0,0,0);
@@ -162,7 +287,9 @@ export default function ManualOrdersDashboard() {
   const loadOrders = useCallback(async () => {
     try {
       setLoading(true); setError('');
-      const url = `${SUPABASE_URL}/rest/v1/manual_orders?select=*&order=created_at.desc`;
+      // Use staging/raw source for listing instead of manual_orders
+      // Omit server-side order (created_at may not exist on this table); we sort client-side
+      const url = `${SUPABASE_URL}/rest/v1/order_dispatches_raw?select=*`;
       const res = await fetch(url, { headers: SB_HEADERS });
       if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
       const data = await res.json();
@@ -170,15 +297,28 @@ export default function ManualOrdersDashboard() {
         // Normalize possible alternate/raw column names
         // Accept ids like "manual_..."
         const id = r.id ?? r.ID ?? r.pk ?? '';
-        // order date may be 'order_date' (date) or 'date' (iso string)
-        const order_date = r.order_date || (r.date ? String(r.date).slice(0,10) : '');
-        // external order id may be 'order_id' (bigint) or 'ordernumber' (string)
-        const order_id = r.order_id ?? (r.ordernumber ? Number(r.ordernumber) : null);
+        // order date may be 'order_date' or 'date'/'Date' (often dd-mm-yyyy)
+        const dateRaw = r.order_date || r.date || r.Date || '';
+        let order_date = '';
+        if (dateRaw) {
+          const s = String(dateRaw).trim();
+          const m = s.match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/); // dd-mm-yyyy
+          if (m) {
+            const dd = m[1].padStart(2, '0');
+            const mm = m[2].padStart(2, '0');
+            const yyyy = m[3];
+            order_date = `${yyyy}-${mm}-${dd}`; // yyyy-mm-dd
+          } else {
+            order_date = s.slice(0, 10);
+          }
+        }
+        // external order id may be 'order_id' or 'Order ID' or 'ordernumber'
+        const order_id = r.order_id ?? (r["Order ID"] ? Number(r["Order ID"]) : (r.ordernumber ? Number(r.ordernumber) : null));
         // status may be non-enum (e.g., 'processing'); keep as-is for display and counts
         const status = r.status || r.Status || '';
-        // map partner and tracking from raw keys
-        const shipping_partner = r.shipping_partner ?? r.shipping ?? null;
-        const tracking_code = r.tracking_code ?? r.trackingnumber ?? r["Tracking code"] ?? null;
+        // map partner and tracking from raw keys (handle different casing)
+        const shipping_partner = r.shipping_partner ?? r.shipping ?? r.Shipping ?? r["Shipping Partner"] ?? null;
+        const tracking_code = r.tracking_code ?? r.trackingnumber ?? r["Tracking code"] ?? r.Tracking ?? null;
         const customer_name = r.customer_name ?? r.customername ?? r["Customer Name"] ?? null;
         const phone_number = r.phone_number ?? r.phone ?? r["Phone number"] ?? null;
         const address = r.address ?? r.Address ?? null;
@@ -390,6 +530,13 @@ export default function ManualOrdersDashboard() {
             </select>
             <input type="date" value={startDate} onChange={(e)=>setStartDate(e.target.value)} className="ring-1 ring-slate-200 rounded-lg px-2 py-1 text-sm bg-white" title="Start date" aria-label="Start date" />
             <input type="date" value={endDate} onChange={(e)=>setEndDate(e.target.value)} className="ring-1 ring-slate-200 rounded-lg px-2 py-1 text-sm bg-white" title="End date" aria-label="End date" />
+            <label className="inline-flex items-center gap-2 text-sm px-2 py-1 ring-1 ring-slate-200 rounded-lg bg-white">
+              <input type="checkbox" checked={onlyDuplicates} onChange={(e)=>{ setOnlyDuplicates(e.target.checked); setPage(1); }} />
+              <span>Only duplicates</span>
+            </label>
+            <button className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg ring-1 ring-slate-200 text-sm hover:bg-slate-50" onClick={()=>setShowColumnFilters(v=>!v)} title="Toggle column filters">
+              <Filter className="w-4 h-4"/> Filters
+            </button>
             <button className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg ring-1 ring-slate-200 text-sm hover:bg-slate-50" onClick={onExport} title="Export filtered">
               <Download className="w-4 h-4"/> Export
             </button>
@@ -421,40 +568,199 @@ export default function ManualOrdersDashboard() {
         <div className="overflow-auto rounded-2xl ring-1 ring-slate-200">
           <table className="min-w-full text-sm">
             <thead className="bg-slate-50 text-left">
-              <tr className="*:px-3 *:py-2 *:whitespace-nowrap">
-                <th>ID</th>
-                <th>Order Date</th>
-                <th>Order ID</th>
-                <th>Status</th>
-                <th>Qty</th>
-                <th>Shipping Partner</th>
-                <th>Servicable</th>
-                <th>Tracking</th>
-                <th>Customer</th>
-                <th>Phone</th>
-                <th>Source</th>
-                <th>Created By</th>
-                <th>Created At</th>
+              <tr className="*:px-3 *:py-2 *:whitespace-nowrap select-none">
+                <th>
+                  <button className="flex items-center gap-1" title="Sort by order date" onClick={()=>{ setSortKey('order_date'); setSortDir(d=> (sortKey==='order_date' && d==='asc') ? 'desc' : 'asc'); }}>
+                    Order Date {sortKey==='order_date' ? (sortDir==='asc'?'▲':'▼') : ''}
+                  </button>
+                </th>
+                <th>
+                  <button className="flex items-center gap-1" title="Sort by order id" onClick={()=>{ setSortKey('order_id'); setSortDir(d=> (sortKey==='order_id' && d==='asc') ? 'desc' : 'asc'); }}>
+                    Order ID {sortKey==='order_id' ? (sortDir==='asc'?'▲':'▼') : ''}
+                  </button>
+                </th>
+                <th>
+                  <button className="flex items-center gap-1" title="Sort by duplicate count" onClick={()=>{ setSortKey('count'); setSortDir(d=> (sortKey==='count' && d==='asc') ? 'desc' : 'asc'); }}>
+                    Count {sortKey==='count' ? (sortDir==='asc'?'▲':'▼') : ''}
+                  </button>
+                </th>
+                <th>
+                  <button className="flex items-center gap-1" title="Sort by status" onClick={()=>{ setSortKey('status'); setSortDir(d=> (sortKey==='status' && d==='asc') ? 'desc' : 'asc'); }}>
+                    Status {sortKey==='status' ? (sortDir==='asc'?'▲':'▼') : ''}
+                  </button>
+                </th>
+                <th>
+                  <button className="flex items-center gap-1" title="Sort by quantity" onClick={()=>{ setSortKey('quantity'); setSortDir(d=> (sortKey==='quantity' && d==='asc') ? 'desc' : 'asc'); }}>
+                    Qty {sortKey==='quantity' ? (sortDir==='asc'?'▲':'▼') : ''}
+                  </button>
+                </th>
+                <th>
+                  <button className="flex items-center gap-1" title="Sort by partner" onClick={()=>{ setSortKey('shipping_partner'); setSortDir(d=> (sortKey==='shipping_partner' && d==='asc') ? 'desc' : 'asc'); }}>
+                    Shipping Partner {sortKey==='shipping_partner' ? (sortDir==='asc'?'▲':'▼') : ''}
+                  </button>
+                </th>
+                <th>
+                  <button className="flex items-center gap-1" title="Sort by servicable" onClick={()=>{ setSortKey('servicable'); setSortDir(d=> (sortKey==='servicable' && d==='asc') ? 'desc' : 'asc'); }}>
+                    Servicable {sortKey==='servicable' ? (sortDir==='asc'?'▲':'▼') : ''}
+                  </button>
+                </th>
+                <th>
+                  <button className="flex items-center gap-1" title="Sort by tracking" onClick={()=>{ setSortKey('tracking_code'); setSortDir(d=> (sortKey==='tracking_code' && d==='asc') ? 'desc' : 'asc'); }}>
+                    Tracking {sortKey==='tracking_code' ? (sortDir==='asc'?'▲':'▼') : ''}
+                  </button>
+                </th>
+                <th>
+                  <button className="flex items-center gap-1" title="Sort by customer" onClick={()=>{ setSortKey('customer_name'); setSortDir(d=> (sortKey==='customer_name' && d==='asc') ? 'desc' : 'asc'); }}>
+                    Customer {sortKey==='customer_name' ? (sortDir==='asc'?'▲':'▼') : ''}
+                  </button>
+                </th>
+                <th>
+                  <button className="flex items-center gap-1" title="Sort by phone" onClick={()=>{ setSortKey('phone_number'); setSortDir(d=> (sortKey==='phone_number' && d==='asc') ? 'desc' : 'asc'); }}>
+                    Phone {sortKey==='phone_number' ? (sortDir==='asc'?'▲':'▼') : ''}
+                  </button>
+                </th>
+                <th>
+                  <button className="flex items-center gap-1" title="Sort by source" onClick={()=>{ setSortKey('source'); setSortDir(d=> (sortKey==='source' && d==='asc') ? 'desc' : 'asc'); }}>
+                    Source {sortKey==='source' ? (sortDir==='asc'?'▲':'▼') : ''}
+                  </button>
+                </th>
+                <th>
+                  <button className="flex items-center gap-1" title="Sort by created by" onClick={()=>{ setSortKey('created_by'); setSortDir(d=> (sortKey==='created_by' && d==='asc') ? 'desc' : 'asc'); }}>
+                    Created By {sortKey==='created_by' ? (sortDir==='asc'?'▲':'▼') : ''}
+                  </button>
+                </th>
+                <th>
+                  <button className="flex items-center gap-1" title="Sort by created at" onClick={()=>{ setSortKey('created_at'); setSortDir(d=> (sortKey==='created_at' && d==='asc') ? 'desc' : 'asc'); }}>
+                    Created At {sortKey==='created_at' ? (sortDir==='asc'?'▲':'▼') : ''}
+                  </button>
+                </th>
                 <th>Actions</th>
               </tr>
+              {showColumnFilters && (
+                <tr className="*:px-3 *:py-2 bg-white border-t">
+                  {/* Order Date */}
+                  <th>
+                    <div className="flex items-center gap-1">
+                      <input type="date" value={startDate} onChange={(e)=>{ setStartDate(e.target.value); setPage(1); }} className="ring-1 ring-slate-200 rounded px-1 py-0.5 text-xs bg-white" title="Filter start date" />
+                      <span className="text-slate-400 text-xs">→</span>
+                      <input type="date" value={endDate} onChange={(e)=>{ setEndDate(e.target.value); setPage(1); }} className="ring-1 ring-slate-200 rounded px-1 py-0.5 text-xs bg-white" title="Filter end date" />
+                    </div>
+                  </th>
+                  {/* Order ID */}
+                  <th>
+                    <input value={orderIdText} onChange={(e)=>{ setOrderIdText(e.target.value); setPage(1); }} placeholder="Search…" title="Filter by order id" className="ring-1 ring-slate-200 rounded px-1 py-0.5 text-xs bg-white w-[120px]" />
+                  </th>
+                  {/* Count */}
+                  <th>
+                    <label className="inline-flex items-center gap-1 text-xs">
+                      <input type="checkbox" checked={onlyDuplicates} onChange={(e)=>{ setOnlyDuplicates(e.target.checked); setPage(1); }} /> Dups
+                    </label>
+                  </th>
+                  {/* Status */}
+                  <th>
+                    <div className="flex items-center gap-1">
+                      <select multiple value={statusFilter as any} onChange={(e)=>{ setStatusFilter(Array.from(e.target.selectedOptions).map(o=>o.value)); setPage(1); }} className="ring-1 ring-slate-200 rounded px-1 py-0.5 text-xs bg-white min-w-[140px]" title="Filter by status">
+                        {STATUS_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
+                      </select>
+                      <button className="px-1.5 py-0.5 text-[11px] ring-1 ring-slate-200 rounded hover:bg-slate-50" title="Select all statuses" onClick={(e)=>{ e.preventDefault(); setStatusFilter(STATUS_OPTIONS as any); setPage(1); }}>All</button>
+                      <button className="px-1.5 py-0.5 text-[11px] ring-1 ring-slate-200 rounded hover:bg-slate-50" title="Clear statuses" onClick={(e)=>{ e.preventDefault(); setStatusFilter([]); setPage(1); }}>Clear</button>
+                    </div>
+                  </th>
+                  {/* Qty */}
+                  <th>
+                    <select value={qtyFilter} onChange={(e)=>{ setQtyFilter(e.target.value); setPage(1); }} className="ring-1 ring-slate-200 rounded px-1 py-0.5 text-xs bg-white w-[90px]" title="Filter by quantity">
+                      <option value="">All</option>
+                      {qtyOptions.map(q => <option key={q} value={q}>{q}</option>)}
+                    </select>
+                  </th>
+                  {/* Shipping Partner */}
+                  <th>
+                    <div className="flex items-center gap-1">
+                      <select multiple value={partnerFilter as any} onChange={(e)=>{ setPartnerFilter(Array.from(e.target.selectedOptions).map(o=>o.value)); setPage(1); }} className="ring-1 ring-slate-200 rounded px-1 py-0.5 text-xs bg-white min-w-[140px]" title="Filter by shipping partner">
+                        {partners.map(p => <option key={p} value={p}>{p}</option>)}
+                      </select>
+                      <button className="px-1.5 py-0.5 text-[11px] ring-1 ring-slate-200 rounded hover:bg-slate-50" title="Select all partners" onClick={(e)=>{ e.preventDefault(); setPartnerFilter(partners as any); setPage(1); }}>All</button>
+                      <button className="px-1.5 py-0.5 text-[11px] ring-1 ring-slate-200 rounded hover:bg-slate-50" title="Clear partners" onClick={(e)=>{ e.preventDefault(); setPartnerFilter([]); setPage(1); }}>Clear</button>
+                    </div>
+                  </th>
+                  {/* Servicable */}
+                  <th>
+                    <select value={servicableFilter} onChange={(e)=>{ setServicableFilter(e.target.value as any); setPage(1); }} className="ring-1 ring-slate-200 rounded px-1 py-0.5 text-xs bg-white" title="Filter by servicable">
+                      <option value="all">All</option>
+                      <option value="yes">Yes</option>
+                      <option value="no">No</option>
+                    </select>
+                  </th>
+                  {/* Tracking */}
+                  <th>
+                    <input value={trackingText} onChange={(e)=>{ setTrackingText(e.target.value); setPage(1); }} placeholder="Search…" title="Filter by tracking" className="ring-1 ring-slate-200 rounded px-1 py-0.5 text-xs bg-white w-[140px]" />
+                  </th>
+                  {/* Customer */}
+                  <th>
+                    <input value={customerText} onChange={(e)=>{ setCustomerText(e.target.value); setPage(1); }} placeholder="Search…" title="Filter by customer" className="ring-1 ring-slate-200 rounded px-1 py-0.5 text-xs bg-white w-[140px]" />
+                  </th>
+                  {/* Phone */}
+                  <th>
+                    <input value={phoneText} onChange={(e)=>{ setPhoneText(e.target.value); setPage(1); }} placeholder="Search…" title="Filter by phone" className="ring-1 ring-slate-200 rounded px-1 py-0.5 text-xs bg-white w-[130px]" />
+                  </th>
+                  {/* Source */}
+                  <th>
+                    <div className="flex items-center gap-1">
+                      <select multiple value={sourceFilter as any} onChange={(e)=>{ setSourceFilter(Array.from(e.target.selectedOptions).map(o=>o.value)); setPage(1); }} className="ring-1 ring-slate-200 rounded px-1 py-0.5 text-xs bg-white min-w-[140px]" title="Filter by source">
+                        {SOURCE_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
+                      </select>
+                      <button className="px-1.5 py-0.5 text-[11px] ring-1 ring-slate-200 rounded hover:bg-slate-50" title="Select all sources" onClick={(e)=>{ e.preventDefault(); setSourceFilter(SOURCE_OPTIONS as any); setPage(1); }}>All</button>
+                      <button className="px-1.5 py-0.5 text-[11px] ring-1 ring-slate-200 rounded hover:bg-slate-50" title="Clear sources" onClick={(e)=>{ e.preventDefault(); setSourceFilter([]); setPage(1); }}>Clear</button>
+                    </div>
+                  </th>
+                  {/* Created By */}
+                  <th>
+                    <select value={createdByFilter} onChange={(e)=>{ setCreatedByFilter(e.target.value); setPage(1); }} className="ring-1 ring-slate-200 rounded px-1 py-0.5 text-xs bg-white min-w-[120px]" title="Filter by agent">
+                      <option value="">All</option>
+                      {agents.map(a => <option key={a} value={a}>{a}</option>)}
+                    </select>
+                  </th>
+                  {/* Created At */}
+                  <th></th>
+                  {/* Actions */}
+                  <th></th>
+                </tr>
+              )}
             </thead>
             <tbody className="divide-y">
               {loading ? (
                 <tr><td colSpan={14} className="px-3 py-6 text-center text-slate-500">Loading…</td></tr>
               ) : pageRows.length ? pageRows.map(o => (
                 <tr key={o.id} className="*:px-3 *:py-2 hover:bg-slate-50 cursor-pointer" onClick={()=>{ setOpenOrder(o); loadOrderDetail(o.id); }}>
-                  <td>{o.id}</td>
                   <td>{o.order_date}</td>
                   <td>{o.order_id ?? '—'}</td>
                   <td>
-                    <span className={
-                      'px-2 py-0.5 rounded-full text-xs ring-1 ' +
-                      (o.status==='Delivered' ? 'bg-emerald-50 text-emerald-700 ring-emerald-200' :
-                       o.status==='Dispatched' ? 'bg-blue-50 text-blue-700 ring-blue-200' :
-                       o.status==='RTO' || o.status==='NDR' ? 'bg-amber-50 text-amber-700 ring-amber-200' :
-                       o.status==='Cancelled' ? 'bg-rose-50 text-rose-700 ring-rose-200' :
-                       'bg-slate-50 text-slate-700 ring-slate-200')
-                    }>{o.status}</span>
+                    {o.order_id != null ? (
+                      (() => { const c = dupCounts.get(String(o.order_id)) || 0; return c > 1 ? <span className="px-2 py-0.5 rounded-full text-xs bg-amber-50 text-amber-700 ring-1 ring-amber-200" title={`${c} records with this order`}>{c}</span> : <span className="text-slate-400">{c || '—'}</span>; })()
+                    ) : '—'}
+                  </td>
+                  <td>
+                    <div className="flex items-center gap-2">
+                      <span className={
+                        'px-2 py-0.5 rounded-full text-xs font-semibold ring-2 ' +
+                        (o.status==='Delivered' ? 'bg-emerald-600 text-white ring-emerald-600' :
+                         o.status==='Dispatched' ? 'bg-blue-600 text-white ring-blue-600' :
+                         (o.status==='RTO' || o.status==='NDR') ? 'bg-amber-600 text-white ring-amber-600' :
+                         o.status==='Cancelled' ? 'bg-rose-600 text-white ring-rose-600' :
+                         'bg-slate-600 text-white ring-slate-600')
+                      } title={`Status: ${o.status}`}>{o.status}</span>
+                      <select
+                        value={String(o.status || '')}
+                        onClick={(e)=>e.stopPropagation()}
+                        onChange={(e)=>{ e.stopPropagation(); updateRowStatus(o, e.target.value); }}
+                        className="px-1 py-0.5 text-xs ring-1 ring-slate-300 rounded bg-white hover:bg-slate-50"
+                        title="Change status"
+                      >
+                        {STATUS_OPTIONS.map(s => (
+                          <option key={s} value={s}>{s}</option>
+                        ))}
+                      </select>
+                    </div>
                   </td>
                   <td>{o.quantity}</td>
                   <td>{o.shipping_partner || '—'}</td>
@@ -482,7 +788,8 @@ export default function ManualOrdersDashboard() {
                   <td>{fmtDate(o.created_at)}</td>
                   <td>
                     <div className="flex items-center gap-2">
-                      <button className="px-2 py-1 rounded-full text-xs ring-1 ring-slate-200 hover:bg-slate-50" title="Open" onClick={(e)=>{ e.stopPropagation(); setOpenOrder(o); loadOrderDetail(o.id); }}>Open</button>
+                      <button className="px-2 py-1 rounded-full text-xs ring-1 ring-slate-300 hover:bg-slate-100" title="Open order" onClick={(e)=>{ e.stopPropagation(); setOpenOrder(o); loadOrderDetail(o.id); }}>Open</button>
+                      <button className="px-2 py-1 rounded-full text-xs bg-slate-900 text-white hover:bg-slate-800" title="Update status" onClick={(e)=>{ e.stopPropagation(); setOpenOrder(o); loadOrderDetail(o.id); }}>Update</button>
                     </div>
                   </td>
                 </tr>
