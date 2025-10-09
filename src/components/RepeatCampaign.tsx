@@ -430,8 +430,9 @@ export default function RepeatCampaign({ initialOrderNumber = '', hideFeedback =
 
       // Also store a normalized analytics record in call_feedback (Option B)
       try {
-        const supabaseUrl = 'https://app-supabase.9krcxo.easypanel.host/rest/v1/rpc/insert_call_feedback';
+        const sbBase = 'https://app-supabase.9krcxo.easypanel.host/rest/v1/rpc';
         const agentName = (typeof window !== 'undefined' ? (localStorage.getItem('ndr_user') || '') : '') || '';
+        const computedOrderType = customerData.total_orders <= 1 ? 'First Order' : `Repeat (${customerData.total_orders})`;
         const cf = {
           order_id: null,
           order_number: feedbackForm.orderId || orderId || null,
@@ -449,8 +450,14 @@ export default function RepeatCampaign({ initialOrderNumber = '', hideFeedback =
           age: feedbackForm.age,
           new_product_expectation: feedbackForm.generalFeedback || '',
           remark: feedbackForm.remark || null,
+          // Newly added analytics fields
+          marital_status: feedbackForm.maritalStatus || null,
+          profession_text: feedbackForm.profession || null,
+          city_text: feedbackForm.city || null,
+          order_type: computedOrderType,
         };
-        await fetch(supabaseUrl, {
+        // Try v2 first, then fallback to original
+        let rpcRes = await fetch(`${sbBase}/insert_call_feedback_v2`, {
           method: 'POST',
           headers: {
             'apikey': 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNzUwMDEyMjAwLCJleHAiOjE5MDc3Nzg2MDB9.eJ81pv114W4ZLvg0E-AbNtNZExPoLYbxGdeWTY5PVVs',
@@ -459,6 +466,17 @@ export default function RepeatCampaign({ initialOrderNumber = '', hideFeedback =
           },
           body: JSON.stringify({ p: cf }),
         });
+        if (!rpcRes.ok) {
+          await fetch(`${sbBase}/insert_call_feedback`, {
+            method: 'POST',
+            headers: {
+              'apikey': 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNzUwMDEyMjAwLCJleHAiOjE5MDc3Nzg2MDB9.eJ81pv114W4ZLvg0E-AbNtNZExPoLYbxGdeWTY5PVVs',
+              'Authorization': 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNzUwMDEyMjAwLCJleHAiOjE5MDc3Nzg2MDB9.eJ81pv114W4ZLvg0E-AbNtNZExPoLYbxGdeWTY5PVVs',
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ p: cf }),
+          });
+        }
       } catch (err) {
         // Non-blocking. The primary submission succeeded; analytics insert failed.
         console.error('insert_call_feedback failed', err);
