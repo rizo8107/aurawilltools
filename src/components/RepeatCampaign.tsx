@@ -53,6 +53,11 @@ interface FeedbackForm {
   orderId: string;
   newProductExpectation: string; // Expectations for new product benefits
   remark?: string; // Additional remark
+  // Newly requested
+  maritalStatus: string; // Single / Married / Other (text input as requested)
+  profession: string; // Profession or type of work
+  city: string; // City
+  orderType: string; // Auto-filled at submit based on order count
 }
 
 
@@ -106,6 +111,10 @@ export default function RepeatCampaign({ initialOrderNumber = '', hideFeedback =
     orderId: '',
     newProductExpectation: '',
     remark: '',
+    maritalStatus: '',
+    profession: '',
+    city: '',
+    orderType: '',
   });
   
   const orderInputRef = useRef<HTMLInputElement>(null);
@@ -375,6 +384,8 @@ export default function RepeatCampaign({ initialOrderNumber = '', hideFeedback =
     try {
       // Create a payload that includes both customer details and feedback data
       const agentHandle = typeof window !== 'undefined' ? (localStorage.getItem('ndr_user') || '').trim() : '';
+      // Derive Order Type based on total orders
+      const computedOrderType = customerData.total_orders <= 1 ? 'First Order' : `Repeat (${customerData.total_orders})`;
       const payload = {
         // Customer information
         customer_name: customerData.customer_name,
@@ -385,6 +396,11 @@ export default function RepeatCampaign({ initialOrderNumber = '', hideFeedback =
         last_order_date: customerData.last_order_date,
         duration_between_orders: customerData.duration_between_first_and_last_order,
         agent_name: agentHandle,
+        // Newly requested fields (snake_case + non-conflicting keys)
+        marital_status: feedbackForm.maritalStatus,
+        profession_text: feedbackForm.profession,
+        city_text: feedbackForm.city,
+        order_type: computedOrderType,
         // Order history summary
         orders: customerData.orders.map(order => ({
           order_number: order.order_number,
@@ -393,7 +409,8 @@ export default function RepeatCampaign({ initialOrderNumber = '', hideFeedback =
           products: order.products
         })),
         // Feedback form data
-        ...feedbackForm
+        ...feedbackForm,
+        orderType: computedOrderType,
       };
       
       const response = await fetch('https://auto-n8n.9krcxo.easypanel.host/webhook/8cfda1b9-ceab-4f0e-b631-162dcaa4e3cb', {
@@ -471,6 +488,10 @@ export default function RepeatCampaign({ initialOrderNumber = '', hideFeedback =
         orderId: feedbackForm.orderId,
         newProductExpectation: '',
         remark: '',
+        maritalStatus: '',
+        profession: '',
+        city: '',
+        orderType: '',
       });
       
       // Scroll to top to show success message
@@ -877,6 +898,72 @@ export default function RepeatCampaign({ initialOrderNumber = '', hideFeedback =
                         <option value="Female">Female</option>
                         <option value="Other">Other</option>
                       </select>
+                    </div>
+
+                    {/* Marital Status */}
+                    <div>
+                      <label className="block text-gray-700 text-sm font-medium mb-1">
+                        Marital status
+                      </label>
+                      <input
+                        type="text"
+                        name="maritalStatus"
+                        value={feedbackForm.maritalStatus}
+                        onChange={handleFeedbackChange}
+                        className="w-full p-2 border border-gray-300 rounded-lg"
+                        placeholder="Single / Married / Other"
+                        aria-label="Marital status"
+                        title="Marital status"
+                      />
+                    </div>
+
+                    {/* Profession / Work */}
+                    <div>
+                      <label className="block text-gray-700 text-sm font-medium mb-1">
+                        What is your profession or type of work?
+                      </label>
+                      <input
+                        type="text"
+                        name="profession"
+                        value={feedbackForm.profession}
+                        onChange={handleFeedbackChange}
+                        className="w-full p-2 border border-gray-300 rounded-lg"
+                        placeholder="Profession / Type of work"
+                        aria-label="Profession or type of work"
+                        title="Profession or type of work"
+                      />
+                    </div>
+
+                    {/* City */}
+                    <div>
+                      <label className="block text-gray-700 text-sm font-medium mb-1">
+                        City
+                      </label>
+                      <input
+                        type="text"
+                        name="city"
+                        value={feedbackForm.city}
+                        onChange={handleFeedbackChange}
+                        className="w-full p-2 border border-gray-300 rounded-lg"
+                        placeholder="City"
+                        aria-label="City"
+                        title="City"
+                      />
+                    </div>
+
+                    {/* Order Type (auto) */}
+                    <div>
+                      <label className="block text-gray-700 text-sm font-medium mb-1">
+                        Order type (auto)
+                      </label>
+                      <input
+                        type="text"
+                        value={(customerData?.total_orders ?? 0) <= 1 ? 'First Order' : `Repeat (${customerData?.total_orders ?? 0})`}
+                        readOnly
+                        className="w-full p-2 border border-gray-300 rounded-lg bg-gray-50"
+                        aria-label="Order type"
+                        title="Order type"
+                      />
                     </div>
 
                     {/* Monthly Subscription */}
