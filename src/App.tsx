@@ -14,11 +14,12 @@ import TeamsPage from './components/TeamsPage';
 import NdrLogin from './components/NdrLogin';
 import NdrAllocationPage from './components/NdrAllocationPage';
 import TeamAnalyticsPage from './components/TeamAnalyticsPage';
+import AgentAnalyticsPage from './components/AgentAnalyticsPage';
 import { Package, Printer, Truck, FileText, Users, LogOut, FileSpreadsheet, RefreshCw } from 'lucide-react';
 import ManualOrdersDashboard from './components/ManualOrdersDashboard';
 import SegmentationPage from './components/SegmentationPage';
 
-type TabType = 'order' | 'printslip' | 'tracking' | 'manifest' | 'campaign' | 'repeatorders' | 'repeat_dashboard' | 'orderhistory' | 'gstinvoice' | 'ndr' | 'teams' | 'allocation' | 'team_analytics' | 'segmentation' | 'manual_orders';
+type TabType = 'order' | 'printslip' | 'tracking' | 'manifest' | 'campaign' | 'repeatorders' | 'repeat_dashboard' | 'orderhistory' | 'gstinvoice' | 'ndr' | 'teams' | 'allocation' | 'team_analytics' | 'agent_analytics' | 'segmentation' | 'manual_orders';
 
 function App() {
   const [activeTab, setActiveTab] = useState<TabType>('order');
@@ -79,6 +80,7 @@ function App() {
     { id: 'teams', label: 'Teams', icon: <Users size={20} /> },
     { id: 'allocation', label: 'Allocation', icon: <Users size={20} /> },
     { id: 'team_analytics', label: 'Team Analytics', icon: <Users size={20} /> },
+    { id: 'agent_analytics', label: 'Agent Analytics', icon: <Users size={20} /> },
     { id: 'segmentation', label: 'Segmentation', icon: <FileText size={20} /> },
     { id: 'gstinvoice', label: 'GST Invoice', icon: <FileSpreadsheet size={20} /> },
     { id: 'manual_orders', label: 'Manual Orders', icon: <FileText size={20} /> },
@@ -99,6 +101,7 @@ function App() {
     teams: 'Create teams, add members, and set the active team for lead allocation',
     allocation: 'Define NDR allocation rules (percentage split, status filters) for the active team',
     team_analytics: 'Visualize team assignments, status split, and activity',
+    agent_analytics: 'Agent-centric analytics powered by NocoDB (calls, emails, missed)',
     segmentation: 'Group and export orders by State/City/Pincode/Area',
     manual_orders: 'Create manual orders, update status, and record agent notes with full audit trail',
   };
@@ -171,7 +174,7 @@ function App() {
             activeTab === 'order' ? 'max-w-6xl' : 
             activeTab === 'tracking' || activeTab === 'manifest' ? 'max-w-3xl' : 
             activeTab === 'campaign' ? 'max-w-5xl' : 
-            activeTab === 'team_analytics' ? 'max-w-[95vw]' : 
+            activeTab === 'team_analytics' || activeTab === 'agent_analytics' ? 'max-w-[95vw]' : 
             activeTab === 'ndr' || activeTab === 'repeat_dashboard' || activeTab === 'manual_orders' ? 'max-w-none' : 
             activeTab === 'gstinvoice' || activeTab === 'orderhistory' ? 'max-w-7xl' : 'max-w-4xl'
           } ${(activeTab === 'ndr' || activeTab === 'repeat_dashboard' || activeTab === 'manual_orders') ? '' : 'mx-auto'}`}>
@@ -216,6 +219,7 @@ function App() {
             {activeTab === 'teams' && <TeamsPage />}
             {activeTab === 'allocation' && <NdrAllocationPage />}
             {activeTab === 'team_analytics' && <TeamAnalyticsPage />}
+            {activeTab === 'agent_analytics' && <AgentAnalyticsPage />}
             {activeTab === 'segmentation' && <SegmentationPage />}
             {activeTab === 'manual_orders' && <ManualOrdersDashboard />}
           </div>
