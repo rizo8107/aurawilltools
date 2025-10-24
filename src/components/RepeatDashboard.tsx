@@ -38,6 +38,13 @@ interface NocoRepeatRow {
   usage_recipe?: string | null;
   usage_time?: string | null;
   monthly_subscriptions?: string | null;
+  // Additional fields for extended Customer Insights
+  age?: string | number | null;
+  gender?: string | null;
+  marital_status?: string | null;
+  profession_text?: string | null;
+  city?: string | null;
+  new_product_expectation?: string | null;
 }
 
 // Feedback row (call_feedback table). Keep keys optional to be resilient to schema diff.
@@ -185,6 +192,7 @@ export default function RepeatDashboard() {
   const nocoToken = useMemo(() => {
     try { return localStorage.getItem('nocodb_token') || 'CdD-fhN2ctMOe-rOGWY5g7ET5BisIDx5r32eJMn4'; } catch { return 'CdD-fhN2ctMOe-rOGWY5g7ET5BisIDx5r32eJMn4'; }
   }, []);
+
   // Agent filter for the filled leads table (client-side)
   const [fbAgentFilter, setFbAgentFilter] = useState<string>('');
   // Analytics: Filled leads table pagination
@@ -643,77 +651,351 @@ export default function RepeatDashboard() {
     });
   }, [ncRows, ncFrom, ncTo]);
 
+  // Early catalog helper (used by stable labeler below)
+  const getCatalogEarly = useCallback((key: keyof NocoRepeatRow): Array<{label: string; keys: string[]}> => {
+    return {
+      usage_recipe: [
+        { label: 'Milk-based / Health mix drink', keys: ['milk', 'with milk', 'milk &', 'health mix drink', 'hot milk', 'milk and water'] },
+        { label: 'Water-based', keys: ['water', 'with water', 'hot water', 'warm water'] },
+        { label: 'Other recipes', keys: ['ladoo','laddu','dosa','pancake','chapati','roti','kozhuk','kanji','porridge','cookie','recipe','jaggery','with jaggery','with sugar','with salt'] },
+        { label: 'Health mix drink', keys: ['health mix'] },
+      ],
+      liked_features: [
+        { label: 'Taste / Flavor', keys: ['taste','flavor','flavour','good taste','aroma','smell','fresh'] },
+        { label: 'Energy / Feel better', keys: ['energetic','energy','active','activeness','stamina','feel better','feeling better','no tired','no tiredness','freshness','morning'] },
+        { label: 'Health / Immunity', keys: ['health','immunity','improve','improvement','benefit','benefits','digestion','constipation','acidity','gas','diabetes','sugar','cholesterol','weight'] },
+        { label: 'No preservatives / Natural', keys: ['no preserv','no preservatives','no added sugar','natural','no chemicals','organic','natural ingredients'] },
+        { label: 'Convenience / Easy to prepare', keys: ['easy','convenient','ready to use','prepare','time saving','instant','quick','ready mix'] },
+        { label: 'Pain relief', keys: ['pain','relief'] },
+        { label: 'Quality / Packaging', keys: ['quality','packaging','overall','fresh','freshness','value for money','price','cost'] },
+        { label: 'Price / Value', keys: ['price','cost','value for money','affordable','worth','cheap','expensive'] },
+        { label: 'No specific feature', keys: ['no specific','nothing specific'] },
+      ],
+      first_time_reason: [
+        { label: 'Trust / Promotion / Brand', keys: ['trust','promotion','brand','aurawill','theneer','idaivalai','channel','insta','instagram','facebook','social media','offer','promo','influencer','reel','shorts','status','page'] },
+        { label: 'Try new / Curiosity', keys: ['try','something new','simply tried','trial','first time','just trying','sample'] },
+        { label: 'Ingredients (36) / Saw ingredients', keys: ['36 ingredient','36 ingredients','ingredients','saw ingred','36 items','36 herbs'] },
+        { label: 'Advertisement seen', keys: ['advert','ad','ads','advertisement','youtube','you tube','yt','seen in','sponsored','promo','reel','shorts'] },
+        { label: 'Health reasons', keys: ['health','wellness','condition','benefit','immunity','digestion','diabetes','cholesterol'] },
+        { label: 'No specific reason', keys: ['no specific'] },
+      ],
+      reorder_reason: [
+        { label: 'Health benefits / Improvement', keys: ['health','energetic','energy','improvement','benefit','benefits','improved'] },
+        { label: 'Good quality / Taste', keys: ['good','quality','taste','aroma','flavor','flavour','fresh'] },
+        { label: 'Replacement (tea/coffee) / Healthy alternative', keys: ['replace','tea','coffee','healthy alternative','instead of','breakfast','morning drink'] },
+        { label: 'Natural / No side effects', keys: ['natural','no side','side effect','no chemicals','organic'] },
+        { label: 'Ease of use / Liked by family', keys: ['family','children','kids','liked','wife','husband','parents'] },
+        { label: 'Recommended / Family ordered', keys: ['recommend','recommended','family ordered','suggested','doctor','friend','relative'] },
+        { label: 'Trust / Brand belief', keys: ['trust','brand'] },
+        { label: 'No specific reason', keys: ['no specific','just trying'] },
+      ],
+      monthly_subscriptions: [
+        { label: 'Yes (Interested)', keys: ['true','yes','interested','agree'] },
+        { label: 'Not now / Undecided', keys: ['not now','undecided','maybe','later'] },
+        { label: 'No (Not interested)', keys: ['no','not interested','decline'] },
+      ],
+    }[key as string] || [];
+  }, []);
+
+  // Stable labeling: build per-field label maps once per dataset
+  const ncLabelMapByKey = useMemo(() => {
+    const stop = new Set(['the','a','an','and','or','to','of','for','in','on','at','is','are','be','been','with','by','it','as','this','that','from','use','using','like','very','good','best','nice','also','because','but','so','i','we','he','she','they','you','my','our']);
+    const normalize = (s: string) => (s||'')
+      .toLowerCase()
+      .replace(/\b(you\s*tube)\b/g, 'youtube')
+      .replace(/[^a-z0-9\s]/g,' ')
+      .replace(/\s{2,}/g,' ')
+      .trim();
+    const tokenize = (s: string) => normalize(s).split(' ').filter(t=>t && t.length>=3 && !stop.has(t));
+
+    const buildForKey = (key: keyof NocoRepeatRow) => {
+      const raws = ncFiltered.map(r => String(r[key] ?? ''));
+      const labelMap = new Map<string,string>();
+      const cat = getCatalogEarly(key);
+      const catalogTerms = new Set(cat.flatMap(c=>c.keys));
+
+      // 1) Curated pass with simple scoring: count matched phrases/tokens
+      for (const raw of raws) {
+        const text = normalize(raw);
+        const toks = tokenize(raw);
+        let bestLabel = '';
+        let bestScore = 0;
+        for (const rule of cat) {
+          let score = 0;
+          for (const k of rule.keys) {
+            if (text.includes(k)) score += 2; // phrase/substring weight
+            if (toks.includes(k)) score += 1; // token weight
+          }
+          if (score > bestScore) { bestScore = score; bestLabel = rule.label; }
+        }
+        if (bestScore > 0) labelMap.set(raw, bestLabel);
+      }
+      // Remainder pool
+      const others = raws.filter(r => !labelMap.has(r));
+
+      // 2) Dynamic phrase (bi/tri-gram) and token frequencies
+      const phraseFreq = new Map<string, number>();
+      const tokenFreq = new Map<string, number>();
+      const ngrams = (toks: string[]) => {
+        const arr: string[] = [];
+        for (let i=0;i<toks.length;i++) {
+          if (i+1 < toks.length) arr.push(`${toks[i]} ${toks[i+1]}`);
+          if (i+2 < toks.length) arr.push(`${toks[i]} ${toks[i+1]} ${toks[i+2]}`);
+        }
+        return arr;
+      };
+      for (const raw of others) {
+        const toks = tokenize(raw).filter(t => !catalogTerms.has(t));
+        const tokSet = new Set(toks);
+        for (const t of tokSet) tokenFreq.set(t, (tokenFreq.get(t)||0)+1);
+        const phSet = new Set(ngrams(toks));
+        for (const p of phSet) phraseFreq.set(p, (phraseFreq.get(p)||0)+1);
+      }
+      // 3) Assign dynamic labels deterministically (prefer phrases)
+      for (const raw of others) {
+        const toks = tokenize(raw).filter(t => !catalogTerms.has(t));
+        const phs = ngrams(toks);
+        let best = ''; let bestCount = 0;
+        for (const p of phs) {
+          const c = phraseFreq.get(p)||0;
+          if (c > bestCount || (c===bestCount && p < best)) { best = p; bestCount = c; }
+        }
+        if (!best) {
+          for (const t of toks) {
+            const c = tokenFreq.get(t)||0;
+            if (c > bestCount || (c===bestCount && t < best)) { best = t; bestCount = c; }
+          }
+        }
+        const cap = (s: string) => s ? s.split(' ').map(w=>w? (w[0].toUpperCase()+w.slice(1)) : w).join(' ') : s;
+        const label = best ? cap(best) : (raw.trim().slice(0,30) || 'Misc');
+        labelMap.set(raw, label);
+      }
+      return labelMap;
+    };
+
+    return {
+      first_time_reason: buildForKey('first_time_reason'),
+      reorder_reason: buildForKey('reorder_reason'),
+      liked_features: buildForKey('liked_features'),
+      usage_recipe: buildForKey('usage_recipe'),
+      monthly_subscriptions: buildForKey('monthly_subscriptions'),
+    } as Record<keyof NocoRepeatRow, Map<string,string>>;
+  }, [ncFiltered, getCatalogEarly]);
+
+  const getStableLabel = useCallback((key: keyof NocoRepeatRow, raw: string): string => {
+    const map = (ncLabelMapByKey as any)[key] as Map<string,string> | undefined;
+    const lbl = map?.get(raw);
+    if (lbl && lbl.length) return lbl;
+    const snip = (raw || '').trim().slice(0, 30);
+    return snip || '(Empty)';
+  }, [ncLabelMapByKey]);
+
   // Canonical category mapping by keywords (case-insensitive includes)
   const categorize = useCallback((key: keyof NocoRepeatRow, raw: string): string => {
-    const s = raw.trim().toLowerCase();
-    if (!s || s === '-' || s === 'na' || s === 'n/a') return '(Empty)';
-    const has = (...xs: string[]) => xs.some(t => s.includes(t));
-    switch (key) {
-      case 'usage_recipe': {
-        if (has('milk', 'with milk')) return 'Milk-based / Health mix drink';
-        if (has('water', 'with water')) return 'Water-based';
-        if (has('ladoo','dosa','pancake','chapati','kozhuk','kanji','recipe')) return 'Other recipes';
-        if (has('health mix')) return 'Health mix drink';
-        return 'Other / Unspecified';
+    const sFull = (raw || '').trim().toLowerCase();
+    if (!sFull || sFull === '-' || sFull === 'na' || sFull === 'n/a') return '(Empty)';
+    // tokenize to catch partial matches in long sentences
+    const parts = sFull
+      .replace(/[,;|/]+/g, ' ')
+      .replace(/\s{2,}/g, ' ')
+      .split(' ');
+    const s = ` ${sFull} `; // pad for includes safety
+
+    // keyword catalogs per field
+    const catalogs: Record<string, Array<{label: string; keys: string[]}>> = {
+      usage_recipe: [
+        { label: 'Milk-based / Health mix drink', keys: ['milk', 'with milk', 'milk &', 'health mix drink', 'hot milk', 'milk and water'] },
+        { label: 'Water-based', keys: ['water', 'with water', 'hot water', 'warm water'] },
+        { label: 'Other recipes', keys: ['ladoo','laddu','dosa','pancake','chapati','roti','kozhuk','kanji','porridge','cookie','recipe','jaggery','with jaggery','with sugar','with salt'] },
+        { label: 'Health mix drink', keys: ['health mix'] },
+      ],
+      liked_features: [
+        { label: 'Taste / Flavor', keys: ['taste','flavor','flavour','good taste','aroma','smell','fresh'] },
+        { label: 'Energy / Feel better', keys: ['energetic','energy','active','activeness','stamina','feel better','feeling better','no tired','no tiredness','freshness','morning'] },
+        { label: 'Health / Immunity', keys: ['health','immunity','improve','improvement','benefit','benefits','digestion','constipation','acidity','gas','diabetes','sugar','cholesterol','weight'] },
+        { label: 'No preservatives / Natural', keys: ['no preserv','no preservatives','no added sugar','natural','no chemicals','organic','natural ingredients'] },
+        { label: 'Convenience / Easy to prepare', keys: ['easy','convenient','ready to use','prepare','time saving','instant','quick','ready mix'] },
+        { label: 'Pain relief', keys: ['pain','relief'] },
+        { label: 'Quality / Packaging', keys: ['quality','packaging','overall','fresh','freshness','value for money','price','cost'] },
+        { label: 'Price / Value', keys: ['price','cost','value for money','affordable','worth','cheap','expensive'] },
+        { label: 'No specific feature', keys: ['no specific','nothing specific'] },
+      ],
+      first_time_reason: [
+        { label: 'Trust / Promotion / Brand', keys: ['trust','promotion','brand','aurawill','theneer','idaivalai','channel','insta','instagram','facebook','social media','offer','promo','influencer','reel','shorts','status','page'] },
+        { label: 'Try new / Curiosity', keys: ['try','something new','simply tried','trial','first time','just trying','sample'] },
+        { label: 'Ingredients (36) / Saw ingredients', keys: ['36 ingredient','36 ingredients','ingredients','saw ingred','36 items','36 herbs'] },
+        { label: 'Advertisement seen', keys: ['advert','ad','ads','advertisement','youtube','you tube','yt','seen in','sponsored','promo','reel','shorts'] },
+        { label: 'Health reasons', keys: ['health','wellness','condition','benefit','immunity','digestion','diabetes','cholesterol'] },
+        { label: 'No specific reason', keys: ['no specific'] },
+      ],
+      reorder_reason: [
+        { label: 'Health benefits / Improvement', keys: ['health','energetic','energy','improvement','benefit','benefits','improved'] },
+        { label: 'Good quality / Taste', keys: ['good','quality','taste','aroma','flavor','flavour','fresh'] },
+        { label: 'Replacement (tea/coffee) / Healthy alternative', keys: ['replace','tea','coffee','healthy alternative','instead of','breakfast','morning drink'] },
+        { label: 'Natural / No side effects', keys: ['natural','no side','side effect','no chemicals','organic'] },
+        { label: 'Ease of use / Liked by family', keys: ['family','children','kids','liked','wife','husband','parents'] },
+        { label: 'Recommended / Family ordered', keys: ['recommend','recommended','family ordered','suggested','doctor','friend','relative'] },
+        { label: 'Trust / Brand belief', keys: ['trust','brand'] },
+        { label: 'No specific reason', keys: ['no specific','just trying'] },
+      ],
+      monthly_subscriptions: [
+        { label: 'Yes (Interested)', keys: ['true','yes','interested','agree'] },
+        { label: 'Not now / Undecided', keys: ['not now','undecided','maybe','later'] },
+        { label: 'No (Not interested)', keys: ['no','not interested','decline'] },
+      ],
+    };
+
+    const cat = catalogs[key as string];
+    if (cat && cat.length) {
+      for (const c of cat) {
+        if (c.keys.some(k => s.includes(k))) return c.label;
+        // attempt token-level match
+        if (c.keys.some(k => parts.includes(k))) return c.label;
       }
-      case 'liked_features': {
-        if (has('taste','flavor','good taste')) return 'Taste / Flavor';
-        if (has('energetic','energy','active','stamina','feel better','feeling better','no tired')) return 'Energy / Feel better';
-        if (has('health','immunity','improve','benefit')) return 'Health / Immunity';
-        if (has('no preserv','no added sugar','natural')) return 'No preservatives / Natural';
-        if (has('easy','convenient','ready to use','prepare')) return 'Convenience / Easy to prepare';
-        if (has('pain','relief')) return 'Pain relief';
-        if (has('quality','packaging','overall')) return 'Quality / Packaging';
-        if (has('no specific','just','simply')) return 'No specific feature';
-        return 'Others';
-      }
-      case 'first_time_reason': {
-        if (has('trust','promotion','channel','aurawill','brand')) return 'Trust / Promotion / Brand';
-        if (has('try','something new','simply tried')) return 'Try new / Curiosity';
-        if (has('36 ingredient','ingredients','saw ingred')) return 'Ingredients (36) / Saw ingredients';
-        if (has('advert','youtube','seen in')) return 'Advertisement seen';
-        if (has('health','wellness','condition','benefit')) return 'Health reasons';
-        if (has('no specific')) return 'No specific reason';
-        return 'Others';
-      }
-      case 'reorder_reason': {
-        if (has('health','energetic','improvement','benefit')) return 'Health benefits / Improvement';
-        if (has('good','quality','taste')) return 'Good quality / Taste';
-        if (has('replace','tea','coffee','healthy alternative')) return 'Replacement (tea/coffee) / Healthy alternative';
-        if (has('natural','no side','unique')) return 'Natural / No side effects';
-        if (has('family','children','liked')) return 'Ease of use / Liked by family';
-        if (has('recommend','family ordered')) return 'Recommended / Family ordered';
-        if (has('trust','brand')) return 'Trust / Brand belief';
-        if (has('no specific','just trying')) return 'No specific reason';
-        return 'Others';
-      }
-      case 'monthly_subscriptions': {
-        if (has('true','yes','interested','agree')) return 'Yes (Interested)';
-        if (has('not now','undecided','maybe','later')) return 'Not now / Undecided';
-        if (has('no','not interested','decline')) return 'No (Not interested)';
-        return raw; // already categorical usually
-      }
-      default:
-        return raw || '(Empty)';
+      return 'Others';
     }
+    return raw || '(Empty)';
   }, []);
+
+  // Provide access to catalogs for summarization (after ncFiltered/categorize exist)
+  const getCatalog = useCallback((key: keyof NocoRepeatRow): Array<{label: string; keys: string[]}> => {
+    return {
+      usage_recipe: [
+        { label: 'Milk-based / Health mix drink', keys: ['milk', 'with milk', 'milk &', 'health mix drink'] },
+        { label: 'Water-based', keys: ['water', 'with water'] },
+        { label: 'Other recipes', keys: ['ladoo','dosa','pancake','chapati','kozhuk','kanji','recipe'] },
+        { label: 'Health mix drink', keys: ['health mix'] },
+      ],
+      liked_features: [
+        { label: 'Taste / Flavor', keys: ['taste','flavor','good taste'] },
+        { label: 'Energy / Feel better', keys: ['energetic','energy','active','stamina','feel better','feeling better','no tired','no tiredness'] },
+        { label: 'Health / Immunity', keys: ['health','immunity','improve','benefit','digestion'] },
+        { label: 'No preservatives / Natural', keys: ['no preserv','no added sugar','natural'] },
+        { label: 'Convenience / Easy to prepare', keys: ['easy','convenient','ready to use','prepare'] },
+        { label: 'Pain relief', keys: ['pain','relief'] },
+        { label: 'Quality / Packaging', keys: ['quality','packaging','overall'] },
+        { label: 'No specific feature', keys: ['no specific','nothing specific'] },
+      ],
+      first_time_reason: [
+        { label: 'Trust / Promotion / Brand', keys: ['trust','promotion','brand','aurawill','theneer','idaivalai','channel','insta','instagram','facebook','yt','youtube'] },
+        { label: 'Try new / Curiosity', keys: ['try','something new','simply tried','trial'] },
+        { label: 'Ingredients (36) / Saw ingredients', keys: ['36 ingredient','36 ingredients','ingredients','saw ingred'] },
+        { label: 'Advertisement seen', keys: ['advert','ad','youtube','you tube','yt','seen in'] },
+        { label: 'Health reasons', keys: ['health','wellness','condition','benefit'] },
+        { label: 'No specific reason', keys: ['no specific'] },
+      ],
+      reorder_reason: [
+        { label: 'Health benefits / Improvement', keys: ['health','energetic','improvement','benefit'] },
+        { label: 'Good quality / Taste', keys: ['good','quality','taste'] },
+        { label: 'Replacement (tea/coffee) / Healthy alternative', keys: ['replace','tea','coffee','healthy alternative'] },
+        { label: 'Natural / No side effects', keys: ['natural','no side','side effect'] },
+        { label: 'Ease of use / Liked by family', keys: ['family','children','liked'] },
+        { label: 'Recommended / Family ordered', keys: ['recommend','family ordered','suggested'] },
+        { label: 'Trust / Brand belief', keys: ['trust','brand'] },
+        { label: 'No specific reason', keys: ['no specific','just trying'] },
+      ],
+      monthly_subscriptions: [
+        { label: 'Yes (Interested)', keys: ['true','yes','interested','agree'] },
+        { label: 'Not now / Undecided', keys: ['not now','undecided','maybe','later'] },
+        { label: 'No (Not interested)', keys: ['no','not interested','decline'] },
+      ],
+    }[key as string] || [];
+  }, []);
+
+  // Compute top keyword hints for a given category label
+  const summarizeCategory = useCallback((key: keyof NocoRepeatRow, label: string): string[] => {
+    const cat = getCatalogEarly(key);
+    const keysPool = label === 'Others'
+      ? Array.from(new Set(cat.flatMap(c => c.keys)))
+      : (cat.find(c => c.label === label)?.keys || []);
+    if (!keysPool.length) return [];
+    const freq: Record<string, number> = {};
+    for (const r of ncFiltered) {
+      if (categorize(key, String(r[key] ?? '')) !== label) continue;
+      const s = ` ${(String(r[key] ?? '').toLowerCase())} `;
+      for (const k of keysPool) {
+        if (s.includes(k)) freq[k] = (freq[k] || 0) + 1;
+      }
+    }
+    return Object.entries(freq)
+      .sort((a,b)=>b[1]-a[1])
+      .slice(0,3)
+      .map(([k])=>k);
+  }, [ncFiltered, categorize, getCatalogEarly]);
 
   // Generic aggregator for count and percentage
   const makeCountTable = useCallback((key: keyof NocoRepeatRow) => {
-    const map = new Map<string, number>();
+    const counts = new Map<string, number>();
     for (const r of ncFiltered) {
       const raw = String(r[key] ?? '');
-      const val = categorize(key, raw);
-      map.set(val, (map.get(val) || 0) + 1);
+      const label = getStableLabel(key, raw);
+      counts.set(label, (counts.get(label) || 0) + 1);
     }
     const total = ncFiltered.length || 1;
-    const rows = Array.from(map.entries()).sort((a,b)=>b[1]-a[1]).map(([name,count])=>({ name, count, pct: Math.round((count/total)*1000)/10 }));
+    const rows = Array.from(counts.entries())
+      .sort((a,b)=>b[1]-a[1])
+      .map(([name,count])=>({ name, count, pct: Math.round((count/total)*1000)/10 }));
     return { total: ncFiltered.length, rows };
-  }, [ncFiltered, categorize]);
+  }, [ncFiltered, getStableLabel]);
 
   // Open drilldown for a given category
   const openNcDrill = useCallback((key: keyof NocoRepeatRow, label: string) => {
-    const rows = ncFiltered.filter(r => categorize(key, String(r[key] ?? '')) === label);
+    let rows: NocoRepeatRow[];
+    if (key === 'age') {
+      const bucket = (raw: string | number | null | undefined) => {
+        const n = Number(String(raw || '').replace(/[^0-9]/g, ''));
+        if (!Number.isFinite(n) || n <= 0) return '(Empty)';
+        if (n < 20) return '<20';
+        if (n < 25) return '20-25';
+        if (n < 30) return '25-30';
+        if (n < 35) return '30-35';
+        if (n < 40) return '35-40';
+        if (n < 45) return '40-45';
+        if (n < 50) return '45-50';
+        if (n < 60) return '50-60';
+        return '60+';
+      };
+      rows = ncFiltered.filter(r => bucket((r as any).age) === label);
+    } else if (key === 'gender') {
+      const norm = (v: string | null | undefined) => {
+        const s = String(v || '').trim().toLowerCase();
+        if (!s) return '(Empty)';
+        if (['m','male','man','boy','gent'].includes(s)) return 'Male';
+        if (['f','female','woman','girl','lady'].includes(s)) return 'Female';
+        return s.charAt(0).toUpperCase()+s.slice(1);
+      };
+      rows = ncFiltered.filter(r => norm((r as any).gender) === label);
+    } else if (key === 'marital_status') {
+      const norm = (v: string | null | undefined) => {
+        const s = String(v || '').trim().toLowerCase();
+        if (!s) return '(Empty)';
+        if (s.includes('married')) return 'Married';
+        if (s.includes('single') || s.includes('unmarried') || s.includes('not married')) return 'Unmarried';
+        return s.charAt(0).toUpperCase()+s.slice(1);
+      };
+      rows = ncFiltered.filter(r => norm((r as any).marital_status) === label);
+    } else if (key === 'profession_text') {
+      const norm = (v: string | null | undefined) => {
+        const s = String(v || '').trim();
+        return s ? s.replace(/\s{2,}/g,' ') : '(Empty)';
+      };
+      rows = ncFiltered.filter(r => norm((r as any).profession_text) === label);
+    } else if (key === 'city') {
+      const norm = (v: string | null | undefined) => {
+        const s = String(v || '').trim().toLowerCase();
+        if (!s) return '(Empty)';
+        return s.split(' ').map(w=>w? (w[0].toUpperCase()+w.slice(1)) : w).join(' ');
+      };
+      rows = ncFiltered.filter(r => norm((r as any).city) === label);
+    } else if (key === 'new_product_expectation') {
+      const norm = (v: string | null | undefined) => {
+        const s = String(v || '').trim();
+        return s ? s.replace(/\s{2,}/g,' ') : '(Empty)';
+      };
+      rows = ncFiltered.filter(r => norm((r as any).new_product_expectation) === label);
+    } else {
+      rows = ncFiltered.filter(r => getStableLabel(key, String((r as any)[key] ?? '')) === label);
+    }
     setNcDrillRows(rows);
     const title =
       key === 'first_time_reason' ? `First Time Purchase Reason — ${label}` :
@@ -725,7 +1007,7 @@ export default function RepeatDashboard() {
     setNcDrillTitle(title);
     setNcDrillPage(1);
     setNcDrillOpen(true);
-  }, [ncFiltered, categorize]);
+  }, [ncFiltered, categorize, getCatalog]);
 
   // Feedback metrics and simple chart data
   const fbStats = useMemo(() => {
@@ -910,16 +1192,15 @@ export default function RepeatDashboard() {
                   <div className="flex items-center gap-2">
                     <button className="px-2 py-1 rounded border" disabled={safePage<=1} onClick={()=>setNcDrillPage(p=>Math.max(1,p-1))}>Prev</button>
                     <button className="px-2 py-1 rounded border" disabled={safePage>=pageCount} onClick={()=>setNcDrillPage(p=>Math.min(pageCount,p+1))}>Next</button>
-                    <select className="border rounded px-2 py-1" value={ncDrillPageSize} onChange={(e)=>{ setNcDrillPageSize(Number(e.target.value)); setNcDrillPage(1); }}>
+                    <select title="Rows per page" className="border rounded px-2 py-1" value={ncDrillPageSize} onChange={(e)=>{ setNcDrillPageSize(Number(e.target.value)); setNcDrillPage(1); }}>
                       {[10,20,50,100].map(n=> <option key={n} value={n}>{n}/page</option>)}
                     </select>
                   </div>
                 </div>
                 <div className="overflow-auto border rounded-lg">
-                  <table className="min-w-[720px] w-full text-sm">
+                  <table className="min-w-[1600px] w-full text-sm">
                     <thead className="bg-gray-50 text-gray-700">
                       <tr>
-                        <th className="text-left px-3 py-2">Id</th>
                         <th className="text-left px-3 py-2">Date</th>
                         <th className="text-left px-3 py-2">Agent</th>
                         <th className="text-left px-3 py-2">Order</th>
@@ -930,24 +1211,37 @@ export default function RepeatDashboard() {
                         <th className="text-left px-3 py-2">Reorder</th>
                         <th className="text-left px-3 py-2">Liked</th>
                         <th className="text-left px-3 py-2">Usage</th>
-                        <th className="text-left px-3 py-2">Subscr.</th>
+                        <th className="text-left px-3 py-2">Usage Time</th>
+                        <th className="text-left px-3 py-2">Subscription</th>
+                        <th className="text-left px-3 py-2">Age</th>
+                        <th className="text-left px-3 py-2">Gender</th>
+                        <th className="text-left px-3 py-2">Marital</th>
+                        <th className="text-left px-3 py-2">Profession</th>
+                        <th className="text-left px-3 py-2">City</th>
+                        <th className="text-left px-3 py-2">New Product Expectation</th>
                       </tr>
                     </thead>
                     <tbody>
                       {slice.map((r, i) => (
                         <tr key={r.Id ?? i} className="border-t">
-                          <td className="px-3 py-2">{String(r.Id ?? '')}</td>
-                          <td className="px-3 py-2 whitespace-nowrap">{r.Date || ''}</td>
-                          <td className="px-3 py-2">{r.agent || ''}</td>
-                          <td className="px-3 py-2">{String(r.order_number ?? '')}</td>
-                          <td className="px-3 py-2">{r.customer_phone || ''}</td>
-                          <td className="px-3 py-2">{r.call_status || ''}</td>
-                          <td className="px-3 py-2 truncate max-w-[240px]" title={r.heard_from || ''}>{r.heard_from || ''}</td>
-                          <td className="px-3 py-2 truncate max-w-[200px]" title={r.first_time_reason || ''}>{r.first_time_reason || ''}</td>
-                          <td className="px-3 py-2 truncate max-w-[200px]" title={r.reorder_reason || ''}>{r.reorder_reason || ''}</td>
-                          <td className="px-3 py-2 truncate max-w-[200px]" title={r.liked_features || ''}>{r.liked_features || ''}</td>
-                          <td className="px-3 py-2 truncate max-w-[160px]" title={r.usage_recipe || ''}>{r.usage_recipe || ''}</td>
-                          <td className="px-3 py-2">{r.monthly_subscriptions || ''}</td>
+                          <td className="px-3 py-2 whitespace-nowrap" title={r.Date || ''}>{r.Date || ''}</td>
+                          <td className="px-3 py-2" title={r.agent || ''}>{r.agent || ''}</td>
+                          <td className="px-3 py-2" title={String(r.order_number ?? '')}>{String(r.order_number ?? '')}</td>
+                          <td className="px-3 py-2" title={r.customer_phone || ''}>{r.customer_phone || ''}</td>
+                          <td className="px-3 py-2" title={r.call_status || ''}>{r.call_status || ''}</td>
+                          <td className="px-3 py-2 truncate max-w-[260px]" title={r.heard_from || ''}>{r.heard_from || ''}</td>
+                          <td className="px-3 py-2 truncate max-w-[240px]" title={r.first_time_reason || ''}>{r.first_time_reason || ''}</td>
+                          <td className="px-3 py-2 truncate max-w-[240px]" title={r.reorder_reason || ''}>{r.reorder_reason || ''}</td>
+                          <td className="px-3 py-2 truncate max-w-[240px]" title={r.liked_features || ''}>{r.liked_features || ''}</td>
+                          <td className="px-3 py-2 truncate max-w-[200px]" title={r.usage_recipe || ''}>{r.usage_recipe || ''}</td>
+                          <td className="px-3 py-2" title={r.usage_time || ''}>{r.usage_time || ''}</td>
+                          <td className="px-3 py-2" title={r.monthly_subscriptions || ''}>{r.monthly_subscriptions || ''}</td>
+                          <td className="px-3 py-2" title={String((r as any).age ?? '')}>{String((r as any).age ?? '')}</td>
+                          <td className="px-3 py-2" title={String((r as any).gender ?? '')}>{String((r as any).gender ?? '')}</td>
+                          <td className="px-3 py-2" title={String((r as any).marital_status ?? '')}>{String((r as any).marital_status ?? '')}</td>
+                          <td className="px-3 py-2 truncate max-w-[220px]" title={String((r as any).profession_text ?? '')}>{String((r as any).profession_text ?? '')}</td>
+                          <td className="px-3 py-2" title={String((r as any).city ?? '')}>{String((r as any).city ?? '')}</td>
+                          <td className="px-3 py-2 truncate max-w-[260px]" title={String((r as any).new_product_expectation ?? '')}>{String((r as any).new_product_expectation ?? '')}</td>
                         </tr>
                       ))}
                       {slice.length === 0 && (
@@ -1260,7 +1554,7 @@ export default function RepeatDashboard() {
                 </div>
                 <div>
                   <label className="block text-[11px] text-gray-600 mb-1">Quick</label>
-                  <select value="" onChange={(e)=>{ applyNcQuick(e.target.value); e.currentTarget.selectedIndex=0; }} className="border rounded px-2 py-1">
+                  <select title="Quick range" value="" onChange={(e)=>{ applyNcQuick(e.target.value); e.currentTarget.selectedIndex=0; }} className="border rounded px-2 py-1">
                     <option value="" disabled>Select…</option>
                     <option value="today">Today</option>
                     <option value="yesterday">Yesterday</option>
@@ -1282,7 +1576,7 @@ export default function RepeatDashboard() {
               const lf = makeCountTable('liked_features');
               const ur = makeCountTable('usage_recipe');
               const ms = makeCountTable('monthly_subscriptions');
-              const renderTable = (title: string, data: ReturnType<typeof makeCountTable>, key: keyof NocoRepeatRow) => (
+              const renderTable = (title: string, data: { total: number; rows: Array<{ name: string; count: number; pct: number }>; }, key: keyof NocoRepeatRow) => (
                 <div className="bg-white rounded-lg border shadow-sm">
                   <div className="px-3 py-2 border-b flex items-center justify-between">
                     <div className="text-sm font-medium">{title}</div>
@@ -1305,7 +1599,17 @@ export default function RepeatDashboard() {
                             onClick={() => openNcDrill(key, r.name)}
                             title="Click to view matching rows"
                           >
-                            <td className="px-3 py-2 truncate max-w-[520px]" title={r.name}>{r.name}</td>
+                            <td className="px-3 py-2 max-w-[520px]">
+                              <div className="truncate" title={r.name}>{r.name}</div>
+                              {(() => {
+                                const hints = summarizeCategory(key, r.name);
+                                return hints.length ? (
+                                  <div className="mt-0.5 flex flex-wrap gap-1 text-[11px] text-gray-600">
+                                    {hints.map(h => <span key={h} className="px-1.5 py-0.5 bg-slate-100 rounded">{h}</span>)}
+                                  </div>
+                                ) : null;
+                              })()}
+                            </td>
                             <td className="px-3 py-2">{r.count}</td>
                             <td className="px-3 py-2">{r.pct}%</td>
                           </tr>
@@ -1319,14 +1623,82 @@ export default function RepeatDashboard() {
                 </div>
               );
 
+              // Extra demographics/profile tables
+              const makeAgeTableLocal = () => {
+                const buckets = ['<20','20-25','25-30','30-35','35-40','40-45','45-50','50-60','60+'];
+                const counts = new Map<string, number>();
+                for (const b of buckets) counts.set(b, 0);
+                for (const r of ncFiltered) {
+                  const num = Number(String((r as any).age ?? '').replace(/[^0-9]/g, ''));
+                  let b = '(Empty)';
+                  if (Number.isFinite(num) && num > 0) {
+                    if (num < 20) b = '<20';
+                    else if (num < 25) b = '20-25';
+                    else if (num < 30) b = '25-30';
+                    else if (num < 35) b = '30-35';
+                    else if (num < 40) b = '35-40';
+                    else if (num < 45) b = '40-45';
+                    else if (num < 50) b = '45-50';
+                    else if (num < 60) b = '50-60';
+                    else b = '60+';
+                  }
+                  counts.set(b, (counts.get(b) || 0) + 1);
+                }
+                const total = ncFiltered.length || 1;
+                const rows = Array.from(counts.entries()).filter(([,c])=>c>0).sort((a,b)=>b[1]-a[1]).map(([name,count])=>({ name, count, pct: Math.round((count/total)*1000)/10 }));
+                return { total: ncFiltered.length, rows };
+              };
+              const makeSimpleLocal = (getter: (r: any)=>string) => {
+                const counts = new Map<string, number>();
+                for (const r of ncFiltered) {
+                  const k = getter(r) || '(Empty)';
+                  counts.set(k, (counts.get(k) || 0) + 1);
+                }
+                const total = ncFiltered.length || 1;
+                const rows = Array.from(counts.entries()).sort((a,b)=>b[1]-a[1]).map(([name,count])=>({ name, count, pct: Math.round((count/total)*1000)/10 }));
+                return { total: ncFiltered.length, rows };
+              };
+              const cap = (s: string) => s.split(' ').filter(Boolean).map(w=>w[0].toUpperCase()+w.slice(1)).join(' ');
+              const genderT = makeSimpleLocal(r => {
+                const s = String((r as any).gender || '').trim().toLowerCase();
+                if (!s) return '(Empty)';
+                if (['m','male','man','boy','gent'].includes(s)) return 'Male';
+                if (['f','female','woman','girl','lady'].includes(s)) return 'Female';
+                return cap(s);
+              });
+              const maritalT = makeSimpleLocal(r => {
+                const s = String((r as any).marital_status || '').trim().toLowerCase();
+                if (!s) return '(Empty)';
+                if (s.includes('married')) return 'Married';
+                if (s.includes('single') || s.includes('unmarried') || s.includes('not married')) return 'Unmarried';
+                return cap(s);
+              });
+              const professionT = makeSimpleLocal(r => String((r as any).profession_text || '').trim().replace(/\s{2,}/g,' ') || '(Empty)');
+              const cityT = makeSimpleLocal(r => {
+                const s = String((r as any).city || '').trim().toLowerCase();
+                if (!s) return '(Empty)';
+                return cap(s);
+              });
+              const npeT = makeSimpleLocal(r => String((r as any).new_product_expectation || '').trim().replace(/\s{2,}/g,' ') || '(Empty)');
+
               return (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  {renderTable('First Time Purchase Reason', ft, 'first_time_reason')}
-                  {renderTable('Reorder Reason', rr, 'reorder_reason')}
-                  {renderTable('Liked Feature', lf, 'liked_features')}
-                  {renderTable('Usage / Recipe', ur, 'usage_recipe')}
-                  {renderTable('Subscription Status', ms, 'monthly_subscriptions')}
-                </div>
+                <>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {renderTable('First Time Purchase Reason', ft, 'first_time_reason')}
+                    {renderTable('Reorder Reason', rr, 'reorder_reason')}
+                    {renderTable('Liked Feature', lf, 'liked_features')}
+                    {renderTable('Usage / Recipe', ur, 'usage_recipe')}
+                    {renderTable('Subscription Status', ms, 'monthly_subscriptions')}
+                  </div>
+                  <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {renderTable('Age Group', makeAgeTableLocal(), 'age')}
+                    {renderTable('Gender', genderT, 'gender')}
+                    {renderTable('Marital Status', maritalT, 'marital_status')}
+                    {renderTable('Profession', professionT, 'profession_text')}
+                    {renderTable('City', cityT, 'city')}
+                    {renderTable('New Product Expectation', npeT, 'new_product_expectation')}
+                  </div>
+                </>
               );
             })()}
           </div>
@@ -1480,7 +1852,7 @@ export default function RepeatDashboard() {
                       Showing <strong>{total ? start + 1 : 0}-{Math.min(start + fbListPageSize, total)}</strong> of <strong>{total}</strong>
                     </div>
                     <div className="flex items-center gap-2">
-                      <select className="border rounded px-2 py-1 text-sm" value={fbListPageSize} onChange={(e)=>{ setFbListPageSize(Number(e.target.value)); setFbListPage(1); }}>
+                      <select title="Rows per page" className="border rounded px-2 py-1 text-sm" value={fbListPageSize} onChange={(e)=>{ setFbListPageSize(Number(e.target.value)); setFbListPage(1); }}>
                         {[25,50,100,200].map(n=> <option key={n} value={n}>{n} / page</option>)}
                       </select>
                       <div className="flex items-center gap-1">
