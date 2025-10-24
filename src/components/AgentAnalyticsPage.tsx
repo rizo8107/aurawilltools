@@ -40,6 +40,11 @@ export default function AgentAnalyticsPage() {
   // pivot pagination (rows = days)
   const [pivotPage, setPivotPage] = useState<number>(1);
   const [pivotPageSize, setPivotPageSize] = useState<number>(15);
+  // toggles to show/hide individual pivot tables (default hidden)
+  const [showStatusTable, setShowStatusTable] = useState<boolean>(false);
+  const [showAgentTable, setShowAgentTable] = useState<boolean>(false);
+  const [showReasonTable, setShowReasonTable] = useState<boolean>(false);
+  const [showFinalTable, setShowFinalTable] = useState<boolean>(false);
 
   // Pivot column controls (per section)
   const [pivotFilterStatus, setPivotFilterStatus] = useState('');
@@ -529,7 +534,7 @@ export default function AgentAnalyticsPage() {
               p4 = buildPivot(['Final status','Final Status','final_status']);
             }
 
-            const renderPivot = (title: string, p: ReturnType<typeof buildPivot>, kind: 'status'|'agent'|'reason') => {
+            const renderPivot = (title: string, p: ReturnType<typeof buildPivot>, kind: 'status'|'agent'|'reason'|'final') => {
               // derive displayed columns with filter/sort controls
               const q = (kind==='status'?pivotFilterStatus:kind==='agent'?pivotFilterAgent:pivotFilterReason).toLowerCase();
               const sortKey = (kind==='status'?pivotSortStatus:kind==='agent'?pivotSortAgent:pivotSortReason);
@@ -537,6 +542,13 @@ export default function AgentAnalyticsPage() {
               const sel = (kind==='status'?pivotColsStatus:kind==='agent'?pivotColsAgent:pivotColsReason);
               const setSel = (v: string[] | null) => {
                 if (kind==='status') setPivotColsStatus(v); else if (kind==='agent') setPivotColsAgent(v); else setPivotColsReason(v);
+              };
+              const shown = (kind==='status'?showStatusTable:kind==='agent'?showAgentTable:kind==='reason'?showReasonTable:showFinalTable);
+              const toggleShown = () => {
+                if (kind==='status') setShowStatusTable(v=>!v);
+                else if (kind==='agent') setShowAgentTable(v=>!v);
+                else if (kind==='reason') setShowReasonTable(v=>!v);
+                else setShowFinalTable(v=>!v);
               };
               const baseCols = p.cols.map((name, idx) => ({ name, total: p.grandTotals[idx], idx }));
               let colsView = baseCols;
@@ -641,7 +653,10 @@ export default function AgentAnalyticsPage() {
                       </button>
                     ))}
                   </div>
-                  {(() => {
+                  <div className="flex items-center justify-end mb-2 text-xs">
+                    <button onClick={toggleShown} className="px-2 py-1 rounded border hover:bg-slate-50">{shown?'Hide Table':'Show Table'}</button>
+                  </div>
+                  {shown && (() => {
                     const totalPages = Math.max(1, Math.ceil(p.matrix.length / pivotPageSize));
                     const start = (pivotPage - 1) * pivotPageSize;
                     const slice = p.matrix.slice(start, start + pivotPageSize);
