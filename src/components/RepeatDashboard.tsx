@@ -23,6 +23,23 @@ interface RepeatRow {
   team_id: number | null;
 }
 
+// NocoDB feedback structure for repeat campaign analytics (from provided API)
+interface NocoRepeatRow {
+  Id?: number;
+  Date?: string; // yyyy-mm-dd
+  order_number?: string | null;
+  customer_phone?: string | null;
+  agent?: string | null;
+  call_status?: string | null;
+  heard_from?: string | null;
+  first_time_reason?: string | null;
+  reorder_reason?: string | null;
+  liked_features?: string | null;
+  usage_recipe?: string | null;
+  usage_time?: string | null;
+  monthly_subscriptions?: string | null;
+}
+
 // Feedback row (call_feedback table). Keep keys optional to be resilient to schema diff.
 interface FeedbackRow {
   id?: string;
@@ -158,8 +175,27 @@ export default function RepeatDashboard() {
   const [fbAgent, setFbAgent] = useState<string>('all'); // 'me' | 'all'
   const [fbFrom, setFbFrom] = useState<string>('');
   const [fbTo, setFbTo] = useState<string>('');
+  // NocoDB analytics state (kept separate; admin-only view)
+  const [ncRows, setNcRows] = useState<NocoRepeatRow[]>([]);
+  const [ncFrom, setNcFrom] = useState<string>('');
+  const [ncTo, setNcTo] = useState<string>('');
+  const [ncLoading, setNcLoading] = useState<boolean>(false);
+  const [ncError, setNcError] = useState<string>('');
+  // Noco token (local override or provided default)
+  const nocoToken = useMemo(() => {
+    try { return localStorage.getItem('nocodb_token') || 'CdD-fhN2ctMOe-rOGWY5g7ET5BisIDx5r32eJMn4'; } catch { return 'CdD-fhN2ctMOe-rOGWY5g7ET5BisIDx5r32eJMn4'; }
+  }, []);
   // Agent filter for the filled leads table (client-side)
   const [fbAgentFilter, setFbAgentFilter] = useState<string>('');
+  // Analytics: Filled leads table pagination
+  const [fbListPage, setFbListPage] = useState<number>(1);
+  const [fbListPageSize, setFbListPageSize] = useState<number>(50);
+  // NocoDB Insights drilldown
+  const [ncDrillOpen, setNcDrillOpen] = useState<boolean>(false);
+  const [ncDrillTitle, setNcDrillTitle] = useState<string>('');
+  const [ncDrillRows, setNcDrillRows] = useState<NocoRepeatRow[]>([]);
+  const [ncDrillPage, setNcDrillPage] = useState<number>(1);
+  const [ncDrillPageSize, setNcDrillPageSize] = useState<number>(20);
   // Agent-wise aggregation of feedback (current loaded scope/date)
   const fbByAgent = useMemo(() => {
     const counts: Record<string, number> = {};
@@ -544,6 +580,153 @@ export default function RepeatDashboard() {
     if (view === 'analytics') loadFeedback();
   }, [view, loadFeedback]);
 
+  // Quick date helpers for NocoDB section
+  const ncFmt = (d: Date) => d.toISOString().slice(0,10);
+  const applyNcQuick = (key: string) => {
+    const today = new Date();
+    const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+    const endOfMonth = new Date(today.getFullYear(), today.getMonth()+1, 0);
+    const startOfLastMonth = new Date(today.getFullYear(), today.getMonth()-1, 1);
+    const endOfLastMonth = new Date(today.getFullYear(), today.getMonth(), 0);
+    const minus = (n:number) => new Date(today.getFullYear(), today.getMonth(), today.getDate()-n);
+    switch (key) {
+      case 'today': setNcFrom(ncFmt(today)); setNcTo(ncFmt(today)); break;
+      case 'yesterday': { const y=minus(1); setNcFrom(ncFmt(y)); setNcTo(ncFmt(y)); break; }
+      case 'last7': setNcFrom(ncFmt(minus(6))); setNcTo(ncFmt(today)); break;
+      case 'last14': setNcFrom(ncFmt(minus(13))); setNcTo(ncFmt(today)); break;
+      case 'last30': setNcFrom(ncFmt(minus(29))); setNcTo(ncFmt(today)); break;
+      case 'thisMonth': setNcFrom(ncFmt(startOfMonth)); setNcTo(ncFmt(endOfMonth)); break;
+      case 'lastMonth': setNcFrom(ncFmt(startOfLastMonth)); setNcTo(ncFmt(endOfLastMonth)); break;
+      default: setNcFrom(''); setNcTo('');
+    }
+  };
+
+  // Load NocoDB survey analytics
+  const loadNocoRepeat = useCallback(async () => {
+    try {
+      setNcLoading(true); setNcError('');
+      const base = 'https://app-nocodb.9krcxo.easypanel.host/api/v2/tables/msq21u3ocxnx01h/records';
+      const limit = 500;
+      let offset = 0; const out: NocoRepeatRow[] = [];
+      while (true) {
+        const params = new URLSearchParams();
+        params.set('offset', String(offset));
+        params.set('limit', String(limit));
+        params.set('viewId', 'vwa5an0z8yt3lizk');
+        // We pull all and filter client-side by date to be safe with view constraints
+        const url = `${base}?${params.toString()}`;
+        const res = await fetch(url, { headers: { 'xc-token': nocoToken } });
+        if (!res.ok) throw new Error(await res.text());
+        const payload = await res.json();
+        const list = Array.isArray(payload?.list) ? payload.list : [];
+        out.push(...list as NocoRepeatRow[]);
+        if (list.length < limit) break;
+        offset += limit; if (offset > 100000) break;
+      }
+      setNcRows(out);
+    } catch (e: any) {
+      setNcRows([]); setNcError(e?.message || 'Failed to load NocoDB analytics');
+    } finally { setNcLoading(false); }
+  }, []);
+
+  useEffect(() => {
+    if (view === 'analytics' && isAdmin) loadNocoRepeat();
+  }, [view, isAdmin, loadNocoRepeat]);
+
+  // Filter Noco rows by date
+  const ncFiltered = useMemo(() => {
+    return ncRows.filter(r => {
+      const d = (r.Date || '').slice(0,10);
+      if (ncFrom && d < ncFrom) return false;
+      if (ncTo && d > ncTo) return false;
+      return true;
+    });
+  }, [ncRows, ncFrom, ncTo]);
+
+  // Canonical category mapping by keywords (case-insensitive includes)
+  const categorize = useCallback((key: keyof NocoRepeatRow, raw: string): string => {
+    const s = raw.trim().toLowerCase();
+    if (!s || s === '-' || s === 'na' || s === 'n/a') return '(Empty)';
+    const has = (...xs: string[]) => xs.some(t => s.includes(t));
+    switch (key) {
+      case 'usage_recipe': {
+        if (has('milk', 'with milk')) return 'Milk-based / Health mix drink';
+        if (has('water', 'with water')) return 'Water-based';
+        if (has('ladoo','dosa','pancake','chapati','kozhuk','kanji','recipe')) return 'Other recipes';
+        if (has('health mix')) return 'Health mix drink';
+        return 'Other / Unspecified';
+      }
+      case 'liked_features': {
+        if (has('taste','flavor','good taste')) return 'Taste / Flavor';
+        if (has('energetic','energy','active','stamina','feel better','feeling better','no tired')) return 'Energy / Feel better';
+        if (has('health','immunity','improve','benefit')) return 'Health / Immunity';
+        if (has('no preserv','no added sugar','natural')) return 'No preservatives / Natural';
+        if (has('easy','convenient','ready to use','prepare')) return 'Convenience / Easy to prepare';
+        if (has('pain','relief')) return 'Pain relief';
+        if (has('quality','packaging','overall')) return 'Quality / Packaging';
+        if (has('no specific','just','simply')) return 'No specific feature';
+        return 'Others';
+      }
+      case 'first_time_reason': {
+        if (has('trust','promotion','channel','aurawill','brand')) return 'Trust / Promotion / Brand';
+        if (has('try','something new','simply tried')) return 'Try new / Curiosity';
+        if (has('36 ingredient','ingredients','saw ingred')) return 'Ingredients (36) / Saw ingredients';
+        if (has('advert','youtube','seen in')) return 'Advertisement seen';
+        if (has('health','wellness','condition','benefit')) return 'Health reasons';
+        if (has('no specific')) return 'No specific reason';
+        return 'Others';
+      }
+      case 'reorder_reason': {
+        if (has('health','energetic','improvement','benefit')) return 'Health benefits / Improvement';
+        if (has('good','quality','taste')) return 'Good quality / Taste';
+        if (has('replace','tea','coffee','healthy alternative')) return 'Replacement (tea/coffee) / Healthy alternative';
+        if (has('natural','no side','unique')) return 'Natural / No side effects';
+        if (has('family','children','liked')) return 'Ease of use / Liked by family';
+        if (has('recommend','family ordered')) return 'Recommended / Family ordered';
+        if (has('trust','brand')) return 'Trust / Brand belief';
+        if (has('no specific','just trying')) return 'No specific reason';
+        return 'Others';
+      }
+      case 'monthly_subscriptions': {
+        if (has('true','yes','interested','agree')) return 'Yes (Interested)';
+        if (has('not now','undecided','maybe','later')) return 'Not now / Undecided';
+        if (has('no','not interested','decline')) return 'No (Not interested)';
+        return raw; // already categorical usually
+      }
+      default:
+        return raw || '(Empty)';
+    }
+  }, []);
+
+  // Generic aggregator for count and percentage
+  const makeCountTable = useCallback((key: keyof NocoRepeatRow) => {
+    const map = new Map<string, number>();
+    for (const r of ncFiltered) {
+      const raw = String(r[key] ?? '');
+      const val = categorize(key, raw);
+      map.set(val, (map.get(val) || 0) + 1);
+    }
+    const total = ncFiltered.length || 1;
+    const rows = Array.from(map.entries()).sort((a,b)=>b[1]-a[1]).map(([name,count])=>({ name, count, pct: Math.round((count/total)*1000)/10 }));
+    return { total: ncFiltered.length, rows };
+  }, [ncFiltered, categorize]);
+
+  // Open drilldown for a given category
+  const openNcDrill = useCallback((key: keyof NocoRepeatRow, label: string) => {
+    const rows = ncFiltered.filter(r => categorize(key, String(r[key] ?? '')) === label);
+    setNcDrillRows(rows);
+    const title =
+      key === 'first_time_reason' ? `First Time Purchase Reason — ${label}` :
+      key === 'reorder_reason' ? `Reorder Reason — ${label}` :
+      key === 'liked_features' ? `Liked Feature — ${label}` :
+      key === 'usage_recipe' ? `Usage / Recipe — ${label}` :
+      key === 'monthly_subscriptions' ? `Subscription Status — ${label}` :
+      `${String(key)} — ${label}`;
+    setNcDrillTitle(title);
+    setNcDrillPage(1);
+    setNcDrillOpen(true);
+  }, [ncFiltered, categorize]);
+
   // Feedback metrics and simple chart data
   const fbStats = useMemo(() => {
     const pick = (...vals: Array<string | null | undefined>) => {
@@ -592,6 +775,8 @@ export default function RepeatDashboard() {
           <div className="text-sm text-gray-600">
             Assigned repeat customers for the logged-in agent
           </div>
+
+          
           <div className="mt-2 text-xs md:text-sm text-gray-700 flex flex-wrap items-center gap-3">
             <div>
               <span className="text-gray-500">User:</span>{' '}
@@ -702,6 +887,82 @@ export default function RepeatDashboard() {
                 ))}
               </select>
             )}
+
+  {/* NocoDB Insights Drilldown */}
+  {ncDrillOpen && (
+    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={()=>setNcDrillOpen(false)}>
+      <div className="bg-white rounded-xl shadow-xl max-w-5xl w-full max-h-[85vh] overflow-hidden" onClick={(e)=>e.stopPropagation()}>
+        <div className="px-4 py-3 border-b flex items-center justify-between">
+          <div className="font-semibold text-sm truncate">{ncDrillTitle}</div>
+          <button className="text-sm px-3 py-1 border rounded-lg" onClick={()=>setNcDrillOpen(false)}>Close</button>
+        </div>
+        <div className="p-3 space-y-2">
+          {(() => {
+            const total = ncDrillRows.length;
+            const pageCount = Math.max(1, Math.ceil(total / ncDrillPageSize));
+            const safePage = Math.min(ncDrillPage, pageCount);
+            const start = (safePage - 1) * ncDrillPageSize;
+            const slice = ncDrillRows.slice(start, start + ncDrillPageSize);
+            return (
+              <>
+                <div className="flex items-center justify-between text-xs text-gray-700">
+                  <div>Rows {total ? start + 1 : 0}-{Math.min(start + ncDrillPageSize, total)} · Page {safePage}/{pageCount}</div>
+                  <div className="flex items-center gap-2">
+                    <button className="px-2 py-1 rounded border" disabled={safePage<=1} onClick={()=>setNcDrillPage(p=>Math.max(1,p-1))}>Prev</button>
+                    <button className="px-2 py-1 rounded border" disabled={safePage>=pageCount} onClick={()=>setNcDrillPage(p=>Math.min(pageCount,p+1))}>Next</button>
+                    <select className="border rounded px-2 py-1" value={ncDrillPageSize} onChange={(e)=>{ setNcDrillPageSize(Number(e.target.value)); setNcDrillPage(1); }}>
+                      {[10,20,50,100].map(n=> <option key={n} value={n}>{n}/page</option>)}
+                    </select>
+                  </div>
+                </div>
+                <div className="overflow-auto border rounded-lg">
+                  <table className="min-w-[720px] w-full text-sm">
+                    <thead className="bg-gray-50 text-gray-700">
+                      <tr>
+                        <th className="text-left px-3 py-2">Id</th>
+                        <th className="text-left px-3 py-2">Date</th>
+                        <th className="text-left px-3 py-2">Agent</th>
+                        <th className="text-left px-3 py-2">Order</th>
+                        <th className="text-left px-3 py-2">Phone</th>
+                        <th className="text-left px-3 py-2">Call Status</th>
+                        <th className="text-left px-3 py-2">Heard From</th>
+                        <th className="text-left px-3 py-2">First-time</th>
+                        <th className="text-left px-3 py-2">Reorder</th>
+                        <th className="text-left px-3 py-2">Liked</th>
+                        <th className="text-left px-3 py-2">Usage</th>
+                        <th className="text-left px-3 py-2">Subscr.</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {slice.map((r, i) => (
+                        <tr key={r.Id ?? i} className="border-t">
+                          <td className="px-3 py-2">{String(r.Id ?? '')}</td>
+                          <td className="px-3 py-2 whitespace-nowrap">{r.Date || ''}</td>
+                          <td className="px-3 py-2">{r.agent || ''}</td>
+                          <td className="px-3 py-2">{String(r.order_number ?? '')}</td>
+                          <td className="px-3 py-2">{r.customer_phone || ''}</td>
+                          <td className="px-3 py-2">{r.call_status || ''}</td>
+                          <td className="px-3 py-2 truncate max-w-[240px]" title={r.heard_from || ''}>{r.heard_from || ''}</td>
+                          <td className="px-3 py-2 truncate max-w-[200px]" title={r.first_time_reason || ''}>{r.first_time_reason || ''}</td>
+                          <td className="px-3 py-2 truncate max-w-[200px]" title={r.reorder_reason || ''}>{r.reorder_reason || ''}</td>
+                          <td className="px-3 py-2 truncate max-w-[200px]" title={r.liked_features || ''}>{r.liked_features || ''}</td>
+                          <td className="px-3 py-2 truncate max-w-[160px]" title={r.usage_recipe || ''}>{r.usage_recipe || ''}</td>
+                          <td className="px-3 py-2">{r.monthly_subscriptions || ''}</td>
+                        </tr>
+                      ))}
+                      {slice.length === 0 && (
+                        <tr><td className="px-3 py-3 text-gray-600" colSpan={12}>No rows</td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            );
+          })()}
+        </div>
+      </div>
+    </div>
+  )}
             <select
               value={filterStatus}
               onChange={(e) => setFilterStatus(e.target.value)}
@@ -982,6 +1243,93 @@ export default function RepeatDashboard() {
       {/* Analytics view */}
       {view === 'analytics' && isAdmin && (
         <div className="bg-white rounded-xl shadow p-4 space-y-4">
+          {/* Customer Insights (NocoDB) - analytics only */}
+          <div className="rounded-xl border p-3 bg-gradient-to-br from-white to-slate-50">
+            <div className="flex flex-wrap items-end gap-2 mb-3">
+              <div className="text-base font-semibold">Customer Insights (NocoDB)</div>
+              {ncLoading && <span className="text-xs text-gray-500">Loading…</span>}
+              {ncError && <span className="text-xs text-rose-600">{ncError}</span>}
+              <div className="ml-auto flex items-end gap-2 text-xs">
+                <div>
+                  <label className="block text-[11px] text-gray-600 mb-1">From</label>
+                  <input type="date" value={ncFrom} onChange={(e)=>setNcFrom(e.target.value)} className="border rounded px-2 py-1"/>
+                </div>
+                <div>
+                  <label className="block text-[11px] text-gray-600 mb-1">To</label>
+                  <input type="date" value={ncTo} onChange={(e)=>setNcTo(e.target.value)} className="border rounded px-2 py-1"/>
+                </div>
+                <div>
+                  <label className="block text-[11px] text-gray-600 mb-1">Quick</label>
+                  <select value="" onChange={(e)=>{ applyNcQuick(e.target.value); e.currentTarget.selectedIndex=0; }} className="border rounded px-2 py-1">
+                    <option value="" disabled>Select…</option>
+                    <option value="today">Today</option>
+                    <option value="yesterday">Yesterday</option>
+                    <option value="last7">Last 7 days</option>
+                    <option value="last14">Last 14 days</option>
+                    <option value="last30">Last 30 days</option>
+                    <option value="thisMonth">This Month</option>
+                    <option value="lastMonth">Last Month</option>
+                    <option value="all">All Time</option>
+                  </select>
+                </div>
+                <IconButton onClick={loadNocoRepeat} title="Reload from NocoDB"><RefreshCcw className="w-4 h-4"/>Reload</IconButton>
+              </div>
+            </div>
+
+            {(() => {
+              const ft = makeCountTable('first_time_reason');
+              const rr = makeCountTable('reorder_reason');
+              const lf = makeCountTable('liked_features');
+              const ur = makeCountTable('usage_recipe');
+              const ms = makeCountTable('monthly_subscriptions');
+              const renderTable = (title: string, data: ReturnType<typeof makeCountTable>, key: keyof NocoRepeatRow) => (
+                <div className="bg-white rounded-lg border shadow-sm">
+                  <div className="px-3 py-2 border-b flex items-center justify-between">
+                    <div className="text-sm font-medium">{title}</div>
+                    <div className="text-[11px] text-gray-500">Total {data.total}</div>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="min-w-[520px] text-sm">
+                      <thead className="bg-slate-50 text-gray-700">
+                        <tr>
+                          <th className="text-left px-3 py-2">Category</th>
+                          <th className="text-left px-3 py-2">Count</th>
+                          <th className="text-left px-3 py-2">% (approx.)</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {data.rows.map(r => (
+                          <tr
+                            key={r.name}
+                            className="border-t hover:bg-indigo-50 cursor-pointer"
+                            onClick={() => openNcDrill(key, r.name)}
+                            title="Click to view matching rows"
+                          >
+                            <td className="px-3 py-2 truncate max-w-[520px]" title={r.name}>{r.name}</td>
+                            <td className="px-3 py-2">{r.count}</td>
+                            <td className="px-3 py-2">{r.pct}%</td>
+                          </tr>
+                        ))}
+                        {data.rows.length === 0 && (
+                          <tr><td className="px-3 py-3 text-gray-600" colSpan={3}>No data</td></tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              );
+
+              return (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {renderTable('First Time Purchase Reason', ft, 'first_time_reason')}
+                  {renderTable('Reorder Reason', rr, 'reorder_reason')}
+                  {renderTable('Liked Feature', lf, 'liked_features')}
+                  {renderTable('Usage / Recipe', ur, 'usage_recipe')}
+                  {renderTable('Subscription Status', ms, 'monthly_subscriptions')}
+                </div>
+              );
+            })()}
+          </div>
           <div className="flex flex-wrap items-center gap-2">
             <select aria-label="Analytics agent scope" value={fbAgent} onChange={(e)=>setFbAgent(e.target.value)} className="border rounded-lg px-2 py-2 text-sm">
               <option value="me">My forms</option>
@@ -1075,69 +1423,77 @@ export default function RepeatDashboard() {
             </div>
           </div>
 
-          {/* Top liked features */}
-          <div>
-            <div className="text-sm font-medium mb-2">Top liked features</div>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
-              {fbStats.featureTop.map(([label,count]) => (
-                <div key={label} className="bg-gray-50 rounded p-2 text-sm flex items-center justify-between">
-                  <span className="truncate pr-2" title={label}>{label}</span>
-                  <span className="text-gray-600">{count}</span>
-                </div>
-              ))}
-              {fbStats.featureTop.length === 0 && (
-                <div className="text-xs text-gray-500">No feature data available in current range.</div>
-              )}
-            </div>
-          </div>
-
-          {/* Filled leads list */}
+          {/* Filled leads list with pagination */}
           <div>
             <div className="flex items-center justify-between mb-2">
               <div className="text-sm font-medium">Filled leads ({fbAgent === 'me' ? 'My forms' : 'All agents'})</div>
               <div className="text-xs text-gray-600">Date range: {fbFrom || '—'} to {fbTo || '—'}</div>
             </div>
-            <div className="overflow-x-auto border rounded-lg">
-              <table className="w-full text-sm">
-                <thead className="bg-gray-50 text-gray-700">
-                  <tr>
-                    <th className="text-left px-3 py-2">Date</th>
-                    <th className="text-left px-3 py-2">Agent</th>
-                    <th className="text-left px-3 py-2">Order</th>
-                    <th className="text-left px-3 py-2">Phone</th>
-                    <th className="text-left px-3 py-2">Call Status</th>
-                    <th className="text-left px-3 py-2">Heard From</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {fbStats.totalForms === 0 ? (
-                    <tr>
-                      <td className="px-3 py-3 text-center text-gray-600" colSpan={6}>No filled leads</td>
-                    </tr>
-                  ) : (
-                    [...filteredFeedback]
-                      .sort((a, b) => new Date(b.created_at||'').getTime() - new Date(a.created_at||'').getTime())
-                      .slice(0, 200)
-                      .map((f, i) => (
-                        <tr
-                          key={f.id || i}
-                          className="border-t hover:bg-indigo-50 cursor-pointer"
-                          onClick={() => setFbDetail(f)}
-                          title="Click to view full details"
-                        >
-                          <td className="px-3 py-2 whitespace-nowrap">{formatDateTime(f.created_at)}</td>
-                          <td className="px-3 py-2">{f.agent || '—'}</td>
-                          <td className="px-3 py-2">{String(f.order_number ?? '—')}</td>
-                          <td className="px-3 py-2">{f.customer_phone || '—'}</td>
-                          <td className="px-3 py-2">{f.call_status || '—'}</td>
-                          <td className="px-3 py-2 truncate max-w-[240px]" title={f.heard_from || ''}>{f.heard_from || '—'}</td>
+            {(() => {
+              const sorted = [...filteredFeedback].sort((a,b)=> new Date(b.created_at||'').getTime() - new Date(a.created_at||'').getTime());
+              const total = sorted.length;
+              const pageCount = Math.max(1, Math.ceil(total / fbListPageSize));
+              const safePage = Math.min(fbListPage, pageCount);
+              const start = (safePage - 1) * fbListPageSize;
+              const slice = sorted.slice(start, start + fbListPageSize);
+              return (
+                <>
+                  <div className="overflow-x-auto border rounded-lg">
+                    <table className="w-full text-sm">
+                      <thead className="bg-gray-50 text-gray-700">
+                        <tr>
+                          <th className="text-left px-3 py-2">Date</th>
+                          <th className="text-left px-3 py-2">Agent</th>
+                          <th className="text-left px-3 py-2">Order</th>
+                          <th className="text-left px-3 py-2">Phone</th>
+                          <th className="text-left px-3 py-2">Call Status</th>
+                          <th className="text-left px-3 py-2">Heard From</th>
                         </tr>
-                      ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-            <div className="text-xs text-gray-500 mt-1">Showing latest 200 forms in the selected scope and date range.</div>
+                      </thead>
+                      <tbody>
+                        {total === 0 ? (
+                          <tr>
+                            <td className="px-3 py-3 text-center text-gray-600" colSpan={6}>No filled leads</td>
+                          </tr>
+                        ) : (
+                          slice.map((f, i) => (
+                            <tr
+                              key={f.id || i}
+                              className="border-t hover:bg-indigo-50 cursor-pointer"
+                              onClick={() => setFbDetail(f)}
+                              title="Click to view full details"
+                            >
+                              <td className="px-3 py-2 whitespace-nowrap">{formatDateTime(f.created_at)}</td>
+                              <td className="px-3 py-2">{f.agent || '—'}</td>
+                              <td className="px-3 py-2">{String(f.order_number ?? '—')}</td>
+                              <td className="px-3 py-2">{f.customer_phone || '—'}</td>
+                              <td className="px-3 py-2">{f.call_status || '—'}</td>
+                              <td className="px-3 py-2 truncate max-w-[240px]" title={f.heard_from || ''}>{f.heard_from || '—'}</td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div className="flex items-center justify-between mt-2 text-sm text-gray-700">
+                    <div>
+                      Showing <strong>{total ? start + 1 : 0}-{Math.min(start + fbListPageSize, total)}</strong> of <strong>{total}</strong>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <select className="border rounded px-2 py-1 text-sm" value={fbListPageSize} onChange={(e)=>{ setFbListPageSize(Number(e.target.value)); setFbListPage(1); }}>
+                        {[25,50,100,200].map(n=> <option key={n} value={n}>{n} / page</option>)}
+                      </select>
+                      <div className="flex items-center gap-1">
+                        <IconButton onClick={()=>setFbListPage(p=>Math.max(1,p-1))} disabled={safePage<=1} title="Previous"><ChevronLeft className="w-4 h-4"/></IconButton>
+                        <div className="min-w-[80px] text-center">Page <strong>{safePage}</strong> / {pageCount}</div>
+                        <IconButton onClick={()=>setFbListPage(p=>Math.min(pageCount,p+1))} disabled={safePage>=pageCount} title="Next"><ChevronRight className="w-4 h-4"/></IconButton>
+                      </div>
+                    </div>
+                  </div>
+                </>
+              );
+            })()}
+            <div className="text-xs text-gray-500 mt-1">Use pagination to browse all forms in the selected scope and date range.</div>
           </div>
         </div>
       )}
