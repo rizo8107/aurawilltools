@@ -195,6 +195,8 @@ export default function RepeatDashboard() {
   const [ncGroupNewName, setNcGroupNewName] = useState<string>('');
   // Explicit group name definitions so empty groups can exist
   const [ncGroupDefs, setNcGroupDefs] = useState<Record<string, string[]>>({});
+  // Group dialog: search filter for ungrouped list
+  const [ncGroupUngroupedQuery, setNcGroupUngroupedQuery] = useState<string>('');
   // NocoDB: tab + batch update state
   const [ncTab, setNcTab] = useState<'insights' | 'batch'>('insights');
   const [ncBatchInput, setNcBatchInput] = useState<string>('');
@@ -708,7 +710,7 @@ export default function RepeatDashboard() {
       if (raw) setNcGrouping(JSON.parse(raw));
       const defs = localStorage.getItem('nc_groupdefs_v1');
       if (defs) setNcGroupDefs(JSON.parse(defs));
-    } catch {}
+    } catch (e) { console.warn('Failed to load grouping from localStorage', e); }
   }, [view, isAdmin, loadNocoRepeat]);
 
 
@@ -2071,11 +2073,13 @@ export default function RepeatDashboard() {
               const mappedGroups = Array.from(new Set(Object.values(gmap))).filter(Boolean);
               const groups = Array.from(new Set([ ...defsForKey, ...mappedGroups ]));
               const ungrouped = allCats.filter(c => !gmap[c]);
+              const q = ncGroupUngroupedQuery.trim().toLowerCase();
+              const filteredUngrouped = q ? ungrouped.filter(c => c.toLowerCase().includes(q)) : ungrouped;
               const persist = (nextMap: typeof ncGrouping, nextDefs: typeof ncGroupDefs) => {
                 try {
                   localStorage.setItem('nc_grouping_v1', JSON.stringify(nextMap));
                   localStorage.setItem('nc_groupdefs_v1', JSON.stringify(nextDefs));
-                } catch {}
+                } catch (e) { console.warn('Failed to save grouping to localStorage', e); }
               };
               const save = () => persist(ncGrouping, ncGroupDefs);
               const addGroup = () => {
@@ -2099,34 +2103,44 @@ export default function RepeatDashboard() {
               };
               const onDropTo = (grp: string) => (e: React.DragEvent<HTMLDivElement>) => { const cat = e.dataTransfer.getData('text/plain'); if (cat) assign(cat, grp); };
               return (
-                <div className="fixed inset-0 bg-black/30 z-50 flex items-center justify-center" onClick={()=>setNcGroupOpen({key:null})}>
-                  <div className="bg-white rounded-lg border shadow-lg w-[900px] max-w-[95vw] p-4" onClick={(e)=>e.stopPropagation()}>
+                <div className="fixed inset-0 bg-black/30 z-50 flex items-center justify-center p-2 md:p-4" onClick={()=>setNcGroupOpen({key:null})}>
+                  <div className="bg-white rounded-lg border shadow-lg w-full max-w-4xl md:max-w-5xl p-3 md:p-4 max-h-[90vh] overflow-y-auto" onClick={(e)=>e.stopPropagation()}>
                     <div className="flex items-center justify-between mb-3">
                       <div className="text-sm font-medium">Group categories — {String(key)}</div>
                       <div className="flex items-center gap-2">
                         <IconButton onClick={()=>{ save(); setNcGroupOpen({key:null}); }}>Done</IconButton>
                       </div>
                     </div>
-                    <div className="grid grid-cols-3 gap-3">
-                      <div className="border rounded p-2 min-h-[260px]">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                      <div className="border rounded p-2 h-[65vh] md:h-[60vh] flex flex-col overflow-hidden">
                         <div className="text-xs font-medium mb-2">Ungrouped</div>
-                        <div className="flex flex-col gap-1">
-                          {ungrouped.map(c => (
+                        <div className="sticky top-0 bg-white pb-2">
+                          <input
+                            className="border rounded px-2 py-1 text-xs w-full"
+                            placeholder="Search…"
+                            value={ncGroupUngroupedQuery}
+                            onChange={(e)=>setNcGroupUngroupedQuery(e.target.value)}
+                          />
+                        </div>
+                        <div className="flex-1 overflow-y-auto flex flex-col gap-1 pr-1">
+                          {filteredUngrouped.map(c => (
                             <div key={c} className="px-2 py-1 bg-slate-50 rounded border" draggable onDragStart={(e)=>e.dataTransfer.setData('text/plain', c)} title={c}>{c}</div>
                           ))}
-                          {ungrouped.length===0 && <div className="text-xs text-gray-500">None</div>}
+                          {filteredUngrouped.length===0 && (
+                            <div className="text-xs text-gray-500">No matches</div>
+                          )}
                         </div>
                       </div>
-                      <div className="col-span-2">
+                      <div className="col-span-1 md:col-span-2">
                         <div className="flex items-end gap-2 mb-2">
                           <div className="text-xs">Groups</div>
                           <input className="border rounded px-2 py-1 text-sm" placeholder="New group name" value={ncGroupNewName} onChange={(e)=>setNcGroupNewName(e.target.value)} />
                           <IconButton onClick={addGroup}><Plus className="w-4 h-4"/>Add</IconButton>
                           <IconButton onClick={()=>{ setNcGrouping(s=>{ const copy = { ...s }; delete copy[String(key)]; persist(copy, { ...ncGroupDefs, [String(key)]: [] }); return copy; }); setNcGroupDefs(d=>({ ...d, [String(key)]: [] })); }}>Reset</IconButton>
                         </div>
-                        <div className="grid grid-cols-2 gap-2">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                           {groups.map(g => (
-                            <div key={g} className="border rounded p-2 min-h-[120px]" onDragOver={(e)=>e.preventDefault()} onDrop={onDropTo(g)}>
+                            <div key={g} className="border rounded p-2 min-h-[100px] md:min-h-[120px]" onDragOver={(e)=>e.preventDefault()} onDrop={onDropTo(g)}>
                               <div className="text-xs font-medium mb-1">{g}</div>
                               <div className="flex flex-wrap gap-1">
                                 {Object.entries(gmap).filter(([,grp])=>grp===g).map(([c])=> (
