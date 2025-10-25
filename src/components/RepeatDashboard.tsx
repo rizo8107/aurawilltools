@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ShieldCheck, Play, RefreshCcw, Search, AlertTriangle, Loader2, Phone, ExternalLink,
-  Filter, X, ChevronLeft, ChevronRight, Info, Download
+  Filter, X, ChevronLeft, ChevronRight, Info, Download, Plus
 } from 'lucide-react';
 import OrderDetailsDialog from './OrderDetailsDialog';
 import { SUPABASE_URL, sbHeadersObj as sbHeaders } from '../lib/supabaseClient';
@@ -188,10 +188,73 @@ export default function RepeatDashboard() {
   const [ncTo, setNcTo] = useState<string>('');
   const [ncLoading, setNcLoading] = useState<boolean>(false);
   const [ncError, setNcError] = useState<string>('');
+  const [ncShowAll, setNcShowAll] = useState<Record<string, boolean>>({});
+  // Grouping state (per table key): category -> group name
+  const [ncGrouping, setNcGrouping] = useState<Record<string, Record<string, string>>>({});
+  const [ncGroupOpen, setNcGroupOpen] = useState<{ key: keyof NocoRepeatRow | null } >({ key: null });
+  const [ncGroupNewName, setNcGroupNewName] = useState<string>('');
+  // Explicit group name definitions so empty groups can exist
+  const [ncGroupDefs, setNcGroupDefs] = useState<Record<string, string[]>>({});
+  // NocoDB: tab + batch update state
+  const [ncTab, setNcTab] = useState<'insights' | 'batch'>('insights');
+  const [ncBatchInput, setNcBatchInput] = useState<string>('');
+  const [ncBatchLog, setNcBatchLog] = useState<string>('');
+  const [ncBatchRunning, setNcBatchRunning] = useState<boolean>(false);
+  const [ncBatchStats, setNcBatchStats] = useState<{updated:number;missing:number;failed:number}>({updated:0,missing:0,failed:0});
+  const [ncBatchField, setNcBatchField] = useState<string>('monthly_subscriptions');
+  const [ncBatchCustomField, setNcBatchCustomField] = useState<string>('');
+  const [ncBatchType, setNcBatchType] = useState<'auto'|'boolean'|'number'|'string'>('auto');
+  const [ncBatchValue, setNcBatchValue] = useState<string>('true');
   // Noco token (local override or provided default)
   const nocoToken = useMemo(() => {
     try { return localStorage.getItem('nocodb_token') || 'CdD-fhN2ctMOe-rOGWY5g7ET5BisIDx5r32eJMn4'; } catch { return 'CdD-fhN2ctMOe-rOGWY5g7ET5BisIDx5r32eJMn4'; }
   }, []);
+
+  // New Product Expectation free-text classifier
+  const categorizeNPE = useCallback((raw: string): string => {
+    const s0 = String(raw || '').trim();
+    if (!s0) return '(Empty)';
+    const s = s0.toLowerCase();
+    // empties / no idea
+    if (/(^|\b)(no idea|nothing|none|as of now nothing|na|n\/a)(\b|$)/.test(s)) return 'No idea';
+    // fast/instant drinks
+    if (/(abc\s*malt|malt|horlicks|boost|instant|ready\s*to\s*use|no\s*boil)/.test(s)) return 'Instant malt / energy drink';
+    // weight
+    if (/weight\s*loss|diet/.test(s)) return 'Weight loss';
+    if (/weight\s*gain/.test(s)) return 'Weight gain';
+    // baby/kids
+    if (/(baby|babies|kids|children|cerelac|infant)/.test(s)) return 'Baby/Kids products';
+    // hair/skin
+    if (/(hair|shampoo|dandruff|hairfall|hair fall|hair oil|natural dye)/.test(s)) return 'Hair care';
+    if (/(skin|face ?wash|serum|cosmetic|pimple|sunscreen)/.test(s)) return 'Skin care / cosmetics';
+    // conditions
+    if (/(diabet|sugar patient|\bbp\b|blood pressure)/.test(s)) return 'Diabetic/BP friendly';
+    if (/(hemoglobin|haemoglobin|blood count|iron)/.test(s)) return 'Hemoglobin / iron';
+    if (/(protein|multi ?vitamin|calcium|bone strength)/.test(s)) return 'Protein / multivitamin / calcium';
+    if (/(pain|knee|joint|leg pain|nerves|thiliyam|thylam|move\b)/.test(s)) return 'Pain relief / bone & nerve';
+    // food/snacks/breakfast
+    if (/(snack|laddu|ladoo|choco|chocolate|candy|biscuit|sweet)/.test(s)) return 'Healthy snacks / sweets';
+    if (/(breakfast|idli|dosa|puttu|kanji|saadham|rice mix|ragi malt|semiya|upma)/.test(s)) return 'Breakfast mixes';
+    // sweeteners
+    if (/(honey|jaggery|karupatti|brown sugar|gulkhand)/.test(s)) return 'Natural sweeteners';
+    // herbal/ayurvedic
+    if (/(herbal|ayur|mooligai)/.test(s)) return 'Herbal / Ayurvedic';
+    // cooling/heat
+    if (/(cool|heat reduce|body heat)/.test(s)) return 'Cooling / heat reduce';
+    // women’s health
+    if (/(women|period|menstru)/.test(s)) return "Women’s health";
+    // household toiletry
+    if (/(tooth\s*paste|toothpaste|soap)/.test(s)) return 'Natural soaps / toothpaste';
+    // improvements
+    if (/(sprout|more ingredients|improve ingredient|improve current)/.test(s)) return 'Improve current product';
+    if (/(delivery\s*speed|fast delivery)/.test(s)) return 'Improve delivery';
+    // quality/packaging feedback
+    if (/(package|packaging|packing|cardboard|quality|damage|stone)/.test(s)) return 'Quality / packaging feedback';
+    // fallback: sentence case
+    return s0.charAt(0).toUpperCase() + s0.slice(1);
+  }, []);
+
+  
 
   // Agent filter for the filled leads table (client-side)
   const [fbAgentFilter, setFbAgentFilter] = useState<string>('');
@@ -639,7 +702,105 @@ export default function RepeatDashboard() {
 
   useEffect(() => {
     if (view === 'analytics' && isAdmin) loadNocoRepeat();
+    // load grouping from localStorage once
+    try {
+      const raw = localStorage.getItem('nc_grouping_v1');
+      if (raw) setNcGrouping(JSON.parse(raw));
+      const defs = localStorage.getItem('nc_groupdefs_v1');
+      if (defs) setNcGroupDefs(JSON.parse(defs));
+    } catch {}
   }, [view, isAdmin, loadNocoRepeat]);
+
+
+  // Batch update: set monthly_subscriptions=true for pasted order_numbers
+  const runNcBatchUpdate = useCallback(async () => {
+    if (ncBatchRunning) return;
+    const baseUrl = 'https://app-nocodb.9krcxo.easypanel.host';
+    const tableId = 'msq21u3ocxnx01h';
+    const viewId = 'vwa5an0z8yt3lizk';
+    const raw = ncBatchInput.trim();
+    if (!raw) { setNcBatchLog('Paste order numbers first.'); return; }
+    const targetField = (ncBatchField === '__custom__' ? ncBatchCustomField.trim() : ncBatchField).trim();
+    if (!targetField) { setNcBatchLog('Select a field (or enter a custom field) to update.'); return; }
+    const parseValue = () => {
+      if (ncBatchType === 'boolean' || (ncBatchType === 'auto' && /^(true|false|1|0)$/i.test(ncBatchValue.trim()))) {
+        const s = ncBatchValue.trim().toLowerCase();
+        return s === 'true' || s === '1';
+      }
+      if (ncBatchType === 'number' || (ncBatchType === 'auto' && /^-?\d+(\.\d+)?$/.test(ncBatchValue.trim()))) {
+        return Number(ncBatchValue.trim());
+      }
+      return ncBatchValue;
+    };
+    const valueToSet: any = parseValue();
+    // parse order numbers by newline/comma/space
+    const parts = raw.split(/[\s,\n\r\t]+/).map(s=>s.trim()).filter(Boolean);
+    if (!parts.length) { setNcBatchLog('No valid order numbers found.'); return; }
+    setNcBatchRunning(true);
+    setNcBatchLog('Starting...');
+    setNcBatchStats({updated:0,missing:0,failed:0});
+    let updated=0, missing=0, failed=0;
+    const logs: string[] = [];
+    try {
+      for (const num of parts) {
+        // lookup
+        const where = `(order_number,eq,${encodeURIComponent(num)})`;
+        const url = `${baseUrl}/api/v2/tables/${tableId}/records?limit=1&viewId=${viewId}&where=${where}`;
+        let recJson: any = null;
+        try {
+          const res = await fetch(url, { headers: { 'xc-token': nocoToken, 'accept': 'application/json' }});
+          recJson = await res.json();
+        } catch (e) {
+          logs.push(`Lookup failed for ${num}: ${String(e)}`);
+          failed++; continue;
+        }
+        const id = recJson?.list?.[0]?.Id ?? recJson?.list?.[0]?.id;
+        if (!id) { logs.push(`Not found: ${num}`); missing++; continue; }
+        // Patch each record: prefer array-payload per NocoDB docs, fallback to where(order_number)
+        const patchArrayById = async (idVal: string | number) => {
+          const url = `${baseUrl}/api/v2/tables/${tableId}/records`;
+          const resp = await fetch(url, {
+            method: 'PATCH',
+            headers: { 'xc-token': nocoToken, 'Content-Type': 'application/json', 'accept': 'application/json' },
+            body: JSON.stringify([{ Id: idVal, [targetField]: valueToSet }])
+          });
+          const text = await resp.text();
+          return { resp, text };
+        };
+        const patchWhereOrder = async (orderVal: string | number) => {
+          const isNum = /^\d+$/.test(String(orderVal));
+          const whereRaw = isNum ? `(order_number,eq,${orderVal})` : `(order_number,eq,"${String(orderVal).replace(/"/g,'\\"')}")`;
+          const url = `${baseUrl}/api/v2/tables/${tableId}/records?where=${encodeURIComponent(whereRaw)}`;
+          const resp = await fetch(url, {
+            method: 'PATCH',
+            headers: { 'xc-token': nocoToken, 'Content-Type': 'application/json', 'accept': 'application/json' },
+            body: JSON.stringify({ [targetField]: valueToSet })
+          });
+          const text = await resp.text();
+          return { resp, text };
+        };
+        try {
+          // 1) Preferred: PATCH by where(order_number)
+          let { resp, text } = await patchWhereOrder(num);
+          let method = 'where(order_number)';
+          if (!resp.ok) {
+            // 2) Fallback: official array PATCH by Id
+            const alt = await patchArrayById(id);
+            resp = alt.resp; text = alt.text; method = 'array-by-id';
+          }
+          if (resp.ok) { logs.push(`Updated order_number=${num} (id=${id}) via ${method} — set ${targetField}=${String(valueToSet)}`); updated++; }
+          else { logs.push(`Patch failed for ${num} (id=${id}) — HTTP ${resp.status}: ${text || '(no body)'} (method tried: ${method})`); failed++; }
+        } catch (e) { logs.push(`Patch error for ${num} (id=${id}): ${String(e)}`); failed++; }
+        setNcBatchLog(logs.slice(-200).join('\n'));
+        setNcBatchStats({updated,missing,failed});
+      }
+    } finally {
+      setNcBatchRunning(false);
+      setNcBatchLog(prev => prev + `\nDone. Updated: ${updated}, Missing: ${missing}, Failed: ${failed}`);
+      setNcBatchStats({updated,missing,failed});
+      await loadNocoRepeat();
+    }
+  }, [ncBatchInput, nocoToken, ncBatchRunning, loadNocoRepeat, ncBatchField, ncBatchCustomField, ncBatchType, ncBatchValue]);
 
   // Filter Noco rows by date
   const ncFiltered = useMemo(() => {
@@ -650,6 +811,75 @@ export default function RepeatDashboard() {
       return true;
     });
   }, [ncRows, ncFrom, ncTo]);
+
+  // Drill into a grouped label by expanding its member categories
+  const openNcGroupDrill = useCallback((key: keyof NocoRepeatRow, groupLabel: string, members: string[]) => {
+    let rows: NocoRepeatRow[] = [];
+    if (key === 'age') {
+      const bucket = (raw: string | number | null | undefined) => {
+        const n = Number(String(raw || '').replace(/[^0-9]/g, ''));
+        if (!Number.isFinite(n) || n <= 0) return '(Empty)';
+        if (n < 20) return '<20';
+        if (n < 25) return '20-25';
+        if (n < 30) return '25-30';
+        if (n < 35) return '30-35';
+        if (n < 40) return '35-40';
+        if (n < 45) return '40-45';
+        if (n < 50) return '45-50';
+        if (n < 60) return '50-60';
+        return '60+';
+      };
+      rows = ncFiltered.filter(r => members.includes(bucket((r as any).age)));
+    } else if (key === 'gender') {
+      const norm = (v: string | null | undefined) => {
+        const s = String(v || '').trim().toLowerCase();
+        if (!s) return '(Empty)';
+        if (['m','male','man','boy','gent'].includes(s)) return 'Male';
+        if (['f','female','woman','girl','lady'].includes(s)) return 'Female';
+        return s.charAt(0).toUpperCase()+s.slice(1);
+      };
+      rows = ncFiltered.filter(r => members.includes(norm((r as any).gender)));
+    } else if (key === 'marital_status') {
+      const norm = (v: string | null | undefined) => {
+        const s = String(v || '').trim().toLowerCase();
+        if (!s) return '(Empty)';
+        if (s.includes('married')) return 'Married';
+        if (s.includes('single') || s.includes('unmarried') || s.includes('not married')) return 'Unmarried';
+        return s.charAt(0).toUpperCase()+s.slice(1);
+      };
+      rows = ncFiltered.filter(r => members.includes(norm((r as any).marital_status)));
+    } else if (key === 'profession_text') {
+      const norm = (v: string | null | undefined) => {
+        const s = String(v || '').trim();
+        return s ? s.replace(/\s{2,}/g,' ') : '(Empty)';
+      };
+      rows = ncFiltered.filter(r => members.includes(norm((r as any).profession_text)));
+    } else if (key === 'city') {
+      const norm = (v: string | null | undefined) => {
+        const s = String(v || '').trim().toLowerCase();
+        if (!s) return '(Empty)';
+        return s.split(' ').map(w=>w? (w[0].toUpperCase()+w.slice(1)) : w).join(' ');
+      };
+      rows = ncFiltered.filter(r => members.includes(norm((r as any).city)));
+    } else if (key === 'new_product_expectation') {
+      const norm = (v: string | null | undefined) => {
+        const s = String(v || '').trim();
+        return s ? s.replace(/\s{2,}/g,' ') : '(Empty)';
+      };
+      rows = ncFiltered.filter(r => members.includes(norm((r as any).new_product_expectation)));
+    } else if (key === 'agent') {
+      const norm = (v: string | null | undefined) => {
+        const s = String(v || '').trim();
+        return s || '(Empty)';
+      };
+      rows = ncFiltered.filter(r => members.includes(norm((r as any).agent)));
+    } else {
+      rows = ncFiltered.filter(r => members.includes(getStableLabel(key, String((r as any)[key] ?? ''))));
+    }
+    setNcDrillRows(rows);
+    setNcDrillTitle(`Group — ${groupLabel}`);
+    setNcDrillOpen(true);
+  }, [ncFiltered]);
 
   // Early catalog helper (used by stable labeler below)
   const getCatalogEarly = useCallback((key: keyof NocoRepeatRow): Array<{label: string; keys: string[]}> => {
@@ -988,11 +1218,14 @@ export default function RepeatDashboard() {
       };
       rows = ncFiltered.filter(r => norm((r as any).city) === label);
     } else if (key === 'new_product_expectation') {
+      const norm = (v: string | null | undefined) => categorizeNPE(String(v || '').replace(/\s{2,}/g,' ').trim());
+      rows = ncFiltered.filter(r => norm((r as any).new_product_expectation) === label);
+    } else if (key === 'agent') {
       const norm = (v: string | null | undefined) => {
         const s = String(v || '').trim();
-        return s ? s.replace(/\s{2,}/g,' ') : '(Empty)';
+        return s || '(Empty)';
       };
-      rows = ncFiltered.filter(r => norm((r as any).new_product_expectation) === label);
+      rows = ncFiltered.filter(r => norm((r as any).agent) === label);
     } else {
       rows = ncFiltered.filter(r => getStableLabel(key, String((r as any)[key] ?? '')) === label);
     }
@@ -1541,6 +1774,10 @@ export default function RepeatDashboard() {
           <div className="rounded-xl border p-3 bg-gradient-to-br from-white to-slate-50">
             <div className="flex flex-wrap items-end gap-2 mb-3">
               <div className="text-base font-semibold">Customer Insights (NocoDB)</div>
+              <div className="ml-2 inline-flex rounded-lg overflow-hidden border text-xs">
+                <button className={clsx('px-2 py-1', ncTab==='insights' && 'bg-indigo-600 text-white')} onClick={()=>setNcTab('insights')}>Insights</button>
+                <button className={clsx('px-2 py-1', ncTab==='batch' && 'bg-indigo-600 text-white')} onClick={()=>setNcTab('batch')}>Batch Update</button>
+              </div>
               {ncLoading && <span className="text-xs text-gray-500">Loading…</span>}
               {ncError && <span className="text-xs text-rose-600">{ncError}</span>}
               <div className="ml-auto flex items-end gap-2 text-xs">
@@ -1570,17 +1807,46 @@ export default function RepeatDashboard() {
               </div>
             </div>
 
-            {(() => {
+            {ncTab === 'insights' ? (() => {
               const ft = makeCountTable('first_time_reason');
               const rr = makeCountTable('reorder_reason');
               const lf = makeCountTable('liked_features');
               const ur = makeCountTable('usage_recipe');
               const ms = makeCountTable('monthly_subscriptions');
-              const renderTable = (title: string, data: { total: number; rows: Array<{ name: string; count: number; pct: number }>; }, key: keyof NocoRepeatRow) => (
+              const renderTable = (title: string, data: { total: number; rows: Array<{ name: string; count: number; pct: number }>; }, key: keyof NocoRepeatRow) => {
+                // apply grouping if exists for this key
+                const gmap = ncGrouping[String(key)] || {};
+                let rowsBase = data.rows;
+                if (Object.keys(gmap).length) {
+                  const grouped = new Map<string, { name: string; count: number }>();
+                  for (const r of data.rows) {
+                    const g = gmap[r.name];
+                    const label = g || r.name;
+                    const prev = grouped.get(label) || { name: label, count: 0 };
+                    prev.count += r.count;
+                    grouped.set(label, prev);
+                  }
+                  const total = data.total || 1;
+                  rowsBase = Array.from(grouped.values())
+                    .sort((a,b)=>b.count-a.count)
+                    .map(({name,count})=>({ name, count, pct: Math.round((count/total)*1000)/10 }));
+                }
+                const showAll = !!ncShowAll[String(key)];
+                const rows = showAll ? rowsBase : rowsBase.slice(0, 10);
+                const canToggle = data.rows.length > 10;
+                return (
                 <div className="bg-white rounded-lg border shadow-sm">
                   <div className="px-3 py-2 border-b flex items-center justify-between">
                     <div className="text-sm font-medium">{title}</div>
-                    <div className="text-[11px] text-gray-500">Total {data.total}</div>
+                    <div className="flex items-center gap-2">
+                      <button className="text-[11px] text-gray-700 hover:underline" onClick={()=>setNcGroupOpen({ key })} title="Group categories">Group</button>
+                      {canToggle && (
+                        <button className="text-[11px] text-indigo-700 hover:underline" onClick={()=>setNcShowAll(s=>({ ...s, [String(key)]: !showAll }))}>
+                          {showAll ? 'View less' : 'View more'}
+                        </button>
+                      )}
+                      <div className="text-[11px] text-gray-500">Total {data.total}</div>
+                    </div>
                   </div>
                   <div className="overflow-x-auto">
                     <table className="min-w-[520px] text-sm">
@@ -1592,11 +1858,16 @@ export default function RepeatDashboard() {
                         </tr>
                       </thead>
                       <tbody>
-                        {data.rows.map(r => (
+                        {rows.map(r => (
                           <tr
                             key={r.name}
                             className="border-t hover:bg-indigo-50 cursor-pointer"
-                            onClick={() => openNcDrill(key, r.name)}
+                            onClick={() => {
+                              const gmapLocal = ncGrouping[String(key)] || {};
+                              const members = Object.entries(gmapLocal).filter(([,grp])=>grp===r.name).map(([cat])=>cat);
+                              if (members.length) openNcGroupDrill(key, r.name, members);
+                              else openNcDrill(key, r.name);
+                            }}
                             title="Click to view matching rows"
                           >
                             <td className="px-3 py-2 max-w-[520px]">
@@ -1614,18 +1885,19 @@ export default function RepeatDashboard() {
                             <td className="px-3 py-2">{r.pct}%</td>
                           </tr>
                         ))}
-                        {data.rows.length === 0 && (
+                        {rows.length === 0 && (
                           <tr><td className="px-3 py-3 text-gray-600" colSpan={3}>No data</td></tr>
                         )}
                       </tbody>
                     </table>
                   </div>
                 </div>
-              );
+              ); };
 
               // Extra demographics/profile tables
               const makeAgeTableLocal = () => {
                 const buckets = ['<20','20-25','25-30','30-35','35-40','40-45','45-50','50-60','60+'];
+                const order = new Map<string, number>(buckets.map((b, i) => [b, i]));
                 const counts = new Map<string, number>();
                 for (const b of buckets) counts.set(b, 0);
                 for (const r of ncFiltered) {
@@ -1645,7 +1917,18 @@ export default function RepeatDashboard() {
                   counts.set(b, (counts.get(b) || 0) + 1);
                 }
                 const total = ncFiltered.length || 1;
-                const rows = Array.from(counts.entries()).filter(([,c])=>c>0).sort((a,b)=>b[1]-a[1]).map(([name,count])=>({ name, count, pct: Math.round((count/total)*1000)/10 }));
+                const entries = Array.from(counts.entries()).filter(([,c])=>c>0);
+                entries.sort((a,b) => {
+                  const ia = order.has(a[0]) ? order.get(a[0])! : Number.POSITIVE_INFINITY;
+                  const ib = order.has(b[0]) ? order.get(b[0])! : Number.POSITIVE_INFINITY;
+                  if (ia !== ib) return ia - ib;
+                  return 0;
+                });
+                // Ensure (Empty) appears last if present
+                const empties = entries.filter(([k]) => !order.has(k));
+                const nonEmpties = entries.filter(([k]) => order.has(k));
+                const sorted = [...nonEmpties, ...empties];
+                const rows = sorted.map(([name,count])=>({ name, count, pct: Math.round((count/total)*1000)/10 }));
                 return { total: ncFiltered.length, rows };
               };
               const makeSimpleLocal = (getter: (r: any)=>string) => {
@@ -1679,10 +1962,17 @@ export default function RepeatDashboard() {
                 if (!s) return '(Empty)';
                 return cap(s);
               });
-              const npeT = makeSimpleLocal(r => String((r as any).new_product_expectation || '').trim().replace(/\s{2,}/g,' ') || '(Empty)');
+              const npeT = makeSimpleLocal(r => categorizeNPE(String((r as any).new_product_expectation || '').replace(/\s{2,}/g,' ').trim()));
+              const agentT = makeSimpleLocal(r => {
+                const s = String((r as any).agent || '').trim();
+                return s || '(Empty)';
+              });
 
               return (
                 <>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {renderTable('Filled by agent (NocoDB)', agentT, 'agent')}
+                  </div>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                     {renderTable('First Time Purchase Reason', ft, 'first_time_reason')}
                     {renderTable('Reorder Reason', rr, 'reorder_reason')}
@@ -1699,6 +1989,158 @@ export default function RepeatDashboard() {
                     {renderTable('New Product Expectation', npeT, 'new_product_expectation')}
                   </div>
                 </>
+              );
+            })() : (
+              <div className="bg-white rounded-lg border shadow-sm p-3 space-y-3">
+                <div className="text-sm font-medium">Batch Update — set field/value for pasted orders</div>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-2 items-end">
+                  <div>
+                    <label className="block text-[11px] text-gray-600 mb-1">Field</label>
+                    <select className="border rounded px-2 py-1 w-full"
+                      value={ncBatchField}
+                      onChange={(e)=>setNcBatchField(e.target.value)}
+                      title="Select target field">
+                      <option value="monthly_subscriptions">monthly_subscriptions</option>
+                      <option value="agent">agent</option>
+                      <option value="call_status">call_status</option>
+                      <option value="heard_from">heard_from</option>
+                      <option value="first_time_reason">first_time_reason</option>
+                      <option value="reorder_reason">reorder_reason</option>
+                      <option value="liked_features">liked_features</option>
+                      <option value="usage_recipe">usage_recipe</option>
+                      <option value="usage_time">usage_time</option>
+                      <option value="age">age</option>
+                      <option value="gender">gender</option>
+                      <option value="marital_status">marital_status</option>
+                      <option value="profession_text">profession_text</option>
+                      <option value="city">city</option>
+                      <option value="new_product_expectation">new_product_expectation</option>
+                      <option value="__custom__">Custom…</option>
+                    </select>
+                    {ncBatchField === '__custom__' && (
+                      <input className="mt-1 border rounded px-2 py-1 w-full" placeholder="Enter custom field"
+                        value={ncBatchCustomField} onChange={(e)=>setNcBatchCustomField(e.target.value)} />
+                    )}
+                  </div>
+                  <div>
+                    <label className="block text-[11px] text-gray-600 mb-1">Value Type</label>
+                    <select className="border rounded px-2 py-1 w-full" value={ncBatchType} onChange={(e)=>setNcBatchType(e.target.value as any)} title="Interpretation of the value">
+                      <option value="auto">auto</option>
+                      <option value="boolean">boolean</option>
+                      <option value="number">number</option>
+                      <option value="string">string</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-[11px] text-gray-600 mb-1">Value</label>
+                    <div className="flex gap-2">
+                      <input className="border rounded px-2 py-1 w-full" placeholder="Enter value (e.g., true)" value={ncBatchValue} onChange={(e)=>setNcBatchValue(e.target.value)} />
+                      {ncBatchField === 'agent' && (
+                        <select className="border rounded px-2 py-1" onChange={(e)=>setNcBatchValue(e.target.value)} title="Pick agent">
+                          <option value="">Pick agent…</option>
+                          {teamMembers.map(a=> <option key={a} value={a}>{a}</option>)}
+                        </select>
+                      )}
+                    </div>
+                  </div>
+                </div>
+                <div className="text-xs text-gray-600">Paste order numbers separated by spaces, commas, or new lines.</div>
+                <textarea
+                  className="w-full h-40 border rounded p-2 font-mono text-xs"
+                  placeholder="Paste order numbers here..."
+                  value={ncBatchInput}
+                  onChange={(e)=>setNcBatchInput(e.target.value)}
+                />
+                <div className="flex items-center gap-2">
+                  <IconButton tone="primary" onClick={runNcBatchUpdate} disabled={ncBatchRunning} title="Run batch update">
+                    {ncBatchRunning ? <Loader2 className="w-4 h-4 animate-spin"/> : <Play className="w-4 h-4"/>}
+                    {ncBatchRunning ? 'Running…' : 'Update'}
+                  </IconButton>
+                  <div className="text-xs text-gray-600">Updated: {ncBatchStats.updated} · Missing: {ncBatchStats.missing} · Failed: {ncBatchStats.failed}</div>
+                </div>
+                <pre className="bg-gray-50 border rounded p-2 text-[11px] whitespace-pre-wrap max-h-64 overflow-auto">{ncBatchLog || 'Logs will appear here...'}</pre>
+              </div>
+            )}
+            {/* Grouping panel */}
+            {ncGroupOpen.key && (() => {
+              const key = ncGroupOpen.key as keyof NocoRepeatRow;
+              const gmap = ncGrouping[String(key)] || {};
+              const currentData = makeCountTable(key as any);
+              const allCats = currentData.rows.map(r=>r.name);
+              const defsForKey = ncGroupDefs[String(key)] || [];
+              const mappedGroups = Array.from(new Set(Object.values(gmap))).filter(Boolean);
+              const groups = Array.from(new Set([ ...defsForKey, ...mappedGroups ]));
+              const ungrouped = allCats.filter(c => !gmap[c]);
+              const persist = (nextMap: typeof ncGrouping, nextDefs: typeof ncGroupDefs) => {
+                try {
+                  localStorage.setItem('nc_grouping_v1', JSON.stringify(nextMap));
+                  localStorage.setItem('nc_groupdefs_v1', JSON.stringify(nextDefs));
+                } catch {}
+              };
+              const save = () => persist(ncGrouping, ncGroupDefs);
+              const addGroup = () => {
+                const name = ncGroupNewName.trim();
+                if (!name) return;
+                setNcGroupDefs(d => {
+                  const next = { ...d, [String(key)]: Array.from(new Set([...(d[String(key)]||[]), name])) };
+                  persist(ncGrouping, next);
+                  return next;
+                });
+                setNcGroupNewName('');
+              };
+              const assign = (cat: string, grp: string) => {
+                setNcGrouping(s=>{
+                  const m = { ...(s[String(key)]||{}) };
+                  m[cat]=grp;
+                  const next = { ...s, [String(key)]: m };
+                  persist(next, ncGroupDefs);
+                  return next;
+                });
+              };
+              const onDropTo = (grp: string) => (e: React.DragEvent<HTMLDivElement>) => { const cat = e.dataTransfer.getData('text/plain'); if (cat) assign(cat, grp); };
+              return (
+                <div className="fixed inset-0 bg-black/30 z-50 flex items-center justify-center" onClick={()=>setNcGroupOpen({key:null})}>
+                  <div className="bg-white rounded-lg border shadow-lg w-[900px] max-w-[95vw] p-4" onClick={(e)=>e.stopPropagation()}>
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="text-sm font-medium">Group categories — {String(key)}</div>
+                      <div className="flex items-center gap-2">
+                        <IconButton onClick={()=>{ save(); setNcGroupOpen({key:null}); }}>Done</IconButton>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-3 gap-3">
+                      <div className="border rounded p-2 min-h-[260px]">
+                        <div className="text-xs font-medium mb-2">Ungrouped</div>
+                        <div className="flex flex-col gap-1">
+                          {ungrouped.map(c => (
+                            <div key={c} className="px-2 py-1 bg-slate-50 rounded border" draggable onDragStart={(e)=>e.dataTransfer.setData('text/plain', c)} title={c}>{c}</div>
+                          ))}
+                          {ungrouped.length===0 && <div className="text-xs text-gray-500">None</div>}
+                        </div>
+                      </div>
+                      <div className="col-span-2">
+                        <div className="flex items-end gap-2 mb-2">
+                          <div className="text-xs">Groups</div>
+                          <input className="border rounded px-2 py-1 text-sm" placeholder="New group name" value={ncGroupNewName} onChange={(e)=>setNcGroupNewName(e.target.value)} />
+                          <IconButton onClick={addGroup}><Plus className="w-4 h-4"/>Add</IconButton>
+                          <IconButton onClick={()=>{ setNcGrouping(s=>{ const copy = { ...s }; delete copy[String(key)]; persist(copy, { ...ncGroupDefs, [String(key)]: [] }); return copy; }); setNcGroupDefs(d=>({ ...d, [String(key)]: [] })); }}>Reset</IconButton>
+                        </div>
+                        <div className="grid grid-cols-2 gap-2">
+                          {groups.map(g => (
+                            <div key={g} className="border rounded p-2 min-h-[120px]" onDragOver={(e)=>e.preventDefault()} onDrop={onDropTo(g)}>
+                              <div className="text-xs font-medium mb-1">{g}</div>
+                              <div className="flex flex-wrap gap-1">
+                                {Object.entries(gmap).filter(([,grp])=>grp===g).map(([c])=> (
+                                  <span key={c} className="px-2 py-1 bg-indigo-50 border rounded text-xs" draggable onDragStart={(e)=>e.dataTransfer.setData('text/plain', c)} title={c}>{c}</span>
+                                ))}
+                              </div>
+                            </div>
+                          ))}
+                          {groups.length===0 && <div className="text-xs text-gray-500">No groups yet. Create one above.</div>}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
               );
             })()}
           </div>
@@ -1755,45 +2197,7 @@ export default function RepeatDashboard() {
             </div>
           </div>
 
-          {/* Agent-wise counts */}
-          <div>
-            <div className="text-sm font-medium mb-2">Filled by agent</div>
-            {fbByAgent.length === 0 ? (
-              <div className="text-xs text-gray-500">No data in current scope/date.</div>
-            ) : (
-              <div className="space-y-1">
-                {fbByAgent.map(([agent,count]) => (
-                  <button
-                    key={agent}
-                    type="button"
-                    className="flex items-center gap-2 w-full text-left hover:bg-indigo-50 rounded px-1"
-                    onClick={() => setFbAgentFilter(prev => prev === agent ? '' : agent)}
-                    title="Click to filter the filled leads table by this agent"
-                  >
-                    <div className="w-40 text-xs text-gray-600 truncate" title={agent}>{agent}</div>
-                    <div className="flex-1 bg-gray-100 rounded h-3 overflow-hidden">
-                      <div className="bg-indigo-500 h-3" style={{width: `${fbStats.totalForms? Math.round((Number(count)/fbStats.totalForms)*100):0}%`}}/>
-                    </div>
-                    <div className="w-10 text-right text-xs">{count}</div>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* Simple bar chart for Gender */}
-          <div>
-            <div className="text-sm font-medium mb-2">Gender distribution</div>
-            <div className="space-y-2">
-              {Object.entries(fbStats.genderCounts).map(([k,v]) => (
-                <div key={k} className="flex items-center gap-2">
-                  <div className="w-28 text-xs text-gray-600">{k}</div>
-                  <div className="flex-1 bg-gray-100 rounded h-3 overflow-hidden"><div className="bg-indigo-500 h-3" style={{width: `${fbStats.totalForms? Math.round((Number(v)/fbStats.totalForms)*100):0}%`}}/></div>
-                  <div className="w-10 text-right text-xs">{v}</div>
-                </div>
-              ))}
-            </div>
-          </div>
+          
 
           {/* Filled leads list with pagination */}
           <div>
