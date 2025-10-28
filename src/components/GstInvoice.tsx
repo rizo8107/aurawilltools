@@ -36,8 +36,10 @@ const GstInvoiceGenerator = () => {
   const [billingStateCode, setBillingStateCode] = useState('29');
   const [billingGstin, setBillingGstin] = useState('29AAFCA1234A1Z5');
 
-  const gstRate = 0.05; // total GST for CGST + SGST
-  const halfGstRate = gstRate / 2; // 2.5%
+  const cgstSgstTotalRate = 0.05; // total GST for CGST + SGST (5%)
+  const igstTotalRate = 0.18; // IGST total (18%)
+  const gstRate = cgstSgstTotalRate; // backward compat reference
+  const halfGstRate = cgstSgstTotalRate / 2; // 2.5%
   const initialInclusiveUnitPrice = 360;
   const [lineItems, setLineItems] = useState<LineItem[]>([
     {
@@ -96,7 +98,8 @@ const GstInvoiceGenerator = () => {
               break;
             case 'unitPrice': {
               const inclusivePrice = parseFloat(value) || 0;
-              newUnitPrice = inclusivePrice / (1 + gstRate);
+              const totalRate = (taxType === 'IGST') ? igstTotalRate : cgstSgstTotalRate;
+              newUnitPrice = inclusivePrice / (1 + totalRate);
               break;
             }
             case 'discount':
@@ -140,7 +143,7 @@ const GstInvoiceGenerator = () => {
     sgstAmount = taxableAmount * halfGstRate;
     taxAmount = cgstAmount + sgstAmount;
   } else { // IGST
-    igstAmountTotal = taxableAmount * gstRate;
+    igstAmountTotal = taxableAmount * igstTotalRate;
     taxAmount = igstAmountTotal;
   }
   const grandTotal = taxableAmount + taxAmount;
@@ -245,18 +248,24 @@ const GstInvoiceGenerator = () => {
                     <input type="text" name="name" value={item.name} onChange={e => handleItemChange(item.id, e)} placeholder="Product Name" className="w-full p-2 border rounded" />
                     <input type="text" name="hsnSac" value={item.hsnSac} onChange={e => handleItemChange(item.id, e)} placeholder="HSN/SAC" className="w-full p-2 border rounded" />
                   </div>
+                  <div className="grid grid-cols-3 gap-2 text-xs text-gray-600">
+                    <label className="block">Qty (units)</label>
+                    <label className="block">Unit Price (incl. GST)</label>
+                    <label className="block">Discount (₹)</label>
+                  </div>
                   <div className="grid grid-cols-3 gap-2">
-                    <input type="number" name="qty" value={item.qty} onChange={e => handleItemChange(item.id, e)} placeholder="Qty" className="w-full p-2 border rounded" />
+                    <input type="text" inputMode="numeric" name="qty" value={item.qty} onChange={e => handleItemChange(item.id, e)} placeholder="Qty" className="w-full p-2 border rounded" />
                     {/* Unit Price input: value displays inclusive, onChange handles inclusive input */}
                     <input 
-                      type="number" 
+                      type="text" 
+                      inputMode="decimal"
                       name="unitPrice" 
-                      value={parseFloat((item.unitPrice * 1.18).toFixed(2))} 
+                      value={(item.unitPrice * (1 + (taxType === 'IGST' ? igstTotalRate : cgstSgstTotalRate))).toFixed(2)} 
                       onChange={e => handleItemChange(item.id, e)} 
                       placeholder="Unit Price (incl. GST)" 
                       className="w-full p-2 border rounded" 
                     />
-                    <input type="number" name="discount" value={item.discount} onChange={e => handleItemChange(item.id, e)} placeholder="Discount" className="w-full p-2 border rounded" />
+                    <input type="text" inputMode="decimal" name="discount" value={item.discount} onChange={e => handleItemChange(item.id, e)} placeholder="Discount" className="w-full p-2 border rounded" />
                   </div>
                   <button onClick={() => removeItem(item.id)} className="text-red-500 hover:text-red-700 text-sm flex items-center"><Trash2 size={14} className="mr-1"/> Remove</button>
                 </div>
