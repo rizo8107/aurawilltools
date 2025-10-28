@@ -201,45 +201,152 @@ export default function RepeatCampaign({ initialOrderNumber = '', hideFeedback =
     setLoading(true);
     setError('');
     
-    try {
-      const response = await fetch('https://auto-n8n.9krcxo.easypanel.host/webhook/20b5c30b-5815-41fc-863c-c1e96f32e083', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ 
-          Order: orderId,
-          // agent field removed from payload; backend webhook can infer if needed
-        }),
-      });
-      
-      if (!response.ok) {
-        throw new Error(`Error: ${response.status}`);
-      }
-      
-      const data = await response.json();
-      console.log('Response data:', data);
-      
-      // Check if data is an array or a single object
-      if (data) {
-        // If it's a direct object (not in an array), use it directly
-        if (!Array.isArray(data) && typeof data === 'object') {
-          setCustomerData(data);
-          
-          // Pre-fill the orderId in the feedback form and set the initial call status
-          setFeedbackForm(prev => ({ ...prev, orderId: orderId }));
-          setSelectedCallStatus(data.call_status || '');
-        } 
-        // If it's an array with at least one item
-        else if (Array.isArray(data) && data.length > 0) {
-          setCustomerData(data[0]);
-          
-          // Pre-fill the orderId in the feedback form and set the initial call status
-          setFeedbackForm(prev => ({ ...prev, orderId: orderId }));
-          setSelectedCallStatus(data[0].call_status || '');
-        } else {
-          setError('No customer data found for this order ID');
+    // helper: build CustomerData from repeat-json array or single object
+    const buildFromRepeatJson = (rows: any[], needleOrder: string): CustomerData | null => {
+      if (!Array.isArray(rows) || rows.length === 0) return null;
+      const byOrder = rows.filter((r: any) => String(r.order_number || '').trim() === needleOrder.trim());
+      const base = byOrder[0] || rows[0];
+      if (!base) return null;
+      const phone = String(base.phone || '').trim();
+      const samePhone = rows.filter((r: any) => String(r.phone || '').trim() === phone);
+      const toDate = (s: any) => new Date(String(s || ''));
+      const dedup = new Map<string, { order_number: number; order_date: string; total_amount: string; products: string; address: string | null }>();
+      for (const r of samePhone.filter((x:any)=>x && x.order_number)) {
+        const key = String(r.order_number);
+        const cur = dedup.get(key);
+        const cand = {
+          order_number: Number(String(r.order_number).replace(/[^0-9.]/g,'')) || 0,
+          order_date: String(r.order_date || ''),
+          total_amount: String(r.price ?? r.total_amount ?? ''),
+          products: [String(r.product || ''), String(r.variant || '')].filter(Boolean).join(' - '),
+          address: String(r.address || '') || null,
+        };
+        if (!cur || new Date(cand.order_date).getTime() >= new Date(cur.order_date).getTime()) {
+          dedup.set(key, cand);
         }
+      }
+      const orders = Array.from(dedup.values()).sort((a,b) => toDate(a.order_date).getTime() - toDate(b.order_date).getTime());
+      const total_orders = orders.length;
+      const first_order_date = total_orders ? orders[0].order_date : '';
+      const last_order_date = total_orders ? orders[total_orders-1].order_date : '';
+      let duration_between_first_and_last_order = '';
+      if (first_order_date && last_order_date) {
+        const diff = Math.abs(new Date(last_order_date).getTime() - new Date(first_order_date).getTime());
+        const days = Math.round(diff / (1000*60*60*24));
+        duration_between_first_and_last_order = `${days} days`;
+      }
+      const addr = String(base.address || '') || null;
+      const out: CustomerData = {
+        customer_name: String(base.customer_name || ''),
+        customer_phone: phone,
+        customer_email: String(base.email || ''),
+        customer_address: addr,
+        total_orders,
+        first_order_date,
+        last_order_date,
+        duration_between_first_and_last_order,
+        orders,
+        call_status: base.call_status || '',
+        address: addr,
+      };
+      return out;
+    };
+    const buildFromRepeatObj = (obj: any): CustomerData | null => {
+      if (!obj || typeof obj !== 'object') return null;
+      const phone = String(obj.phone || '').trim();
+      const addr = String(obj.address || '') || null;
+      const orders = [
+        {
+          order_number: Number(String(obj.order_number || '').replace(/[^0-9.]/g,'')) || 0,
+          order_date: String(obj.order_date || ''),
+          total_amount: String(obj.price ?? obj.total_amount ?? ''),
+          products: [String(obj.product || ''), String(obj.variant || '')].filter(Boolean).join(' - '),
+          address: addr,
+        }
+      ];
+      const out: CustomerData = {
+        customer_name: String(obj.customer_name || ''),
+        customer_phone: phone,
+        customer_email: String(obj.email || ''),
+        customer_address: addr,
+        total_orders: 1,
+        first_order_date: orders[0].order_date,
+        last_order_date: orders[0].order_date,
+        duration_between_first_and_last_order: '0 days',
+        orders,
+        call_status: obj.call_status || '',
+        address: addr,
+      };
+      return out;
+    };
+    const safeParseJson = async (res: Response): Promise<any | null> => {
+      try { return await res.json(); } catch {
+        try { const t = await res.text(); return t ? JSON.parse(t) : null; } catch { return null; }
+      }
+    };
+
+    try {
+      // PRIMARY: UUID webhook (main)
+      const primary = await fetch('https://auto-n8n.9krcxo.easypanel.host/webhook/20b5c30b-5815-41fc-863c-c1e96f32e083', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ Order: orderId }),
+      });
+      let primaryOk = false;
+      if (primary.ok) {
+        const data = await safeParseJson(primary);
+        if (data && ((Array.isArray(data) && data.length) || (!Array.isArray(data) && typeof data === 'object'))) {
+          let current: CustomerData | null = null;
+          if (Array.isArray(data)) {
+            current = data[0] as any;
+            setCustomerData(current as any);
+            setFeedbackForm(prev => ({ ...prev, orderId }));
+            setSelectedCallStatus((data[0] as any).call_status || '');
+          } else {
+            current = data as any;
+            setCustomerData(current as any);
+            setFeedbackForm(prev => ({ ...prev, orderId }));
+            setSelectedCallStatus((data as any).call_status || '');
+          }
+          primaryOk = true;
+          // Enrich with repeat-json in the background to fetch full history
+          try {
+            const fbRes = await fetch('https://auto-n8n.9krcxo.easypanel.host/webhook/repeat-json', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ Order: orderId }),
+            });
+            if (fbRes.ok) {
+              const fb = await safeParseJson(fbRes);
+              let built: CustomerData | null = null;
+              if (Array.isArray(fb)) built = buildFromRepeatJson(fb, orderId);
+              else built = buildFromRepeatObj(fb);
+              if (built && (
+                !current ||
+                !Array.isArray((current as any).orders) ||
+                built.orders.length > ((current as any).orders?.length || 0)
+              )) {
+                setCustomerData(built);
+                setSelectedCallStatus(built.call_status || '');
+              }
+            }
+          } catch { /* non-blocking enrichment */ }
+        }
+      }
+      if (primaryOk) return;
+      // FALLBACK: repeat-json
+      const fbRes = await fetch('https://auto-n8n.9krcxo.easypanel.host/webhook/repeat-json', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ Order: orderId }),
+      });
+      if (!fbRes.ok) throw new Error(`fallback ${fbRes.status}`);
+      const fb = await safeParseJson(fbRes);
+      let built: CustomerData | null = null;
+      if (Array.isArray(fb)) built = buildFromRepeatJson(fb, orderId);
+      else built = buildFromRepeatObj(fb);
+      if (built) {
+        setCustomerData(built);
+        setFeedbackForm(prev => ({ ...prev, orderId }));
+        setSelectedCallStatus(built.call_status || '');
       } else {
         setError('No customer data found for this order ID');
       }
