@@ -94,7 +94,13 @@ const statusColor = (s?: string | null) => {
   if (key === 'busy') return 'text-amber-700 bg-amber-50 border-amber-200';
   if (key === 'cancelled') return 'text-slate-700 bg-slate-50 border-slate-200';
   if (key === 'no response') return 'text-rose-700 bg-rose-50 border-rose-200';
-  if (key === 'wrong number' || key === 'invalid number') return 'text-rose-700 bg-rose-50 border-rose-200';
+  if (
+    key === 'wrong number' || key === 'invalid number' ||
+    key === 'dnp1' || key === 'dnp 1' ||
+    key === 'dnp2' || key === 'dnp 2' ||
+    key === 'dnp3' || key === 'dnp 3' ||
+    key === 'dnp4' || key === 'dnp 4'
+  ) return 'text-rose-700 bg-rose-50 border-rose-200';
   return 'text-gray-700 bg-gray-50 border-gray-200'; // Not Called / default
 };
 

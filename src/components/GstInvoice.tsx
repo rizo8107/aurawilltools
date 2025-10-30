@@ -37,7 +37,7 @@ const GstInvoiceGenerator = () => {
   const [billingGstin, setBillingGstin] = useState('29AAFCA1234A1Z5');
 
   const cgstSgstTotalRate = 0.05; // total GST for CGST + SGST (5%)
-  const igstTotalRate = 0.18; // IGST total (18%)
+  const igstTotalRate = 0.05; // IGST total (5%)
   const gstRate = cgstSgstTotalRate; // backward compat reference
   const halfGstRate = cgstSgstTotalRate / 2; // 2.5%
   const initialInclusiveUnitPrice = 360;
@@ -377,7 +377,7 @@ const GstInvoiceGenerator = () => {
                         <td className="border p-2 text-right">{item.unitPrice.toFixed(2)}</td>
                         <td className="border p-2 text-right">{item.discount.toFixed(2)}</td>
                         {taxType === 'IGST' && <>
-                          <td className="border p-2 text-center">18</td>{/* IGST % */}
+                          <td className="border p-2 text-center">{(igstTotalRate * 100)}</td>{/* IGST % */}
                           <td className="border p-2 text-right">{itemIgst.toFixed(2)}</td>{/* IGST Amt */}
                         </>}
                         <td className="border p-2 text-center">{taxType === 'CGST/SGST' ? (halfGstRate * 100) : 0}</td>{/* CGST % */}
