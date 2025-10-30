@@ -1607,6 +1607,98 @@ export default function RepeatDashboard() {
               <th className="text-left px-4 py-2">Status</th>
               <th className="text-left px-4 py-2">Actions</th>
             </tr>
+            {/* Column filters */}
+            <tr className="border-t text-xs bg-white/70">
+              <th className="px-2 py-2"></th>
+              {/* Customer filter: ties to global q */}
+              <th className="px-4 py-2">
+                <input
+                  className="w-full border rounded px-2 py-1"
+                  placeholder="Search customer (email/phone/order)"
+                  value={q}
+                  onChange={(e)=>setQ(e.target.value)}
+                />
+              </th>
+              {/* Orders filter: min/max */}
+              <th className="px-4 py-2">
+                <div className="flex gap-1">
+                  <input
+                    className="w-1/2 border rounded px-2 py-1"
+                    placeholder="Min"
+                    value={minOrders}
+                    onChange={(e)=>setMinOrders(e.target.value)}
+                  />
+                  <input
+                    className="w-1/2 border rounded px-2 py-1"
+                    placeholder="Max"
+                    value={maxOrders}
+                    onChange={(e)=>setMaxOrders(e.target.value)}
+                  />
+                </div>
+              </th>
+              {/* Range filter: date from/to uses last_order */}
+              <th className="px-4 py-2">
+                <div className="flex gap-1">
+                  <input
+                    type="date"
+                    className="w-1/2 border rounded px-2 py-1"
+                    value={filterFrom}
+                    onChange={(e)=>setFilterFrom(e.target.value)}
+                    title="From date"
+                  />
+                  <input
+                    type="date"
+                    className="w-1/2 border rounded px-2 py-1"
+                    value={filterTo}
+                    onChange={(e)=>setFilterTo(e.target.value)}
+                    title="To date"
+                  />
+                </div>
+              </th>
+              {/* Assigned filter: admin can select member, others disabled */}
+              <th className="px-4 py-2">
+                <select
+                  className="w-full border rounded px-2 py-1"
+                  value={memberFilter}
+                  onChange={(e)=>setMemberFilter(e.target.value)}
+                  disabled={!isAdmin}
+                  title="Assigned member filter"
+                >
+                  <option value="">All</option>
+                  {teamMembers.map(m => (
+                    <option key={m} value={m}>{m}</option>
+                  ))}
+                </select>
+              </th>
+              {/* Status filter */}
+              <th className="px-4 py-2">
+                <select
+                  className="w-full border rounded px-2 py-1"
+                  value={filterStatus}
+                  onChange={(e)=>setFilterStatus(e.target.value)}
+                  title="Status filter"
+                >
+                  <option value="">All</option>
+                  <option value="Not Called">Not Called</option>
+                  <option value="Called">Called</option>
+                  <option value="Busy">Busy</option>
+                  <option value="Cancelled">Cancelled</option>
+                  <option value="No Response">No Response</option>
+                  <option value="Wrong Number">Wrong Number</option>
+                  <option value="Invalid Number">Invalid Number</option>
+                  <option value="DNP1">DNP1</option>
+                  <option value="DNP2">DNP2</option>
+                  <option value="DNP3">DNP3</option>
+                  <option value="DNP4">DNP4</option>
+                </select>
+              </th>
+              <th className="px-4 py-2 text-right">
+                <button
+                  className="text-xs underline text-gray-600"
+                  onClick={resetFilters}
+                >Clear</button>
+              </th>
+            </tr>
           </thead>
           <tbody>
             {loading ? (
