@@ -175,6 +175,9 @@ export default function RepeatDashboard() {
   // Admin-only: member filter by assigned_to
   const [memberFilter, setMemberFilter] = useState<string>('');
   const [teamMembers, setTeamMembers] = useState<string[]>([]);
+  // Manual assignment
+  const [assignMember, setAssignMember] = useState<string>('');
+  const [assigning, setAssigning] = useState<boolean>(false);
   // Misc UI state
   const [showFilters, setShowFilters] = useState<boolean>(false);
   const [lastRunAt, setLastRunAt] = useState<string>('');
@@ -553,6 +556,46 @@ export default function RepeatDashboard() {
     URL.revokeObjectURL(url);
   }, [filtered, isSelected]);
 
+  /** Manual assignment of selected leads */
+  const assignSelected = useCallback(async () => {
+    const handle = String(assignMember || '').trim();
+    if (!handle) return;
+    const selectedRows = filtered.filter(r => isSelected(r));
+    if (selectedRows.length === 0) return;
+    try {
+      setAssigning(true);
+      const tid = Number(activeTeamId) || null;
+      
+      // Directly update orders_All table for each selected row
+      await Promise.all(selectedRows.map(async (r) => {
+        const url = `${SUPABASE_URL}/rest/v1/orders_All?email=eq.${encodeURIComponent(r.email)}&phone=eq.${encodeURIComponent(r.phone)}`;
+        const res = await fetch(url, {
+          method: 'PATCH',
+          headers: sbHeaders,
+          body: JSON.stringify({ assigned_to: handle, team_id: tid })
+        });
+        if (!res.ok) {
+          const errText = await res.text();
+          console.error(`Failed to assign ${r.email}:`, errText);
+        }
+      }));
+      
+      // Reload to reflect changes
+      await loadAssigned();
+      // Clear selection after assignment
+      setSelected({});
+      setAssignMember('');
+      setCallMsg(`Successfully assigned ${selectedRows.length} lead(s) to ${handle}`);
+      setCallTone('success');
+    } catch (e: any) {
+      console.error('Failed to assign leads:', e);
+      setCallMsg('Failed to assign selected leads. Please try again.');
+      setCallTone('error');
+    } finally {
+      setAssigning(false);
+    }
+  }, [assignMember, filtered, isSelected, activeTeamId, SUPABASE_URL, sbHeaders, loadAssigned, setCallMsg, setCallTone]);
+
   /** Actions */
   const handleCall = useCallback(async (custNumber: string) => {
     setCallMsg('Initiating call...');
@@ -619,6 +662,7 @@ export default function RepeatDashboard() {
       setCallTone('error');
     }
   }, [SUPABASE_URL, sbHeaders, session, currentUser, activeTeamId]);
+
   const resetFilters = () => {
     setFilterStatus('');
     setFilterFrom('');
@@ -718,7 +762,6 @@ export default function RepeatDashboard() {
       if (defs) setNcGroupDefs(JSON.parse(defs));
     } catch (e) { console.warn('Failed to load grouping from localStorage', e); }
   }, [view, isAdmin, loadNocoRepeat]);
-
 
   // Batch update: set monthly_subscriptions=true for pasted order_numbers
   const runNcBatchUpdate = useCallback(async () => {
@@ -870,19 +913,16 @@ export default function RepeatDashboard() {
       };
       rows = ncFiltered.filter(r => members.includes(norm((r as any).city)));
     } else if (key === 'new_product_expectation') {
-      const norm = (v: string | null | undefined) => {
-        const s = String(v || '').trim();
-        return s ? s.replace(/\s{2,}/g,' ') : '(Empty)';
-      };
-      rows = ncFiltered.filter(r => members.includes(norm((r as any).new_product_expectation)));
+      const norm = (v: string | null | undefined) => categorizeNPE(String(v || '').replace(/\s{2,}/g,' ').trim());
+      rows = ncFiltered.filter(r => norm((r as any).new_product_expectation) === groupLabel);
     } else if (key === 'agent') {
       const norm = (v: string | null | undefined) => {
         const s = String(v || '').trim();
         return s || '(Empty)';
       };
-      rows = ncFiltered.filter(r => members.includes(norm((r as any).agent)));
+      rows = ncFiltered.filter(r => norm((r as any).agent) === groupLabel);
     } else {
-      rows = ncFiltered.filter(r => members.includes(getStableLabel(key, String((r as any)[key] ?? ''))));
+      rows = ncFiltered.filter(r => getStableLabel(key, String((r as any)[key] ?? '')) === groupLabel);
     }
     setNcDrillRows(rows);
     setNcDrillTitle(`Group — ${groupLabel}`);
@@ -1411,93 +1451,6 @@ export default function RepeatDashboard() {
               </select>
             )}
 
-  {/* NocoDB Insights Drilldown */}
-  {ncDrillOpen && (
-    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={()=>setNcDrillOpen(false)}>
-      <div className="bg-white rounded-xl shadow-xl max-w-5xl w-full max-h-[85vh] overflow-hidden" onClick={(e)=>e.stopPropagation()}>
-        <div className="px-4 py-3 border-b flex items-center justify-between">
-          <div className="font-semibold text-sm truncate">{ncDrillTitle}</div>
-          <button className="text-sm px-3 py-1 border rounded-lg" onClick={()=>setNcDrillOpen(false)}>Close</button>
-        </div>
-        <div className="p-3 space-y-2">
-          {(() => {
-            const total = ncDrillRows.length;
-            const pageCount = Math.max(1, Math.ceil(total / ncDrillPageSize));
-            const safePage = Math.min(ncDrillPage, pageCount);
-            const start = (safePage - 1) * ncDrillPageSize;
-            const slice = ncDrillRows.slice(start, start + ncDrillPageSize);
-            return (
-              <>
-                <div className="flex items-center justify-between text-xs text-gray-700">
-                  <div>Rows {total ? start + 1 : 0}-{Math.min(start + ncDrillPageSize, total)} · Page {safePage}/{pageCount}</div>
-                  <div className="flex items-center gap-2">
-                    <button className="px-2 py-1 rounded border" disabled={safePage<=1} onClick={()=>setNcDrillPage(p=>Math.max(1,p-1))}>Prev</button>
-                    <button className="px-2 py-1 rounded border" disabled={safePage>=pageCount} onClick={()=>setNcDrillPage(p=>Math.min(pageCount,p+1))}>Next</button>
-                    <select title="Rows per page" className="border rounded px-2 py-1" value={ncDrillPageSize} onChange={(e)=>{ setNcDrillPageSize(Number(e.target.value)); setNcDrillPage(1); }}>
-                      {[10,20,50,100].map(n=> <option key={n} value={n}>{n}/page</option>)}
-                    </select>
-                  </div>
-                </div>
-                <div className="overflow-auto border rounded-lg">
-                  <table className="min-w-[1600px] w-full text-sm">
-                    <thead className="bg-gray-50 text-gray-700">
-                      <tr>
-                        <th className="text-left px-3 py-2">Date</th>
-                        <th className="text-left px-3 py-2">Agent</th>
-                        <th className="text-left px-3 py-2">Order</th>
-                        <th className="text-left px-3 py-2">Phone</th>
-                        <th className="text-left px-3 py-2">Call Status</th>
-                        <th className="text-left px-3 py-2">Heard From</th>
-                        <th className="text-left px-3 py-2">First-time</th>
-                        <th className="text-left px-3 py-2">Reorder</th>
-                        <th className="text-left px-3 py-2">Liked</th>
-                        <th className="text-left px-3 py-2">Usage</th>
-                        <th className="text-left px-3 py-2">Usage Time</th>
-                        <th className="text-left px-3 py-2">Subscription</th>
-                        <th className="text-left px-3 py-2">Age</th>
-                        <th className="text-left px-3 py-2">Gender</th>
-                        <th className="text-left px-3 py-2">Marital</th>
-                        <th className="text-left px-3 py-2">Profession</th>
-                        <th className="text-left px-3 py-2">City</th>
-                        <th className="text-left px-3 py-2">New Product Expectation</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {slice.map((r, i) => (
-                        <tr key={r.Id ?? i} className="border-t">
-                          <td className="px-3 py-2 whitespace-nowrap" title={r.Date || ''}>{r.Date || ''}</td>
-                          <td className="px-3 py-2" title={r.agent || ''}>{r.agent || ''}</td>
-                          <td className="px-3 py-2" title={String(r.order_number ?? '')}>{String(r.order_number ?? '')}</td>
-                          <td className="px-3 py-2" title={r.customer_phone || ''}>{r.customer_phone || ''}</td>
-                          <td className="px-3 py-2" title={r.call_status || ''}>{r.call_status || ''}</td>
-                          <td className="px-3 py-2 truncate max-w-[260px]" title={r.heard_from || ''}>{r.heard_from || ''}</td>
-                          <td className="px-3 py-2 truncate max-w-[240px]" title={r.first_time_reason || ''}>{r.first_time_reason || ''}</td>
-                          <td className="px-3 py-2 truncate max-w-[240px]" title={r.reorder_reason || ''}>{r.reorder_reason || ''}</td>
-                          <td className="px-3 py-2 truncate max-w-[240px]" title={r.liked_features || ''}>{r.liked_features || ''}</td>
-                          <td className="px-3 py-2 truncate max-w-[200px]" title={r.usage_recipe || ''}>{r.usage_recipe || ''}</td>
-                          <td className="px-3 py-2" title={r.usage_time || ''}>{r.usage_time || ''}</td>
-                          <td className="px-3 py-2" title={r.monthly_subscriptions || ''}>{r.monthly_subscriptions || ''}</td>
-                          <td className="px-3 py-2" title={String((r as any).age ?? '')}>{String((r as any).age ?? '')}</td>
-                          <td className="px-3 py-2" title={String((r as any).gender ?? '')}>{String((r as any).gender ?? '')}</td>
-                          <td className="px-3 py-2" title={String((r as any).marital_status ?? '')}>{String((r as any).marital_status ?? '')}</td>
-                          <td className="px-3 py-2 truncate max-w-[220px]" title={String((r as any).profession_text ?? '')}>{String((r as any).profession_text ?? '')}</td>
-                          <td className="px-3 py-2" title={String((r as any).city ?? '')}>{String((r as any).city ?? '')}</td>
-                          <td className="px-3 py-2 truncate max-w-[260px]" title={String((r as any).new_product_expectation ?? '')}>{String((r as any).new_product_expectation ?? '')}</td>
-                        </tr>
-                      ))}
-                      {slice.length === 0 && (
-                        <tr><td className="px-3 py-3 text-gray-600" colSpan={12}>No rows</td></tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </>
-            );
-          })()}
-        </div>
-      </div>
-    </div>
-  )}
             <select
               value={filterStatus}
               onChange={(e) => setFilterStatus(e.target.value)}
@@ -1553,6 +1506,32 @@ export default function RepeatDashboard() {
               <ExternalLink className="w-4 h-4" />
               Export
             </IconButton>
+
+            {/* Manual assignment controls */}
+            {isAdmin && (
+              <div className="flex items-center gap-2 ring-1 ring-gray-200 rounded-lg px-2 py-1 bg-white">
+                <select
+                  className="bg-transparent text-sm outline-none"
+                  aria-label="Assign selected to team member"
+                  title="Assign selected to team member"
+                  value={assignMember}
+                  onChange={(e) => setAssignMember(e.target.value)}
+                >
+                  <option value="">Assign to…</option>
+                  {teamMembers.map((m) => (
+                    <option key={m} value={m}>{m}</option>
+                  ))}
+                </select>
+                <button
+                  className="px-3 py-1.5 rounded-lg ring-1 ring-gray-200 text-sm hover:bg-gray-50 disabled:opacity-50"
+                  onClick={assignSelected}
+                  disabled={!assignMember || Object.values(selected).filter(Boolean).length === 0 || assigning}
+                  title={Object.values(selected).filter(Boolean).length === 0 ? 'Select rows first' : 'Assign selected rows'}
+                >
+                  {assigning ? 'Assigning…' : 'Assign'}
+                </button>
+              </div>
+            )}
           </div>
 
           {/* Meta */}
