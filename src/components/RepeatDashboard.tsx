@@ -202,6 +202,7 @@ export default function RepeatDashboard() {
   const [ncGrouping, setNcGrouping] = useState<Record<string, Record<string, string>>>({});
   const [ncGroupOpen, setNcGroupOpen] = useState<{ key: keyof NocoRepeatRow | null } >({ key: null });
   const [ncGroupNewName, setNcGroupNewName] = useState<string>('');
+  const [ncGroupAddInput, setNcGroupAddInput] = useState<Record<string, string>>({});
   // Explicit group name definitions so empty groups can exist
   const [ncGroupDefs, setNcGroupDefs] = useState<Record<string, string[]>>({});
   // Group dialog: search filter for ungrouped list
@@ -2179,6 +2180,13 @@ export default function RepeatDashboard() {
                 });
               };
               const onDropTo = (grp: string) => (e: React.DragEvent<HTMLDivElement>) => { const cat = e.dataTransfer.getData('text/plain'); if (cat) assign(cat, grp); };
+              const addToGroup = (grp: string) => {
+                const input = (ncGroupAddInput[grp] || '').trim();
+                if (!input) return;
+                const cats = input.split(',').map(c => c.trim()).filter(Boolean);
+                cats.forEach(cat => assign(cat, grp));
+                setNcGroupAddInput(prev => ({ ...prev, [grp]: '' }));
+              };
               return (
                 <div className="fixed inset-0 bg-black/30 z-50 flex items-center justify-center p-2 md:p-4" onClick={()=>setNcGroupOpen({key:null})}>
                   <div className="bg-white rounded-lg border shadow-lg w-full max-w-4xl md:max-w-5xl p-3 md:p-4 max-h-[90vh] overflow-y-auto" onClick={(e)=>e.stopPropagation()}>
@@ -2217,12 +2225,33 @@ export default function RepeatDashboard() {
                         </div>
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                           {groups.map(g => (
-                            <div key={g} className="border rounded p-2 min-h-[100px] md:min-h-[120px]" onDragOver={(e)=>e.preventDefault()} onDrop={onDropTo(g)}>
-                              <div className="text-xs font-medium mb-1">{g}</div>
-                              <div className="flex flex-wrap gap-1">
+                            <div key={g} className="border-2 border-indigo-300 rounded p-2 min-h-[100px] md:min-h-[120px]" onDragOver={(e)=>e.preventDefault()} onDrop={onDropTo(g)}>
+                              <div className="flex items-center gap-2 mb-1">
+                                <div className="text-xs font-semibold text-indigo-700">{g}</div>
+                                <span className="text-xs px-1.5 py-0.5 bg-indigo-100 text-indigo-600 rounded-full font-medium">
+                                  {Object.entries(gmap).filter(([,grp])=>grp===g).length}
+                                </span>
+                              </div>
+                              <div className="flex flex-wrap gap-1 mb-2">
                                 {Object.entries(gmap).filter(([,grp])=>grp===g).map(([c])=> (
-                                  <span key={c} className="px-2 py-1 bg-indigo-50 border rounded text-xs" draggable onDragStart={(e)=>e.dataTransfer.setData('text/plain', c)} title={c}>{c}</span>
+                                  <span key={c} className="px-2 py-1 bg-indigo-100 border-2 border-indigo-400 rounded text-xs font-medium text-indigo-900" draggable onDragStart={(e)=>e.dataTransfer.setData('text/plain', c)} title={c}>{c}</span>
                                 ))}
+                              </div>
+                              <div className="flex gap-1 pt-1 border-t">
+                                <input
+                                  className="flex-1 border rounded px-2 py-1 text-xs"
+                                  placeholder="Add items (comma-separated)"
+                                  value={ncGroupAddInput[g] || ''}
+                                  onChange={(e) => setNcGroupAddInput(prev => ({ ...prev, [g]: e.target.value }))}
+                                  onKeyPress={(e) => { if (e.key === 'Enter') addToGroup(g); }}
+                                />
+                                <button
+                                  className="px-2 py-1 text-xs bg-indigo-600 text-white rounded hover:bg-indigo-700"
+                                  onClick={() => addToGroup(g)}
+                                  title="Add categories to this group"
+                                >
+                                  +
+                                </button>
                               </div>
                             </div>
                           ))}
