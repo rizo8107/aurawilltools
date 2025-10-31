@@ -756,6 +756,10 @@ export default function RepeatCampaign({ initialOrderNumber = '', hideFeedback =
                       <option value="Wrong Number">Wrong Number</option>
                       <option value="Call Later">Call Later</option>
                       <option value="Invalid Number">Invalid Number</option>
+                      <option value="DNP1">DNP1</option>
+                      <option value="DNP2">DNP2</option>
+                      <option value="DNP3">DNP3</option>
+                      <option value="DNP4">DNP4</option>
                     </select>
                   </div>
                 </div>
