@@ -1,3 +1,4 @@
+import { createClient } from '@supabase/supabase-js';
 // Centralized Supabase client constants for browser-side REST usage
 // IMPORTANT: Use only the anon key on the client. Never expose service_role keys in client code.
 
@@ -14,3 +15,6 @@ export const sbHeadersObj = {
 export function sbHeaders(): HeadersInit {
   return { ...sbHeadersObj };
 }
+
+// Supabase client for supabase-js usage in the app
+export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);

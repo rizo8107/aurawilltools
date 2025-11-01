@@ -4,7 +4,7 @@ import {
   Filter, X, ChevronLeft, ChevronRight, Info, Download, Plus
 } from 'lucide-react';
 import OrderDetailsDialog from './OrderDetailsDialog';
-import { SUPABASE_URL, sbHeadersObj as sbHeaders } from '../lib/supabaseClient';
+import { SUPABASE_URL, sbHeadersObj as sbHeaders, supabase } from '../lib/supabaseClient';
 
 /** ---------------------------------------------------------
  * Types
@@ -566,27 +566,57 @@ export default function RepeatDashboard() {
     try {
       setAssigning(true);
       const tid = Number(activeTeamId) || null;
-      
-      // Directly update orders_All table for each selected row
-      await Promise.all(selectedRows.map(async (r) => {
-        const url = `${SUPABASE_URL}/rest/v1/orders_All?email=eq.${encodeURIComponent(r.email)}&phone=eq.${encodeURIComponent(r.phone)}`;
-        const res = await fetch(url, {
-          method: 'PATCH',
-          headers: sbHeaders,
-          body: JSON.stringify({ assigned_to: handle, team_id: tid })
-        });
-        if (!res.ok) {
-          const errText = await res.text();
-          console.error(`Failed to assign ${r.email}:`, errText);
+      const nowIso = new Date().toISOString();
+      // Collect all order_numbers from the selected rows
+      const orderIds = Array.from(new Set(
+        selectedRows.flatMap(r => (r.order_numbers || []).map(n => String(n).trim()).filter(Boolean))
+      ));
+
+      if (orderIds.length === 0) {
+        setCallMsg('No order IDs found in the selected rows.');
+        setCallTone('error');
+        return;
+      }
+
+      // Prefer supabase-js to avoid REST quoting issues
+      const payload = { assigned_to: handle, assigned_at: nowIso, team_id: tid } as const;
+      // Try order_id (numeric list)
+      let okCount = 0;
+      let failCount = 0;
+      let lastErr = '';
+      {
+        const tryIdsNum = orderIds
+          .map((x) => Number(x))
+          .filter((n) => Number.isFinite(n)) as number[];
+        if (tryIdsNum.length) {
+          const { data, error } = await supabase
+            .from('orders_All')
+            .update(payload)
+            .in('order_id', tryIdsNum)
+            .select('order_id');
+          if (!error) okCount += data?.length || 0; else lastErr = error.message;
         }
-      }));
-      
+      }
+      // Fallback to or_order_id (text list)
+      if (okCount === 0) {
+        const { data, error } = await supabase
+          .from('orders_All')
+          .update(payload)
+          .in('or_order_id', orderIds)
+          .select('or_order_id');
+        if (!error) okCount += data?.length || 0; else { lastErr = error.message; failCount = orderIds.length; }
+      }
+      if (okCount === 0) {
+        throw new Error(`Assign failed for all orders. ${lastErr || ''}`);
+      }
+
       // Reload to reflect changes
       await loadAssigned();
       // Clear selection after assignment
       setSelected({});
       setAssignMember('');
-      setCallMsg(`Successfully assigned ${selectedRows.length} lead(s) to ${handle}`);
+      const totalOrders = selectedRows.reduce((s, r) => s + ((r.order_numbers || []).length || 0), 0);
+      setCallMsg(`Assigned ${okCount} / ${totalOrders} order(s) to ${handle}${failCount ? ` (${failCount} failed)` : ''}`);
       setCallTone('success');
     } catch (e: any) {
       console.error('Failed to assign leads:', e);

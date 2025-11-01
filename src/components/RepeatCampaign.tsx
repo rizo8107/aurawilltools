@@ -81,12 +81,21 @@ export default function RepeatCampaign({ initialOrderNumber = '', hideFeedback =
   // Previous feedback fetched from call_feedback
   const [prevFeedback, setPrevFeedback] = useState<any | null>(null);
   const [selectedCallStatus, setSelectedCallStatus] = useState('');
+  const [readOnlyFeedback, setReadOnlyFeedback] = useState(false);
   
   // Caller selection removed
   
   // State for the feedback form
   // Reference to track if initial search has been performed
   const initialSearchDone = useRef(false);
+
+  // Helper to format timestamps safely
+  const formatDateTime = (v: any) => {
+    const s = String(v || '').trim();
+    if (!s) return '—';
+    const d = new Date(s);
+    return isNaN(d.getTime()) ? '—' : d.toLocaleString();
+  };
 
   const [feedbackForm, setFeedbackForm] = useState<FeedbackForm>({
     firstTimeReason: '',
@@ -162,28 +171,66 @@ export default function RepeatCampaign({ initialOrderNumber = '', hideFeedback =
     }
   }, [initialOrderNumber, hideFeedback]); // eslint-disable-line react-hooks/exhaustive-deps
   
-  // Load previous feedback from call_feedback for this order_number
+  // Load previous feedback from call_feedback by customer (phone) so any order shows the filled form
   useEffect(() => {
     const loadPrev = async () => {
+      const phone = (customerData?.customer_phone || '').trim();
       const onum = (feedbackForm.orderId || orderId || '').trim();
-      if (!onum) { setPrevFeedback(null); return; }
+      if (!phone && !onum) { setPrevFeedback(null); setReadOnlyFeedback(false); return; }
       try {
-        const url = `https://app-supabase.9krcxo.easypanel.host/rest/v1/call_feedback?order_number=eq.${encodeURIComponent(onum)}&select=*&order=created_at.desc&limit=1`;
+        // Prefer fetching by customer_phone, fallback to order_number
+        let url = '';
+        if (phone) {
+          url = `https://app-supabase.9krcxo.easypanel.host/rest/v1/call_feedback?customer_phone=eq.${encodeURIComponent(phone)}&select=*&order=created_at.desc&limit=1`;
+        } else {
+          url = `https://app-supabase.9krcxo.easypanel.host/rest/v1/call_feedback?order_number=eq.${encodeURIComponent(onum)}&select=*&order=created_at.desc&limit=1`;
+        }
         const res = await fetch(url, {
           headers: {
             'apikey': 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNzUwMDEyMjAwLCJleHAiOjE5MDc3Nzg2MDB9.eJ81pv114W4ZLvg0E-AbNtNZExPoLYbxGdeWTY5PVVs',
             'Authorization': 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNzUwMDEyMjAwLCJleHAiOjE5MDc3Nzg2MDB9.eJ81pv114W4ZLvg0E-AbNtNZExPoLYbxGdeWTY5PVVs'
           }
         });
-        if (!res.ok) { setPrevFeedback(null); return; }
+        if (!res.ok) { setPrevFeedback(null); setReadOnlyFeedback(false); return; }
         const arr = await res.json();
-        setPrevFeedback(Array.isArray(arr) && arr.length ? arr[0] : null);
+        const prev = (Array.isArray(arr) && arr.length ? arr[0] : null);
+        setPrevFeedback(prev);
+        if (prev) {
+          setReadOnlyFeedback(true);
+          // Prefill the form fields from previous feedback
+          setFeedbackForm(prevState => ({
+            ...prevState,
+            firstTimeReason: prev.first_time_reason || prevState.firstTimeReason,
+            heardFrom: prev.heard_from || prevState.heardFrom,
+            reorderReason: prev.reorder_reason || prevState.reorderReason,
+            likedFeatures: prev.liked_features || prevState.likedFeatures,
+            usageRecipe: prev.usage_recipe || prevState.usageRecipe,
+            usageTime: prev.usage_time || prevState.usageTime,
+            perceivedDifference: prev.perceived_difference || prevState.perceivedDifference,
+            userProfile: prev.family_user || prevState.userProfile,
+            gender: (prev.gender || prev.gender_text || prevState.gender) as any,
+            age: prev.age || prevState.age,
+            wouldRecommend: (prev.would_recommend || prevState.wouldRecommend) as any,
+            generalFeedback: prev.new_product_expectation || prevState.generalFeedback,
+            monthlyDelivery: (prev.monthly_delivery || prevState.monthlyDelivery) as any,
+            reviewReceived: (prev.review_received || prevState.reviewReceived) as any,
+            maritalStatus: prev.marital_status || prevState.maritalStatus,
+            profession: prev.profession_text || prevState.profession,
+            city: prev.city_text || prevState.city,
+            orderType: prev.order_type || prevState.orderType,
+          }));
+          // Adopt previous call status if present (default to 'Called')
+          setSelectedCallStatus(prev.call_status || 'Called');
+        } else {
+          setReadOnlyFeedback(false);
+        }
       } catch {
         setPrevFeedback(null);
+        setReadOnlyFeedback(false);
       }
     };
     loadPrev();
-  }, [feedbackForm.orderId, orderId]);
+  }, [customerData, feedbackForm.orderId, orderId]);
   
   // Caller selection removed
   
@@ -695,7 +742,7 @@ export default function RepeatCampaign({ initialOrderNumber = '', hideFeedback =
               <div className="bg-white rounded-lg shadow-md p-4 mb-6">
                 <h3 className="text-lg font-semibold mb-2">Previous Feedback</h3>
                 <div className="text-sm text-gray-700 grid grid-cols-1 md:grid-cols-2 gap-2">
-                  <div><span className="text-gray-500">Logged at:</span> {new Date(prevFeedback.created_at).toLocaleString()}</div>
+                  <div><span className="text-gray-500">Logged at:</span> {formatDateTime(prevFeedback.created_at)}</div>
                   <div><span className="text-gray-500">Agent:</span> {prevFeedback.agent || '—'}</div>
                   <div><span className="text-gray-500">Call Status:</span> {prevFeedback.call_status || '—'}</div>
                   <div><span className="text-gray-500">Heard From:</span> {prevFeedback.heard_from || '—'}</div>
@@ -847,6 +894,7 @@ export default function RepeatCampaign({ initialOrderNumber = '', hideFeedback =
                     const daysGap = Math.round(diffInMs / (1000 * 60 * 60 * 24));
                     daysGapText = `${daysGap} days since last order`;
                   }
+                  const isFilled = !!(prevFeedback && String(prevFeedback.order_number || '') === String(order.order_number));
 
                   return (
                     <div key={order.order_number} className="mb-8 relative">
@@ -856,15 +904,18 @@ export default function RepeatCampaign({ initialOrderNumber = '', hideFeedback =
                       )}
                       
                       <div className="flex">
-                        <div className="flex-shrink-0 bg-blue-500 rounded-full w-8 h-8 flex items-center justify-center z-10">
+                        <div className={`flex-shrink-0 rounded-full w-8 h-8 flex items-center justify-center z-10 ${isFilled ? 'bg-emerald-600' : 'bg-blue-500'}`}>
                           <span className="text-white text-sm font-medium">{index + 1}</span>
                         </div>
                         <div className="ml-4 flex-1">
-                          <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
+                          <div className={`rounded-lg p-4 border ${isFilled ? 'bg-emerald-50 border-emerald-300' : 'bg-gray-50 border-gray-200'}`}>
                             <div className="flex flex-wrap justify-between mb-1">
                               <h3 className="text-lg font-medium">Order #{order.order_number}</h3>
                               <span className="text-gray-500 text-sm">{order.order_date}</span>
                             </div>
+                            {isFilled && (
+                              <div className="text-xs text-emerald-700 mb-2">Feedback filled on {formatDateTime(prevFeedback?.created_at)}</div>
+                            )}
                             {daysGapText && (
                               <p className="text-xs text-blue-600 mb-2 text-right">{daysGapText}</p>
                             )}
@@ -896,8 +947,16 @@ export default function RepeatCampaign({ initialOrderNumber = '', hideFeedback =
           {!hideFeedback && (
             <div className="lg:w-1/2">
               <div className="bg-white rounded-lg shadow-md p-6 h-full">
-                <h2 className="text-xl font-semibold mb-4">Customer Feedback Form</h2>
+                <h2 className="text-xl font-semibold mb-2">Customer Feedback Form</h2>
+                {readOnlyFeedback && (
+                  <div className="mb-3 text-sm text-emerald-800 bg-emerald-50 border border-emerald-200 rounded p-2">
+                    Feedback already submitted on <strong>{formatDateTime(prevFeedback?.created_at)}</strong>
+                    {prevFeedback?.order_number ? (<span> for Order <strong>#{String(prevFeedback.order_number)}</strong></span>) : null}.
+                    The form below is view-only to avoid duplicates.
+                  </div>
+                )}
                 <form onSubmit={submitFeedback}>
+                  <fieldset disabled={readOnlyFeedback}>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
                     <div>
                       <label className="block text-gray-700 text-sm font-medium mb-1">
@@ -1184,17 +1243,20 @@ export default function RepeatCampaign({ initialOrderNumber = '', hideFeedback =
                     />
                   </div>
                   </div>
+                  </fieldset>
 
                   <button
                     type="submit"
-                    className="bg-green-600 hover:bg-green-700 text-white px-6 py-2 rounded-lg flex items-center justify-center transition-colors"
+                    className="bg-green-600 hover:bg-green-700 disabled:bg-gray-300 disabled:text-gray-600 text-white px-6 py-2 rounded-lg flex items-center justify-center transition-colors"
+                    disabled={loading || readOnlyFeedback}
+                    title={readOnlyFeedback ? 'Feedback already submitted for this customer' : 'Submit feedback'}
                   >
                     {loading ? (
                       <span className="inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin mr-2"></span>
                     ) : (
                       <ArrowRight className="w-4 h-4 mr-2" />
                     )}
-                    Submit Feedback
+                    {readOnlyFeedback ? 'Already submitted' : 'Submit Feedback'}
                   </button>
                 </form>
               </div>
