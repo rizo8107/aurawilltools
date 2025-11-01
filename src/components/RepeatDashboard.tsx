@@ -1938,20 +1938,35 @@ export default function RepeatDashboard() {
                         </tr>
                       </thead>
                       <tbody>
-                        {rows.map(r => (
+                        {rows.map(r => {
+                          const gmapLocal = ncGrouping[String(key)] || {};
+                          const members = Object.entries(gmapLocal).filter(([,grp])=>grp===r.name).map(([cat])=>cat);
+                          const isGroup = members.length > 0;
+                          return (
                           <tr
                             key={r.name}
-                            className="border-t hover:bg-indigo-50 cursor-pointer"
+                            className={`border-t cursor-pointer ${
+                              isGroup 
+                                ? 'bg-indigo-50 hover:bg-indigo-100 border-l-4 border-l-indigo-500' 
+                                : 'hover:bg-indigo-50'
+                            }`}
                             onClick={() => {
-                              const gmapLocal = ncGrouping[String(key)] || {};
-                              const members = Object.entries(gmapLocal).filter(([,grp])=>grp===r.name).map(([cat])=>cat);
                               if (members.length) openNcGroupDrill(key, r.name, members);
                               else openNcDrill(key, r.name);
                             }}
-                            title="Click to view matching rows"
+                            title={isGroup ? `Group: ${members.length} categories` : 'Click to view matching rows'}
                           >
                             <td className="px-3 py-2 max-w-[520px]">
-                              <div className="truncate" title={r.name}>{r.name}</div>
+                              <div className="flex items-center gap-2">
+                                <div className="truncate" title={r.name}>
+                                  <span className={isGroup ? 'font-semibold text-indigo-900' : ''}>{r.name}</span>
+                                </div>
+                                {isGroup && (
+                                  <span className="shrink-0 text-xs px-1.5 py-0.5 bg-indigo-600 text-white rounded-full font-medium">
+                                    {members.length}
+                                  </span>
+                                )}
+                              </div>
                               {(() => {
                                 const hints = summarizeCategory(key, r.name);
                                 return hints.length ? (
@@ -1964,7 +1979,8 @@ export default function RepeatDashboard() {
                             <td className="px-3 py-2">{r.count}</td>
                             <td className="px-3 py-2">{r.pct}%</td>
                           </tr>
-                        ))}
+                          );
+                        })}
                         {rows.length === 0 && (
                           <tr><td className="px-3 py-3 text-gray-600" colSpan={3}>No data</td></tr>
                         )}
@@ -2150,9 +2166,7 @@ export default function RepeatDashboard() {
               const defsForKey = ncGroupDefs[String(key)] || [];
               const mappedGroups = Array.from(new Set(Object.values(gmap))).filter(Boolean);
               const groups = Array.from(new Set([ ...defsForKey, ...mappedGroups ]));
-              const ungrouped = allCats.filter(c => !gmap[c]);
               const q = ncGroupUngroupedQuery.trim().toLowerCase();
-              const filteredUngrouped = q ? ungrouped.filter(c => c.toLowerCase().includes(q)) : ungrouped;
               const persist = (nextMap: typeof ncGrouping, nextDefs: typeof ncGroupDefs) => {
                 try {
                   localStorage.setItem('nc_grouping_v1', JSON.stringify(nextMap));
@@ -2208,10 +2222,34 @@ export default function RepeatDashboard() {
                           />
                         </div>
                         <div className="flex-1 overflow-y-auto flex flex-col gap-1 pr-1">
-                          {filteredUngrouped.map(c => (
-                            <div key={c} className="px-2 py-1 bg-slate-50 rounded border" draggable onDragStart={(e)=>e.dataTransfer.setData('text/plain', c)} title={c}>{c}</div>
-                          ))}
-                          {filteredUngrouped.length===0 && (
+                          {allCats.map(c => {
+                            const isGrouped = !!gmap[c];
+                            const isVisible = !q || c.toLowerCase().includes(q);
+                            if (!isVisible) return null;
+                            return (
+                              <div 
+                                key={c} 
+                                className={`px-2 py-1 rounded border ${
+                                  isGrouped 
+                                    ? 'bg-indigo-50 border-indigo-300 text-indigo-900 font-medium' 
+                                    : 'bg-slate-50 border-slate-200'
+                                }`}
+                                draggable 
+                                onDragStart={(e)=>e.dataTransfer.setData('text/plain', c)} 
+                                title={isGrouped ? `Grouped in: ${gmap[c]}` : c}
+                              >
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="text-xs truncate">{c}</span>
+                                  {isGrouped && (
+                                    <span className="text-xs px-1.5 py-0.5 bg-indigo-200 text-indigo-700 rounded shrink-0">
+                                      {gmap[c]}
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })}
+                          {allCats.filter(c => !q || c.toLowerCase().includes(q)).length===0 && (
                             <div className="text-xs text-gray-500">No matches</div>
                           )}
                         </div>
