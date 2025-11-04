@@ -1588,6 +1588,74 @@ export default function RepeatDashboard() {
           </div>
         </div>
       )}
+
+      {/* Noco Insights drilldown dialog */}
+      {ncDrillOpen && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => setNcDrillOpen(false)}>
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-5xl max-h-[85vh] overflow-auto" onClick={(e)=>e.stopPropagation()}>
+            <div className="p-3 border-b flex items-center justify-between">
+              <div className="font-semibold text-sm">{ncDrillTitle || 'Matching rows'}</div>
+              <button className="text-sm px-3 py-1 border rounded-lg" onClick={() => setNcDrillOpen(false)}>Close</button>
+            </div>
+            <div className="p-3">
+              {(() => {
+                const total = ncDrillRows.length;
+                const pageCount = Math.max(1, Math.ceil(total / ncDrillPageSize));
+                const safePage = Math.min(Math.max(1, ncDrillPage), pageCount);
+                const start = (safePage - 1) * ncDrillPageSize;
+                const slice = ncDrillRows.slice(start, start + ncDrillPageSize);
+                return (
+                  <>
+                    <div className="overflow-x-auto border rounded-lg">
+                      <table className="w-full text-sm">
+                        <thead className="bg-gray-50 text-gray-700">
+                          <tr>
+                            <th className="text-left px-3 py-2">Date</th>
+                            <th className="text-left px-3 py-2">Agent</th>
+                            <th className="text-left px-3 py-2">Order</th>
+                            <th className="text-left px-3 py-2">Phone</th>
+                            <th className="text-left px-3 py-2">Call Status</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {slice.length === 0 ? (
+                            <tr><td className="px-3 py-3 text-center text-gray-600" colSpan={5}>No rows</td></tr>
+                          ) : (
+                            slice.map((r, i) => (
+                              <tr key={`ncdr-${i}`} className="border-t">
+                                <td className="px-3 py-2 whitespace-nowrap">{(r as any).Date || '—'}</td>
+                                <td className="px-3 py-2">{(r as any).agent || '—'}</td>
+                                <td className="px-3 py-2">{String((r as any).order_number ?? '—')}</td>
+                                <td className="px-3 py-2">{(r as any).customer_phone || '—'}</td>
+                                <td className="px-3 py-2">{(r as any).call_status || '—'}</td>
+                              </tr>
+                            ))
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                    <div className="flex items-center justify-between mt-2 text-sm text-gray-700">
+                      <div>
+                        Showing <strong>{total ? start + 1 : 0}-{Math.min(start + ncDrillPageSize, total)}</strong> of <strong>{total}</strong>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <select title="Rows per page" className="border rounded px-2 py-1 text-sm" value={ncDrillPageSize} onChange={(e)=>{ setNcDrillPageSize(Number(e.target.value)); setNcDrillPage(1); }}>
+                          {[20,50,100,200].map(n=> <option key={n} value={n}>{n} / page</option>)}
+                        </select>
+                        <div className="flex items-center gap-1">
+                          <IconButton onClick={()=>setNcDrillPage(p=>Math.max(1,p-1))} disabled={safePage<=1} title="Previous"><ChevronLeft className="w-4 h-4"/></IconButton>
+                          <div className="min-w-[80px] text-center">Page <strong>{safePage}</strong> / {pageCount}</div>
+                          <IconButton onClick={()=>setNcDrillPage(p=>Math.min(pageCount,p+1))} disabled={safePage>=pageCount} title="Next"><ChevronRight className="w-4 h-4"/></IconButton>
+                        </div>
+                      </div>
+                    </div>
+                  </>
+                );
+              })()}
+            </div>
+          </div>
+        </div>
+      )}
       {callMsg && (
         <div className={clsx('text-sm p-3 rounded-lg border',
           callTone==='success' && 'text-emerald-700 bg-emerald-50 border-emerald-200',
