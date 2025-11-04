@@ -1615,6 +1615,20 @@ export default function RepeatDashboard() {
                             <th className="text-left px-3 py-2">Order</th>
                             <th className="text-left px-3 py-2">Phone</th>
                             <th className="text-left px-3 py-2">Call Status</th>
+                            <th className="text-left px-3 py-2">Heard From</th>
+                            <th className="text-left px-3 py-2">First-time Reason</th>
+                            <th className="text-left px-3 py-2">Reorder Reason</th>
+                            <th className="text-left px-3 py-2">Liked Features</th>
+                            <th className="text-left px-3 py-2">Usage Recipe</th>
+                            <th className="text-left px-3 py-2">Usage Time</th>
+                            <th className="text-left px-3 py-2">Family User</th>
+                            <th className="text-left px-3 py-2">Gender</th>
+                            <th className="text-left px-3 py-2">Age</th>
+                            <th className="text-left px-3 py-2">Profession</th>
+                            <th className="text-left px-3 py-2">City</th>
+                            <th className="text-left px-3 py-2">NPE</th>
+                            <th className="text-left px-3 py-2">Marital</th>
+                            <th className="text-left px-3 py-2">Subscription</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -1628,6 +1642,20 @@ export default function RepeatDashboard() {
                                 <td className="px-3 py-2">{String((r as any).order_number ?? '—')}</td>
                                 <td className="px-3 py-2">{(r as any).customer_phone || '—'}</td>
                                 <td className="px-3 py-2">{(r as any).call_status || '—'}</td>
+                                <td className="px-3 py-2 truncate max-w-[240px]" title={(r as any).heard_from || ''}>{(r as any).heard_from || '—'}</td>
+                                <td className="px-3 py-2 truncate max-w-[260px]" title={(r as any).first_time_reason || (r as any).firstTimeReason || ''}>{(r as any).first_time_reason || (r as any).firstTimeReason || '—'}</td>
+                                <td className="px-3 py-2 truncate max-w-[260px]" title={(r as any).reorder_reason || (r as any).reorderReason || ''}>{(r as any).reorder_reason || (r as any).reorderReason || '—'}</td>
+                                <td className="px-3 py-2 truncate max-w-[260px]" title={(r as any).liked_features || (r as any).likedFeatures || ''}>{(r as any).liked_features || (r as any).likedFeatures || '—'}</td>
+                                <td className="px-3 py-2 truncate max-w-[240px]" title={(r as any).usage_recipe || ''}>{(r as any).usage_recipe || '—'}</td>
+                                <td className="px-3 py-2 truncate max-w-[200px]" title={(r as any).usage_time || ''}>{(r as any).usage_time || '—'}</td>
+                                <td className="px-3 py-2 truncate max-w-[200px]" title={(r as any).family_user || ''}>{(r as any).family_user || '—'}</td>
+                                <td className="px-3 py-2">{(r as any).gender || (r as any).gender_text || '—'}</td>
+                                <td className="px-3 py-2">{(r as any).age || '—'}</td>
+                                <td className="px-3 py-2 truncate max-w-[220px]" title={(r as any).profession_text || ''}>{(r as any).profession_text || '—'}</td>
+                                <td className="px-3 py-2 truncate max-w-[220px]" title={(r as any).city || ''}>{(r as any).city || '—'}</td>
+                                <td className="px-3 py-2 truncate max-w-[240px]" title={(r as any).new_product_expectation || ''}>{(r as any).new_product_expectation || '—'}</td>
+                                <td className="px-3 py-2">{(r as any).marital_status || '—'}</td>
+                                <td className="px-3 py-2">{(r as any).monthly_subscriptions || '—'}</td>
                               </tr>
                             ))
                           )}

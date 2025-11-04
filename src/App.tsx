@@ -16,10 +16,11 @@ import NdrAllocationPage from './components/NdrAllocationPage';
 import TeamAnalyticsPage from './components/TeamAnalyticsPage';
 import AgentAnalyticsPage from './components/AgentAnalyticsPage';
 import { Package, Printer, Truck, FileText, Users, LogOut, FileSpreadsheet, RefreshCw } from 'lucide-react';
+import SubscriptionManager from './components/SubscriptionManager';
 import ManualOrdersDashboard from './components/ManualOrdersDashboard';
 import SegmentationPage from './components/SegmentationPage';
 
-type TabType = 'order' | 'printslip' | 'tracking' | 'manifest' | 'campaign' | 'repeatorders' | 'repeat_dashboard' | 'orderhistory' | 'gstinvoice' | 'ndr' | 'teams' | 'allocation' | 'team_analytics' | 'agent_analytics' | 'segmentation' | 'manual_orders';
+type TabType = 'order' | 'printslip' | 'tracking' | 'manifest' | 'campaign' | 'repeatorders' | 'repeat_dashboard' | 'orderhistory' | 'gstinvoice' | 'ndr' | 'teams' | 'allocation' | 'team_analytics' | 'agent_analytics' | 'segmentation' | 'manual_orders' | 'subscription_manager';
 
 function App() {
   const [activeTab, setActiveTab] = useState<TabType>('order');
@@ -84,6 +85,7 @@ function App() {
     { id: 'segmentation', label: 'Segmentation', icon: <FileText size={20} /> },
     { id: 'gstinvoice', label: 'GST Invoice', icon: <FileSpreadsheet size={20} /> },
     { id: 'manual_orders', label: 'Manual Orders', icon: <FileText size={20} /> },
+    { id: 'subscription_manager', label: 'Subscriptions', icon: <FileText size={20} /> },
   ];
 
   const pageDescriptions: Record<TabType, string> = {
@@ -104,6 +106,7 @@ function App() {
     agent_analytics: 'Agent-centric analytics powered by NocoDB (calls, emails, missed)',
     segmentation: 'Group and export orders by State/City/Pincode/Area',
     manual_orders: 'Create manual orders, update status, and record agent notes with full audit trail',
+    subscription_manager: 'Manage subscription plans, subscribers, and Shopify auto-orders',
   };
 
   // Handle logout
@@ -174,6 +177,7 @@ function App() {
             activeTab === 'order' ? 'max-w-6xl' : 
             activeTab === 'tracking' || activeTab === 'manifest' ? 'max-w-3xl' : 
             activeTab === 'campaign' ? 'max-w-5xl' : 
+            activeTab === 'subscription_manager' ? 'max-w-5xl' : 
             activeTab === 'team_analytics' || activeTab === 'agent_analytics' ? 'max-w-[95vw]' : 
             activeTab === 'ndr' || activeTab === 'repeat_dashboard' || activeTab === 'manual_orders' ? 'max-w-none' : 
             activeTab === 'gstinvoice' || activeTab === 'orderhistory' ? 'max-w-7xl' : 'max-w-4xl'
@@ -222,6 +226,7 @@ function App() {
             {activeTab === 'agent_analytics' && <AgentAnalyticsPage />}
             {activeTab === 'segmentation' && <SegmentationPage />}
             {activeTab === 'manual_orders' && <ManualOrdersDashboard />}
+            {activeTab === 'subscription_manager' && <SubscriptionManager />}
           </div>
         </main>
         
