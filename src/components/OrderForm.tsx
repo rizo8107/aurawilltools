@@ -61,6 +61,23 @@ type BulkItem = {
   serviceable?: boolean;
 };
 
+const COURIER_PARTNERS = ['Indiapost', 'Stcourier'] as const;
+const AGENT_NAMES = ['Vidhula', 'Shijo', 'Mahesh', 'Nandhini', 'Akash'] as const;
+
+const getTodayInputValue = (): string => {
+  const now = new Date();
+  const timezoneOffset = now.getTimezoneOffset();
+  const localDate = new Date(now.getTime() - timezoneOffset * 60000);
+  return localDate.toISOString().split('T')[0] ?? '';
+};
+
+const formatDateToDDMMYYYY = (value: string): string => {
+  if (!value) return '';
+  const [year, month, day] = value.split('-');
+  if (!year || !month || !day) return value;
+  return `${day.padStart(2, '0')}-${month.padStart(2, '0')}-${year}`;
+};
+
 const OrderForm = () => {
   const [mode, setMode] = useState<Mode>('single');
   const [orderNumber, setOrderNumber] = useState('');
@@ -72,6 +89,9 @@ const OrderForm = () => {
   const [trackingStatus, setTrackingStatus] = useState<FormStatus>('idle');
   const [trackingError, setTrackingError] = useState('');
   const [callerName, setCallerName] = useState<string | null>(null);
+  const [dispatchDate, setDispatchDate] = useState(() => getTodayInputValue());
+  const [courierPartner, setCourierPartner] = useState<typeof COURIER_PARTNERS[number]>(COURIER_PARTNERS[0]);
+  const [agentName, setAgentName] = useState<typeof AGENT_NAMES[number]>(AGENT_NAMES[0]);
 
   // Bulk mode state
   const [bulkInput, setBulkInput] = useState('');
@@ -98,7 +118,12 @@ const OrderForm = () => {
   };
 
   const submitSingleOrder = async (order: string): Promise<boolean | null> => {
-    const payload = { Order: order.trim() };
+    const payload = {
+      Order: order.trim(),
+      dispatch_date: formatDateToDDMMYYYY(dispatchDate),
+      courier_partner: courierPartner,
+      agent_name: agentName,
+    };
     const response = await fetch('https://auto-n8n.9krcxo.easypanel.host/webhook/cbf01aea-9be4-4cba-9b1c-0a0367a6f823', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -236,7 +261,10 @@ const OrderForm = () => {
 
     try {
       const payload = {
-        Order: orderNumber.trim()
+        Order: orderNumber.trim(),
+        dispatch_date: `${dispatchDate.slice(0, 4)}-${dispatchDate.slice(5, 7)}-${dispatchDate.slice(8, 10)}`,
+        courier_partner: courierPartner,
+        agent_name: agentName,
       };
 
       const response = await fetch('https://auto-n8n.9krcxo.easypanel.host/webhook/cbf01aea-9be4-4cba-9b1c-0a0367a6f823', {
@@ -351,6 +379,47 @@ const OrderForm = () => {
             </div>
           </div>
 
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
+            <label className="block text-sm font-medium text-gray-700">
+              Dispatch Date
+              <input
+                type="date"
+                value={dispatchDate}
+                onChange={(e) => setDispatchDate(e.target.value)}
+                className="mt-1 w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                required
+              />
+            </label>
+            <label className="block text-sm font-medium text-gray-700">
+              Courier Partner
+              <select
+                value={courierPartner}
+                onChange={(e) => setCourierPartner(e.target.value as typeof COURIER_PARTNERS[number])}
+                className="mt-1 w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              >
+                {COURIER_PARTNERS.map((partner) => (
+                  <option key={partner} value={partner}>
+                    {partner}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="block text-sm font-medium text-gray-700">
+              Agent Name
+              <select
+                value={agentName}
+                onChange={(e) => setAgentName(e.target.value as typeof AGENT_NAMES[number])}
+                className="mt-1 w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              >
+                {AGENT_NAMES.map((agent) => (
+                  <option key={agent} value={agent}>
+                    {agent}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+
           {/* Status Messages */}
           <div className="mt-4">
             {status === 'error' && (
@@ -383,6 +452,48 @@ const OrderForm = () => {
                 className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 h-40 font-mono"
               />
               <p className="text-xs text-gray-500 mt-1">Tip: Paste from Excel/Sheets. One order per line.</p>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+              <label className="block text-sm font-medium text-gray-700">
+                Dispatch Date
+                <input
+                  type="date"
+                  value={dispatchDate}
+                  onChange={(e) => setDispatchDate(e.target.value)}
+                  className="mt-1 w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  required
+                />
+              </label>
+              <label className="block text-sm font-medium text-gray-700">
+                Courier Partner
+                <select
+                  value={courierPartner}
+                  onChange={(e) => setCourierPartner(e.target.value as typeof COURIER_PARTNERS[number])}
+                  className="mt-1 w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                >
+                  {COURIER_PARTNERS.map((partner) => (
+                    <option key={partner} value={partner}>
+                      {partner}
+                      {partner}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="block text-sm font-medium text-gray-700">
+                Agent Name
+                <select
+                  value={agentName}
+                  onChange={(e) => setAgentName(e.target.value as typeof AGENT_NAMES[number])}
+                  className="mt-1 w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                >
+                  {AGENT_NAMES.map((agent) => (
+                    <option key={agent} value={agent}>
+                      {agent}
+                    </option>
+                  ))}
+                </select>
+              </label>
             </div>
             <div className="flex items-end">
               <button

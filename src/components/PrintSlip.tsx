@@ -1,9 +1,114 @@
 import { useState, useEffect } from 'react';
+import { ChevronLeft, ChevronRight, Filter, Printer, Search } from 'lucide-react';
 import './PrintSlip.css';
 
+interface OrderRecord {
+  Id: number;
+  Date?: string;
+  status: string;
+  "Order ID": string;
+  Quanity: string;
+  Shipping: string;
+  Address: string;
+  "Phone number": string;
+  Notes: string | null;
+  Agent?: string;
+  "Agent": string;
+  "Order type": string;
+  Source: string | null;
+  "First Sender": string | null;
+  "Reason for Manual": string | null;
+  "Followup details": string | null;
+  "Order status": string;
+  Tracking: string | null;
+}
+
+// Helpers to safely read fields that may come with different casings/spacing
+const normalizeKey = (s: string) => s.toLowerCase().replace(/\s|_/g, '');
+const getField = (obj: Record<string, unknown>, candidates: string[]): unknown => {
+  for (const key of candidates) {
+    if (Object.prototype.hasOwnProperty.call(obj, key)) {
+      const val = (obj as any)[key];
+      if (val !== null && val !== '') return val;
+    }
+  }
+  const map = new Map<string, unknown>();
+  for (const [k, v] of Object.entries(obj)) {
+    map.set(normalizeKey(k), v);
+  }
+  for (const key of candidates) {
+    const norm = normalizeKey(key);
+    if (map.has(norm)) return map.get(norm);
+  }
+  return null;
+};
+
+const getAgentField = (rec: unknown): string | null => {
+  return (
+    (getField(rec as Record<string, unknown>, [
+      'Agent',
+      'Agent',
+      'agent',
+      'Agent'
+    ]) as string | null) || null
+  );
+};
+
+const getDateField = (rec: unknown): string | null => {
+  return (
+    (getField(rec as Record<string, unknown>, [
+      'Date',
+      'date',
+      'Order date',
+      'Order Date',
+      'order_date',
+      'status' // fallback if date stored in status
+    ]) as string | null) || null
+  );
+};
+
+const formatDateDisplay = (raw: unknown): string => {
+  if (!raw) return '-';
+  const s = String(raw).trim();
+  if (!s) return '-';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+    const [y, m, d] = s.split('-');
+    return `${d}-${m}-${y}`;
+  }
+  if (/^\d{2}-\d{2}-\d{4}$/.test(s)) return s; // already DD-MM-YYYY
+  const dt = new Date(s);
+  if (!isNaN(dt.getTime())) return dt.toLocaleDateString('en-GB');
+  return s;
+};
+
+interface ApiResponse {
+  list: OrderRecord[];
+  pageInfo: {
+    totalRows: number;
+    page: number;
+    pageSize: number;
+    isFirstPage: boolean;
+    isLastPage: boolean;
+  };
+}
+
 export default function PrintSlip() {
-  const [inputText, setInputText] = useState<string>('processing\t09-05-2025\t2012\t1\t\tManual\tKarthika Anand, 80/a2, mitta office street, krishnapuram, kadayanallur, Kadayanallur, Tamil Nadu 627759  Phone 9342579621');
+  const [records, setRecords] = useState<OrderRecord[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [pageSize] = useState(25);
+  const [selectedRecords, setSelectedRecords] = useState<Set<number>>(new Set());
+  
+  // Filters
+  const [dateFilter, setDateFilter] = useState('');
+  const [agentFilter, setAgentFilter] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
+  const [searchTerm, setSearchTerm] = useState('');
+  const [showOnlyWithTracking, setShowOnlyWithTracking] = useState(false);
+  
   const [output, setOutput] = useState<string>('');
+  const [apiError, setApiError] = useState('');
 
   useEffect(() => {
     // Load JsBarcode script
@@ -12,46 +117,134 @@ export default function PrintSlip() {
     script.async = true;
     document.body.appendChild(script);
 
+    fetchRecords();
+
     return () => {
-      document.body.removeChild(script);
+      if (document.body.contains(script)) {
+        document.body.removeChild(script);
+      }
     };
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const generateSlips = () => {
-    const rawInput = inputText.trim();
-    const lines = rawInput.split('\n');
+  useEffect(() => {
+    fetchRecords();
+  }, [currentPage, dateFilter, agentFilter, statusFilter, searchTerm, showOnlyWithTracking]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const buildWhereClause = () => {
+    // Start with no filters - just get all records
+    return '';
+  };
+
+  const fetchRecords = async () => {
+    setLoading(true);
+    try {
+      const offset = (currentPage - 1) * pageSize;
+      const wherePrimary = buildWhereClause();
+      const fields = ['Id','Date','Order ID','Quanity','Shipping','Address','Phone number','Notes','Agent','Order status','Tracking'];
+      const fieldsParam = `&fields=${fields.map(encodeURIComponent).join(',')}`;
+      const sortParam = `&sort=-Id`;
+      let urlPrimary = `https://app-nocodb.9krcxo.easypanel.host/api/v2/tables/mis8ifo8jxfn2ws/records?offset=${offset}&limit=${pageSize}&viewId=vwpjkriu2g0u8vhn${fieldsParam}${sortParam}`;
+      if (wherePrimary) {
+        urlPrimary += `&where=${encodeURIComponent(wherePrimary)}`;
+      }
+      
+      const response = await fetch(urlPrimary, {
+        headers: {
+          'xc-token': 'CdD-fhN2ctMOe-rOGWY5g7ET5BisIDx5r32eJMn4'
+        }
+      });
+      
+      if (!response.ok) {
+        // Try to surface server message
+        const raw = await response.text();
+        try {
+          const obj = JSON.parse(raw);
+          setApiError(String(obj.msg || obj.message || raw));
+        } catch {
+          setApiError(raw || `HTTP ${response.status}`);
+        }
+        setRecords([]);
+        setTotalPages(1);
+        return;
+      }
+      
+      const data: ApiResponse = await response.json();
+      console.log('API Response:', data); // Debug log
+      console.log('First record:', data.list[0]); // Debug log
+      if (data.list[0]) {
+        console.log('Agent field:', data.list[0]["Agent"]);
+        console.log('All fields:', Object.keys(data.list[0]));
+      }
+      
+      // Apply client-side filtering
+      let filteredRecords = data.list;
+      
+      if (dateFilter) {
+        filteredRecords = filteredRecords.filter(record => {
+          const recordDate = getDateField(record);
+          return recordDate === dateFilter;
+        });
+      }
+      
+      if (agentFilter) {
+        filteredRecords = filteredRecords.filter(record => {
+          const recordAgent = getAgentField(record);
+          return recordAgent === agentFilter;
+        });
+      }
+      
+      if (statusFilter) {
+        filteredRecords = filteredRecords.filter(record => {
+          return record["Order status"] === statusFilter;
+        });
+      }
+      
+      if (searchTerm) {
+        filteredRecords = filteredRecords.filter(record => {
+          return record["Order ID"]?.toLowerCase().includes(searchTerm.toLowerCase());
+        });
+      }
+      
+      if (showOnlyWithTracking) {
+        filteredRecords = filteredRecords.filter(record => {
+          return record.Tracking && String(record.Tracking).trim();
+        });
+      }
+      
+      setRecords(filteredRecords);
+      setTotalPages(Math.ceil(filteredRecords.length / pageSize));
+      setApiError('');
+    } catch (error) {
+      console.error('Error fetching records:', error);
+      setApiError(error instanceof Error ? error.message : 'Failed to fetch records');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const generateSlipsFromRecords = (recordsToGenerate: OrderRecord[]) => {
     let outputHtml = '';
-
     const fromAddress = `TSMC Creations India\n14/5 2nd Floor, Sri Saara Towers,\nBalasundaram Road, Paapanaickenpalayam,\nCoimbatore, TN - 641037\nPh: 8610554711`;
 
-    lines.forEach((line) => {
-      const parts = line.split('\t');
-      if (parts.length < 7) return;
+    recordsToGenerate.forEach((record) => {
+      const orderId = record["Order ID"];
+      const qty = record.Quanity || '1';
+      const shipping = record.Shipping;
+      const isIndiaPost = shipping.toLowerCase().includes('indiapost');
+      const address = record.Address;
+      const phone = record["Phone number"];
+      const date = getDateField(record);
+      const tracking = record.Tracking;
 
-      const date = parts[1];
-      const orderId = parts[2];
-      const qty = parts[3] || '1';
-      // Some feeds provide courier name at index 4 (e.g., "India post")
-      const courierRaw = (parts[4] || '').toString().trim();
-      const isIndiaPost = courierRaw.toLowerCase() === 'india post';
-      const mode = parts[5];
-      const toRaw = parts.slice(6).join(' ');
-      const phoneMatch = toRaw.match(/Phone\s*=?\s*(\d+)/i);
-      const phone = phoneMatch ? phoneMatch[1] : '';
-      const toAddress = toRaw.replace(/Phone\s*=?\s*\d+/i, '').trim();
-
-      // Derive name, address, city/state from the address blob
-      const firstComma = toAddress.indexOf(',');
-      const customerName = (firstComma > -1 ? toAddress.slice(0, firstComma) : toAddress).trim();
-      const remaining = (firstComma > -1 ? toAddress.slice(firstComma + 1) : '').trim();
-      const addrParts = remaining.split(',').map(s => s.trim()).filter(Boolean);
-      // Heuristic: last part as city/state/postal if present, rest as street address lines
-      const cityState = addrParts.length > 0 ? addrParts[addrParts.length - 1] : '';
-      const streetLines = addrParts.length > 1 ? addrParts.slice(0, -1) : addrParts;
+      // Parse address to extract customer name and address parts
+      const addressParts = address.split(',').map(s => s.trim());
+      const customerName = addressParts[0] || '';
+      const streetLines = addressParts.slice(1, -1);
+      const cityState = addressParts[addressParts.length - 1] || '';
       const country = 'India';
       
       // Calculate weight based on quantity (450g per packet)
-      const singlePacketWeight = 450; // in grams
+      const singlePacketWeight = 450;
       const totalWeightGrams = parseInt(qty) * singlePacketWeight;
       const totalWeightKg = (totalWeightGrams / 1000).toFixed(2) + ' KG';
 
@@ -83,17 +276,22 @@ export default function PrintSlip() {
             </div>
             <div class="detail-row">
               <div class="detail-label">DATE:</div>
-              <div class="detail-value">${date}</div>
+              <div class="detail-value">${formatDateDisplay(date)}</div>
             </div>
             <div class="detail-row">
-              <div class="detail-label">MODE:</div>
-              <div class="detail-value">${mode} | Qty: ${qty}</div>
+              <div class="detail-label">SHIPPING:</div>
+              <div class="detail-value">${shipping} | Qty: ${qty}</div>
             </div>
+            ${tracking ? `
+            <div class="detail-row">
+              <div class="detail-label">TRACKING:</div>
+              <div class="detail-value">${tracking}</div>
+            </div>` : ''}
           </div>
           
           <div class="barcode-section">
             <div class="barcode-container">
-              <svg class="barcode" jsbarcode-format="code128" jsbarcode-value="${orderId}" jsbarcode-textmargin="5" jsbarcode-fontoptions="bold" jsbarcode-height="100" jsbarcode-width="3" jsbarcode-fontsize="16"></svg>
+              <svg class="barcode" jsbarcode-format="code128" jsbarcode-value="${tracking || orderId}" jsbarcode-textmargin="5" jsbarcode-fontoptions="bold" jsbarcode-height="100" jsbarcode-width="3" jsbarcode-fontsize="16"></svg>
             </div>
           </div>
           
@@ -115,6 +313,29 @@ export default function PrintSlip() {
         window.JsBarcode(".barcode").init();
       }
     }, 100);
+  };
+
+  const handleSelectRecord = (recordId: number) => {
+    const newSelected = new Set(selectedRecords);
+    if (newSelected.has(recordId)) {
+      newSelected.delete(recordId);
+    } else {
+      newSelected.add(recordId);
+    }
+    setSelectedRecords(newSelected);
+  };
+
+  const handleSelectAll = () => {
+    if (selectedRecords.size === records.length) {
+      setSelectedRecords(new Set());
+    } else {
+      setSelectedRecords(new Set(records.map(r => r.Id)));
+    }
+  };
+
+  const generateSelectedSlips = () => {
+    const selectedRecordsList = records.filter(r => selectedRecords.has(r.Id));
+    generateSlipsFromRecords(selectedRecordsList);
   };
 
   const handlePrint = () => {
@@ -289,26 +510,211 @@ export default function PrintSlip() {
   return (
     <div className="space-y-8">
       <div className="bg-white rounded-2xl shadow-lg p-6 md:p-8">
-        <h2 className="text-xl font-semibold mb-4 text-gray-900">Courier Slip Generator</h2>
+        <h2 className="text-xl font-semibold mb-4 text-gray-900">Print Slip Generator</h2>
         
-        <div className="mb-6">
-          <label className="block text-sm font-medium text-gray-700 mb-2">
-            Paste Records (one per line, tab-separated):
+        {/* Filters */}
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              <Filter className="inline w-4 h-4 mr-1" />
+              Date Filter
+            </label>
+            <input
+              type="date"
+              value={dateFilter}
+              onChange={(e) => setDateFilter(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            />
+          </div>
+          
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Agent</label>
+            <select
+              value={agentFilter}
+              onChange={(e) => setAgentFilter(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            >
+              <option value="">All Agents</option>
+              <option value="Mahesh">Mahesh</option>
+              <option value="Vidhula">Vidhula</option>
+              <option value="Shijo">Shijo</option>
+              <option value="Nandhini">Nandhini</option>
+              <option value="Akash">Akash</option>
+            </select>
+          </div>
+          
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Order Status</label>
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            >
+              <option value="">All Status</option>
+              <option value="Picked UP">Picked UP</option>
+              <option value="Dispatched">Dispatched</option>
+              <option value="Delivered">Delivered</option>
+            </select>
+          </div>
+          
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              <Search className="inline w-4 h-4 mr-1" />
+              Search Order ID
+            </label>
+            <input
+              type="text"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              placeholder="Enter Order ID"
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            />
+          </div>
+        </div>
+
+        {/* Additional Filter Options */}
+        <div className="flex items-center gap-4 mb-4">
+          <label className="flex items-center gap-2 text-sm font-medium text-gray-700">
+            <input
+              type="checkbox"
+              checked={showOnlyWithTracking}
+              onChange={(e) => setShowOnlyWithTracking(e.target.checked)}
+              className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+            />
+            Show only records with tracking information
           </label>
-          <textarea 
-            className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200 outline-none font-mono text-sm h-40"
-            value={inputText}
-            onChange={(e) => setInputText(e.target.value)}
-            placeholder="Format: status&#9;date&#9;orderID&#9;qty&#9;&#9;mode&#9;address with Phone number"
-          />
+        </div>
+
+        {/* API Error */}
+        {apiError && (
+          <div className="mb-4 rounded border border-red-200 bg-red-50 text-red-700 px-4 py-2 text-sm">
+            {apiError}
+          </div>
+        )}
+
+        {/* Stat Cards */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-6">
+          <div className="rounded-lg border border-gray-200 bg-white p-4">
+            <div className="text-xs text-gray-500">Total</div>
+            <div className="text-xl font-semibold">{records.length}</div>
+          </div>
+          <div className="rounded-lg border border-gray-200 bg-white p-4">
+            <div className="text-xs text-gray-500">With Tracking</div>
+            <div className="text-xl font-semibold">{records.filter(r => r.Tracking && String(r.Tracking).trim()).length}</div>
+          </div>
+          <div className="rounded-lg border border-gray-200 bg-white p-4">
+            <div className="text-xs text-gray-500">Without Tracking</div>
+            <div className="text-xl font-semibold">{records.length - records.filter(r => r.Tracking && String(r.Tracking).trim()).length}</div>
+          </div>
+        </div>
+
+        {/* Records Table */}
+        <div className="overflow-x-auto mb-6">
+          <table className="min-w-full divide-y divide-gray-200">
+            <thead className="bg-gray-50">
+              <tr>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <input
+                    type="checkbox"
+                    checked={selectedRecords.size === records.length && records.length > 0}
+                    onChange={handleSelectAll}
+                    className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                  />
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Order ID</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Agent</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Shipping</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Tracking</th>
+              </tr>
+            </thead>
+            <tbody className="bg-white divide-y divide-gray-200">
+              {loading ? (
+                <tr>
+                  <td colSpan={7} className="px-6 py-4 text-center text-gray-500">
+                    Loading records...
+                  </td>
+                </tr>
+              ) : records.length === 0 ? (
+                <tr>
+                  <td colSpan={7} className="px-6 py-4 text-center text-gray-500">
+                    No records found
+                  </td>
+                </tr>
+              ) : (
+                records.map((record) => (
+                  <tr key={record.Id} className={selectedRecords.has(record.Id) ? 'bg-blue-50' : ''}>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <input
+                        type="checkbox"
+                        checked={selectedRecords.has(record.Id)}
+                        onChange={() => handleSelectRecord(record.Id)}
+                        className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                      />
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                      {record["Order ID"]}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      {formatDateDisplay(getDateField(record))}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      {getAgentField(record) || '-'}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      <span className={`px-2 py-1 text-xs rounded-full ${
+                        record["Order status"] === 'Picked UP' ? 'bg-green-100 text-green-800' :
+                        record["Order status"] === 'Dispatched' ? 'bg-blue-100 text-blue-800' :
+                        'bg-gray-100 text-gray-800'
+                      }`}>
+                        {record["Order status"]}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      {record.Shipping}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      {record.Tracking || '-'}
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Pagination */}
+        <div className="flex items-center justify-between mb-6">
+          <div className="text-sm text-gray-700">
+            Page {currentPage} of {totalPages}
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={() => setCurrentPage(Math.max(1, currentPage - 1))}
+              disabled={currentPage === 1}
+              className="px-3 py-2 border border-gray-300 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50"
+            >
+              <ChevronLeft className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => setCurrentPage(Math.min(totalPages, currentPage + 1))}
+              disabled={currentPage === totalPages}
+              className="px-3 py-2 border border-gray-300 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50"
+            >
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          </div>
         </div>
         
+        {/* Action Buttons */}
         <div className="flex gap-3">
           <button 
-            onClick={generateSlips}
-            className="flex items-center justify-center gap-2 py-3 px-6 rounded-lg text-white font-medium transition-all duration-300 bg-blue-500 hover:bg-blue-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+            onClick={generateSelectedSlips}
+            disabled={selectedRecords.size === 0}
+            className="flex items-center justify-center gap-2 py-3 px-6 rounded-lg text-white font-medium transition-all duration-300 bg-blue-500 hover:bg-blue-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            Generate Slips
+            Generate Slips ({selectedRecords.size})
           </button>
           
           <button 
@@ -316,7 +722,8 @@ export default function PrintSlip() {
             disabled={!output}
             className="flex items-center justify-center gap-2 py-3 px-6 rounded-lg text-white font-medium transition-all duration-300 bg-green-500 hover:bg-green-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            🖨️ Print All
+            <Printer className="w-4 h-4" />
+            Print All
           </button>
         </div>
       </div>
