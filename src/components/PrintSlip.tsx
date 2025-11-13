@@ -230,7 +230,6 @@ export default function PrintSlip() {
       const orderId = record["Order ID"];
       const qty = record.Quanity || '1';
       const shipping = record.Shipping;
-      const isIndiaPost = shipping.toLowerCase().includes('indiapost');
       const address = record.Address;
       const phone = record["Phone number"];
       const date = getDateField(record);
@@ -252,10 +251,6 @@ export default function PrintSlip() {
         <div class="slip">
           <div class="slip-header">
             <div class="ship-to-label">SHIP TO:</div>
-            ${isIndiaPost ? `
-            <div class="detail-row india-post-note" style="margin-top:2px;">
-              <div class="detail-value">Speed Post Booked Under Advance Customer ID: 1790889211 @coimbatore HPO</div>
-            </div>` : ''}
             <div class="address">
               ${customerName ? `<div class="to-name">${customerName}</div>` : ''}
               ${streetLines.length ? `<div>${streetLines.join(', ')}</div>` : ''}

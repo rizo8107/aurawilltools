@@ -71,11 +71,9 @@ const getTodayInputValue = (): string => {
   return localDate.toISOString().split('T')[0] ?? '';
 };
 
-const formatDateToDDMMYYYY = (value: string): string => {
-  if (!value) return '';
-  const [year, month, day] = value.split('-');
-  if (!year || !month || !day) return value;
-  return `${day.padStart(2, '0')}-${month.padStart(2, '0')}-${year}`;
+// Keep date in YYYY-MM-DD format for NocoDB compatibility
+const formatDateForNocoDB = (value: string): string => {
+  return value; // Already in YYYY-MM-DD format from HTML date input
 };
 
 const OrderForm = () => {
@@ -120,7 +118,7 @@ const OrderForm = () => {
   const submitSingleOrder = async (order: string): Promise<boolean | null> => {
     const payload = {
       Order: order.trim(),
-      dispatch_date: formatDateToDDMMYYYY(dispatchDate),
+      dispatch_date: formatDateForNocoDB(dispatchDate),
       courier_partner: courierPartner,
       agent_name: agentName,
     };
@@ -262,7 +260,7 @@ const OrderForm = () => {
     try {
       const payload = {
         Order: orderNumber.trim(),
-        dispatch_date: `${dispatchDate.slice(0, 4)}-${dispatchDate.slice(5, 7)}-${dispatchDate.slice(8, 10)}`,
+        dispatch_date: formatDateForNocoDB(dispatchDate),
         courier_partner: courierPartner,
         agent_name: agentName,
       };
