@@ -81,6 +81,27 @@ const formatDateDisplay = (raw: unknown): string => {
   return s;
 };
 
+// Normalize date-like values to YYYY-MM-DD for reliable comparisons
+const toYMD = (raw: unknown): string | null => {
+  if (!raw) return null;
+  const s = String(raw).trim();
+  if (!s) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  let d: Date | null = null;
+  if (/^\d{2}-\d{2}-\d{4}$/.test(s)) {
+    const [dd, mm, yyyy] = s.split('-').map((x) => parseInt(x, 10));
+    d = new Date(yyyy, mm - 1, dd);
+  } else {
+    const dt = new Date(s);
+    if (!isNaN(dt.getTime())) d = dt;
+  }
+  if (!d) return null;
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+};
+
 interface ApiResponse {
   list: OrderRecord[];
   pageInfo: {
@@ -130,58 +151,74 @@ export default function PrintSlip() {
     fetchRecords();
   }, [currentPage, dateFilter, agentFilter, statusFilter, searchTerm, showOnlyWithTracking]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Reset pagination and selection when filters change
+  useEffect(() => {
+    setCurrentPage(1);
+    setSelectedRecords(new Set());
+  }, [dateFilter, agentFilter, statusFilter, searchTerm, showOnlyWithTracking]);
+
+  // When records refresh, drop any selections that no longer exist
+  useEffect(() => {
+    setSelectedRecords(prev => {
+      const ids = new Set(records.map(r => r.Id));
+      const next = new Set<number>();
+      prev.forEach(id => { if (ids.has(id)) next.add(id); });
+      return next;
+    });
+  }, [records]);
+
   const buildWhereClause = () => {
-    // Start with no filters - just get all records
+    // Use only client-side filtering to avoid API parser issues
     return '';
   };
 
   const fetchRecords = async () => {
     setLoading(true);
     try {
-      const offset = (currentPage - 1) * pageSize;
       const wherePrimary = buildWhereClause();
       const fields = ['Id','Date','Order ID','Quanity','Shipping','Address','Phone number','Notes','Agent','Order status','Tracking'];
       const fieldsParam = `&fields=${fields.map(encodeURIComponent).join(',')}`;
       const sortParam = `&sort=-Id`;
-      let urlPrimary = `https://app-nocodb.9krcxo.easypanel.host/api/v2/tables/mis8ifo8jxfn2ws/records?offset=${offset}&limit=${pageSize}&viewId=vwpjkriu2g0u8vhn${fieldsParam}${sortParam}`;
-      if (wherePrimary) {
-        urlPrimary += `&where=${encodeURIComponent(wherePrimary)}`;
-      }
-      
-      const response = await fetch(urlPrimary, {
-        headers: {
-          'xc-token': 'CdD-fhN2ctMOe-rOGWY5g7ET5BisIDx5r32eJMn4'
+
+      // Always pull ALL pages then filter client-side (ensures totals > 25 when date is cleared)
+      const allRecords: OrderRecord[] = [];
+      const serverPageSize = 500; // fetch in larger chunks to reduce roundtrips
+      let offsetAll = 0;
+      const maxLoops = 200; // 100k rows cap
+      let loops = 0;
+      while (loops < maxLoops) {
+        let url = `https://app-nocodb.9krcxo.easypanel.host/api/v2/tables/mis8ifo8jxfn2ws/records?offset=${offsetAll}&limit=${serverPageSize}${fieldsParam}${sortParam}`;
+        if (wherePrimary) {
+          url += `&where=${encodeURIComponent(wherePrimary)}`;
         }
-      });
-      
-      if (!response.ok) {
-        // Try to surface server message
-        const raw = await response.text();
-        try {
-          const obj = JSON.parse(raw);
-          setApiError(String(obj.msg || obj.message || raw));
-        } catch {
-          setApiError(raw || `HTTP ${response.status}`);
+        const resp = await fetch(url, {
+          headers: { 'xc-token': 'CdD-fhN2ctMOe-rOGWY5g7ET5BisIDx5r32eJMn4' }
+        });
+        if (!resp.ok) {
+          const raw = await resp.text();
+          try {
+            const obj = JSON.parse(raw);
+            setApiError(String(obj.msg || obj.message || raw));
+          } catch {
+            setApiError(raw || `HTTP ${resp.status}`);
+          }
+          setRecords([]);
+          setTotalPages(1);
+          return;
         }
-        setRecords([]);
-        setTotalPages(1);
-        return;
+        const pageData: ApiResponse = await resp.json();
+        allRecords.push(...pageData.list);
+        if (pageData.pageInfo?.isLastPage || pageData.list.length < serverPageSize) break;
+        offsetAll += serverPageSize;
+        loops++;
       }
-      
-      const data: ApiResponse = await response.json();
-      console.log('API Response:', data); // Debug log
-      console.log('First record:', data.list[0]); // Debug log
-      if (data.list[0]) {
-        console.log('Agent field:', data.list[0]["Agent"]);
-        console.log('All fields:', Object.keys(data.list[0]));
-      }
-      
+
       // Apply client-side filtering
-      let filteredRecords = data.list;
+      let filteredRecords = allRecords;
       
       if (dateFilter) {
         filteredRecords = filteredRecords.filter(record => {
-          const recordDate = getDateField(record);
+          const recordDate = toYMD(getDateField(record));
           return recordDate === dateFilter;
         });
       }
