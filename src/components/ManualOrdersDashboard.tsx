@@ -133,7 +133,7 @@ export default function ManualOrdersDashboard() {
   const [endDate, setEndDate] = useState<string>('');
   const [onlyDuplicates, setOnlyDuplicates] = useState<boolean>(false);
   const [servicableFilter, setServicableFilter] = useState<'all' | 'yes' | 'no'>('all');
-  const [showColumnFilters, setShowColumnFilters] = useState<boolean>(false);
+  const [showColumnFilters, setShowColumnFilters] = useState<boolean>(true);
 
   const [orders, setOrders] = useState<ManualOrder[]>([]);
   const [loading, setLoading] = useState(false);
@@ -286,10 +286,10 @@ export default function ManualOrdersDashboard() {
       }
       if (createdByFilter && String(o.created_by || '') !== createdByFilter) return false;
       if (startDate || endDate) {
-        const d = o.order_date ? new Date(o.order_date) : null;
-        if (!d) return false;
-        if (startDate && d < new Date(`${startDate}T00:00:00`)) return false;
-        if (endDate && d > new Date(`${endDate}T23:59:59.999`)) return false;
+        const dateStr = o.order_date ? o.order_date.slice(0, 10) : '';
+        if (!dateStr) return false;
+        if (startDate && dateStr < startDate) return false;
+        if (endDate && dateStr > endDate) return false;
       }
       if (onlyDuplicates) {
         const k = o.order_id != null ? String(o.order_id) : '';
@@ -341,11 +341,36 @@ export default function ManualOrdersDashboard() {
     return sortedFiltered.slice(start, start + pageSize);
   }, [sortedFiltered, page, pageSize]);
 
+  const summaryCards = useMemo(() => {
+    const todayIso = new Date().toISOString().slice(0, 10);
+    const agentSet = new Set<string>();
+    const dupMap = new Map<string, number>();
+    let todayCount = 0;
+    for (const o of filtered) {
+      if (o.created_by) agentSet.add(String(o.created_by));
+      if (o.order_id != null) {
+        const key = String(o.order_id);
+        dupMap.set(key, (dupMap.get(key) || 0) + 1);
+      }
+      if (o.order_date && o.order_date.slice(0, 10) === todayIso) todayCount += 1;
+    }
+    let duplicateRows = 0;
+    for (const count of dupMap.values()) {
+      if (count > 1) duplicateRows += count;
+    }
+    return [
+      { label: 'Filtered Orders', value: filtered.length, helper: 'Rows after filters' },
+      { label: 'Today', value: todayCount, helper: 'Dated today' },
+      { label: 'Duplicates', value: duplicateRows, helper: 'Order IDs > 1 row' },
+      { label: 'Active Agents', value: agentSet.size, helper: 'Agents in view' },
+    ];
+  }, [filtered]);
+
   const statusStats = useMemo(() => {
     const today = new Date(); today.setHours(0,0,0,0);
     const weekAgo = new Date(); weekAgo.setDate(weekAgo.getDate() - 7); weekAgo.setHours(0,0,0,0);
     const map = new Map<string, { total: number; today: number; week: number }>();
-    for (const o of orders) {
+    for (const o of filtered) {
       const label = (String(o.status || '').trim()) || 'Unknown';
       const bucket = map.get(label) || { total: 0, today: 0, week: 0 };
       bucket.total += 1;
@@ -357,7 +382,7 @@ export default function ManualOrdersDashboard() {
       map.set(label, bucket);
     }
     return map;
-  }, [orders]);
+  }, [filtered]);
 
   const statusCards = useMemo(() => {
     const entries = Array.from(statusStats.entries());
@@ -658,7 +683,17 @@ export default function ManualOrdersDashboard() {
       </div>
 
       {/* KPI Bar */}
-      <div className="max-w-7xl mx-auto px-4 py-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">
+      <div className="max-w-7xl mx-auto px-4 py-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        {summaryCards.map(card => (
+          <div key={card.label} className="rounded-xl bg-white ring-1 ring-slate-200 p-3">
+            <div className="text-xs text-slate-500">{card.label}</div>
+            <div className="mt-1 text-2xl font-semibold">{card.value}</div>
+            <div className="mt-1 text-[11px] text-slate-500">{card.helper}</div>
+          </div>
+        ))}
+      </div>
+
+      <div className="max-w-7xl mx-auto px-4 pb-2 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">
         {statusCards.map(([label, stats]) => (
           <div key={label} className="rounded-xl bg-white ring-1 ring-slate-200 p-3">
             <div className="text-xs text-slate-500">{label}</div>
