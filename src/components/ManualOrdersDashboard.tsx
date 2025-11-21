@@ -10,22 +10,26 @@ const SB_HEADERS: Record<string, string> = {
   'Content-Type': 'application/json',
 };
 
-// Enums
-const STATUS_OPTIONS = ['New','Packed','Dispatched','Delivered','RTO','NDR','Pincode Not Service','Cancelled'] as const;
-const SOURCE_OPTIONS = ['Amazon','Website','WhatsApp','Incoming Call','RTO Calls','Resend','Bluedart','ST Courier','Delhivery','India Post','Other'] as const;
-const NOTE_CHANNELS = ['Incoming Call','RTO Calls','WhatsApp','Email','System'] as const;
+// NocoDB config
+const NOCO_API_BASE = 'https://app-nocodb.9krcxo.easypanel.host/api/v2';
+const NOCO_TABLE_ID = 'mis8ifo8jxfn2ws';
+const NOCO_VIEW_ID = 'vwpjkriu2g0u8vhn';
+const NOCO_TOKEN = 'CdD-fhN2ctMOe-rOGWY5g7ET5BisIDx5r32eJMn4';
+const NOCO_HEADERS = { 'xc-token': NOCO_TOKEN };
 
-type Status = typeof STATUS_OPTIONS[number];
-type Source = typeof SOURCE_OPTIONS[number];
+// Default option catalogs (filters derive dynamically from data)
+const DEFAULT_STATUS_OPTIONS = ['New','Packed','Dispatched','Delivered','RTO','NDR','Pincode Not Service','Cancelled'];
+const DEFAULT_SOURCE_OPTIONS = ['Amazon','Website','WhatsApp','Incoming Call','RTO Calls','Resend','Bluedart','ST Courier','Delhivery','India Post','Other'];
+const NOTE_CHANNELS = ['Incoming Call','RTO Calls','WhatsApp','Email','System'] as const;
 
 export type ManualOrder = {
   id: number | string;
   created_at: string;
   created_by: string;
-  source: Source | string;
+  source: string;
   order_date: string; // date
   order_id: number | null; // external order number when known
-  status: Status | string;
+  status: string;
   quantity: number;
   shipping_partner: string | null;
   servicable: boolean | null;
@@ -57,6 +61,62 @@ export type StatusHistory = {
 function fmtDate(d?: string) { try { return d ? new Date(d).toLocaleString() : '—'; } catch { return '—'; } }
 function csvEscape(v: any) { return `"${String(v ?? '').replace(/"/g,'""')}"`; }
 
+const normalizeKey = (s: string) => s.toLowerCase().replace(/[\s_]/g, '');
+const getFieldValue = (obj: Record<string, any>, candidates: string[]) => {
+  for (const key of candidates) {
+    if (Object.prototype.hasOwnProperty.call(obj, key)) return obj[key];
+  }
+  const map = new Map<string, any>();
+  for (const [k, v] of Object.entries(obj)) map.set(normalizeKey(k), v);
+  for (const key of candidates) {
+    const norm = normalizeKey(key);
+    if (map.has(norm)) return map.get(norm);
+  }
+  return undefined;
+};
+
+const toIsoDate = (raw: unknown) => {
+  if (raw == null) return '';
+  const s = String(raw).trim();
+  if (!s) return '';
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+  const dm = s.match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/);
+  if (dm) {
+    const dd = dm[1].padStart(2, '0');
+    const mm = dm[2].padStart(2, '0');
+    return `${dm[3]}-${mm}-${dd}`;
+  }
+  const dt = new Date(s);
+  return isNaN(dt.getTime()) ? '' : dt.toISOString().slice(0, 10);
+};
+
+const parseBooleanish = (raw: unknown): boolean | null => {
+  if (typeof raw === 'boolean') return raw;
+  if (typeof raw === 'number') {
+    if (raw === 1) return true;
+    if (raw === 0) return false;
+  }
+  if (typeof raw === 'string') {
+    const val = raw.trim();
+    if (!val) return null;
+    if (/^(yes|true|1)$/i.test(val)) return true;
+    if (/^(no|false|0)$/i.test(val)) return false;
+  }
+  return null;
+};
+
+const toNumber = (raw: unknown): number | null => {
+  if (raw == null || raw === '') return null;
+  const num = Number(String(raw).replace(/,/g, ''));
+  return Number.isFinite(num) ? num : null;
+};
+
+const toOptionalString = (raw: unknown): string | null => {
+  if (raw == null) return null;
+  const s = String(raw).trim();
+  return s ? s : null;
+};
+
 export default function ManualOrdersDashboard() {
   // user context
   const [currentUser] = useState<string>(() => {
@@ -65,8 +125,8 @@ export default function ManualOrdersDashboard() {
 
   // filters
   const [q, setQ] = useState('');
-  const [statusFilter, setStatusFilter] = useState<Status[] | string[]>([]);
-  const [sourceFilter, setSourceFilter] = useState<Source[] | string[]>([]);
+  const [statusFilter, setStatusFilter] = useState<string[]>([]);
+  const [sourceFilter, setSourceFilter] = useState<string[]>([]);
   const [partnerFilter, setPartnerFilter] = useState<string[]>([]);
   const [createdByFilter, setCreatedByFilter] = useState<string>('');
   const [startDate, setStartDate] = useState<string>('');
@@ -132,6 +192,26 @@ export default function ManualOrdersDashboard() {
       if (!Number.isNaN(q) && q > 0) set.add(String(q));
     }
     return Array.from(set).sort((a,b)=>Number(a)-Number(b));
+  }, [orders]);
+
+  const statusOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const o of orders) {
+      const val = String(o.status || '').trim();
+      if (val) set.add(val);
+    }
+    if (!set.size) return DEFAULT_STATUS_OPTIONS;
+    return Array.from(set).sort((a,b)=>a.localeCompare(b));
+  }, [orders]);
+
+  const sourceOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const o of orders) {
+      const val = String(o.source || '').trim();
+      if (val) set.add(val);
+    }
+    if (!set.size) return DEFAULT_SOURCE_OPTIONS;
+    return Array.from(set).sort((a,b)=>a.localeCompare(b));
   }, [orders]);
 
   // Inline status updater (order_dispatches_raw)
@@ -261,96 +341,126 @@ export default function ManualOrdersDashboard() {
     return sortedFiltered.slice(start, start + pageSize);
   }, [sortedFiltered, page, pageSize]);
 
-  const kpi = useMemo(() => {
+  const statusStats = useMemo(() => {
     const today = new Date(); today.setHours(0,0,0,0);
     const weekAgo = new Date(); weekAgo.setDate(weekAgo.getDate() - 7); weekAgo.setHours(0,0,0,0);
-    const counts = { New:0, Packed:0, Dispatched:0, Delivered:0, RTO:0, NDR:0, PNS:0 } as any;
-    const todayCounts = { New:0, Packed:0, Dispatched:0, Delivered:0, RTO:0, NDR:0, PNS:0 } as any;
-    const weekCounts = { New:0, Packed:0, Dispatched:0, Delivered:0, RTO:0, NDR:0, PNS:0 } as any;
+    const map = new Map<string, { total: number; today: number; week: number }>();
     for (const o of orders) {
-      const raw = String(o.status || '');
-      const key = raw === 'Pincode Not Service' ? 'PNS' : (
-        STATUS_OPTIONS.includes(raw as any) ? raw : 'New' // bucket unknown statuses like 'processing' under New
-      );
-      counts[key] = (counts[key] || 0) + 1;
+      const label = (String(o.status || '').trim()) || 'Unknown';
+      const bucket = map.get(label) || { total: 0, today: 0, week: 0 };
+      bucket.total += 1;
       const od = o.order_date ? new Date(o.order_date) : null;
       if (od) {
-        const dayMatch = od >= today;
-        const weekMatch = od >= weekAgo;
-        if (dayMatch) todayCounts[key] = (todayCounts[key] || 0) + 1;
-        if (weekMatch) weekCounts[key] = (weekCounts[key] || 0) + 1;
+        if (od >= today) bucket.today += 1;
+        if (od >= weekAgo) bucket.week += 1;
       }
+      map.set(label, bucket);
     }
-    return { counts, todayCounts, weekCounts };
+    return map;
   }, [orders]);
 
+  const statusCards = useMemo(() => {
+    const entries = Array.from(statusStats.entries());
+    const preferredOrder = DEFAULT_STATUS_OPTIONS;
+    const ordered: typeof entries = [];
+    const remaining = [...entries];
+    const pull = (name: string) => {
+      const idx = remaining.findIndex(([label]) => label.toLowerCase() === name.toLowerCase());
+      if (idx >= 0) ordered.push(remaining.splice(idx, 1)[0]);
+    };
+    preferredOrder.forEach(pull);
+    remaining.sort((a, b) => (b[1].total - a[1].total) || a[0].localeCompare(b[0]));
+    const finalList = [...ordered, ...remaining];
+    if (!finalList.length) return [['New', { total: 0, today: 0, week: 0 }]] as [string, { total: number; today: number; week: number }][];
+    return finalList;
+  }, [statusStats]);
+
   const loadOrders = useCallback(async () => {
+    const fieldList = Array.from(new Set([
+      'Id','Date','Order ID','Quanity','Shipping','Servicable','Address','Phone number','Notes','Field 11','HEADOFFICE',
+      'Agent','Order type','Source','First Sender','Reason for Manual','Followup details','Order status','Tracking'
+    ]));
+    const fieldsParam = fieldList.length ? `&fields=${fieldList.map(encodeURIComponent).join(',')}` : '';
+    const sortParam = '&sort=-Id';
+    const serverPageSize = 500;
+    const maxLoops = 200;
+
     try {
       setLoading(true); setError('');
-      // Use staging/raw source for listing instead of manual_orders
-      // Omit server-side order (created_at may not exist on this table); we sort client-side
-      const url = `${SUPABASE_URL}/rest/v1/order_dispatches_raw?select=*`;
-      const res = await fetch(url, { headers: SB_HEADERS });
-      if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
-      const data = await res.json();
-      const rows: ManualOrder[] = (Array.isArray(data) ? data : []).map((r: any) => {
-        // Normalize possible alternate/raw column names
-        // Accept ids like "manual_..."
-        const id = r.id ?? r.ID ?? r.pk ?? '';
-        // order date may be 'order_date' or 'date'/'Date' (often dd-mm-yyyy)
-        const dateRaw = r.order_date || r.date || r.Date || '';
-        let order_date = '';
-        if (dateRaw) {
-          const s = String(dateRaw).trim();
-          const m = s.match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/); // dd-mm-yyyy
-          if (m) {
-            const dd = m[1].padStart(2, '0');
-            const mm = m[2].padStart(2, '0');
-            const yyyy = m[3];
-            order_date = `${yyyy}-${mm}-${dd}`; // yyyy-mm-dd
-          } else {
-            order_date = s.slice(0, 10);
+      const allRecords: Record<string, any>[] = [];
+      let offsetAll = 0;
+      let loops = 0;
+
+      while (loops < maxLoops) {
+        const url = `${NOCO_API_BASE}/tables/${NOCO_TABLE_ID}/records?viewId=${NOCO_VIEW_ID}&offset=${offsetAll}&limit=${serverPageSize}${fieldsParam}${sortParam}`;
+        const resp = await fetch(url, { headers: NOCO_HEADERS });
+        if (!resp.ok) {
+          const raw = await resp.text();
+          try {
+            const obj = JSON.parse(raw);
+            setError(String(obj.msg || obj.message || raw));
+          } catch {
+            setError(raw || `HTTP ${resp.status}`);
           }
+          setOrders([]);
+          return;
         }
-        // external order id may be 'order_id' or 'Order ID' or 'ordernumber'
-        const order_id = r.order_id ?? (r["Order ID"] ? Number(r["Order ID"]) : (r.ordernumber ? Number(r.ordernumber) : null));
-        // status may be non-enum (e.g., 'processing'); keep as-is for display and counts
-        const status = r.status || r.Status || '';
-        // map partner and tracking from raw keys (handle different casing)
-        const shipping_partner = r.shipping_partner ?? r.shipping ?? r.Shipping ?? r["Shipping Partner"] ?? null;
-        const tracking_code = r.tracking_code ?? r.trackingnumber ?? r["Tracking code"] ?? r.Tracking ?? null;
-        const customer_name = r.customer_name ?? r.customername ?? r["Customer Name"] ?? null;
-        const phone_number = r.phone_number ?? r.phone ?? r["Phone number"] ?? null;
-        const address = r.address ?? r.Address ?? null;
-        const quantity = Number(r.quantity ?? r.Quanity ?? 1) || 1;
-        const servicable = (typeof r.servicable === 'boolean') ? r.servicable : (typeof r.Servicable === 'string' ? (/^(yes|true|1)$/i.test(r.Servicable)) : null);
-        const source = r.source || r.Source || r["Order type"] || '';
-        const created_by = r.created_by || r["Agent Name"] || r.agent || (currentUser || '');
-        const created_at = r.created_at || r.updated_at || new Date().toISOString();
-        const notes = r.notes ?? r.Notes ?? null;
+
+        const pageData: { list?: Record<string, any>[]; pageInfo?: { isLastPage?: boolean }; } = await resp.json();
+        const pageList = Array.isArray(pageData.list) ? pageData.list : [];
+        allRecords.push(...pageList);
+        if (pageData.pageInfo?.isLastPage || pageList.length < serverPageSize) break;
+        offsetAll += serverPageSize;
+        loops += 1;
+      }
+
+      const rows: ManualOrder[] = allRecords.map((r, idx) => {
+        const rawId = getFieldValue(r, ['Id','id','ID','pk']);
+        const fallbackId = getFieldValue(r, ['Order ID','order_id','ordernumber']);
+        const id = rawId ?? fallbackId ?? `noco-${idx}`;
+
+        const order_date = toIsoDate(getFieldValue(r, ['order_date','Order date','Order Date','Date','date']));
+        const orderIdNum = toNumber(getFieldValue(r, ['Order ID','order_id','ordernumber']));
+        const status = toOptionalString(getFieldValue(r, ['status','Status','Order status','Order Status'])) || 'New';
+        const shipping_partner = toOptionalString(getFieldValue(r, ['shipping_partner','Shipping Partner','Shipping']));
+        const tracking_code = toOptionalString(getFieldValue(r, ['tracking_code','Tracking code','Tracking','trackingnumber']));
+        const customer_name = toOptionalString(getFieldValue(r, ['customer_name','Customer Name','customername']));
+        const phone_number = toOptionalString(getFieldValue(r, ['phone_number','Phone number','phone']));
+        const address = toOptionalString(getFieldValue(r, ['address','Address']));
+        const quantity = toNumber(getFieldValue(r, ['quantity','Quantity','qty','Quanity'])) || 1;
+        const servicable = parseBooleanish(getFieldValue(r, ['servicable','Servicable','serviceable']));
+        const source = toOptionalString(getFieldValue(r, ['source','Source','Order type'])) || '';
+        const created_by = toOptionalString(getFieldValue(r, ['created_by','Created by','Agent','agent'])) || (currentUser || '');
+        const created_at = toOptionalString(getFieldValue(r, ['created_at','Created At','updated_at','Updated At','Date'])) || new Date().toISOString();
+        const notes = toOptionalString(getFieldValue(r, ['notes','Notes','Followup details','Reason for Manual']));
+
         return {
           id,
           created_at,
-          created_by: String(created_by),
-          source: String(source),
-          order_date: String(order_date || '').slice(0,10),
-          order_id: (Number.isFinite(order_id) ? Number(order_id) : null),
-          status: String(status || ''),
+          created_by,
+          source,
+          order_date: order_date.slice(0, 10),
+          order_id: orderIdNum,
+          status,
           quantity,
-          shipping_partner: shipping_partner ? String(shipping_partner) : null,
+          shipping_partner,
           servicable,
-          tracking_code: tracking_code ? String(tracking_code) : null,
-          customer_name: customer_name ? String(customer_name) : null,
-          address: address ? String(address) : null,
-          phone_number: phone_number ? String(phone_number) : null,
-          notes: notes ? String(notes) : null,
+          tracking_code,
+          customer_name,
+          address,
+          phone_number,
+          notes,
         } as ManualOrder;
       });
+
       setOrders(rows);
     } catch (e: any) {
       setError(e?.message || 'Failed to load orders');
-    } finally { setLoading(false); }
-  }, []);
+      setOrders([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [currentUser]);
 
   const loadOrderDetail = useCallback(async (id: number) => {
     try {
@@ -549,18 +659,13 @@ export default function ManualOrdersDashboard() {
 
       {/* KPI Bar */}
       <div className="max-w-7xl mx-auto px-4 py-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">
-        {(['New','Packed','Dispatched','Delivered','RTO','NDR'] as const).map((s) => (
-          <div key={s} className="rounded-xl bg-white ring-1 ring-slate-200 p-3">
-            <div className="text-xs text-slate-500">{s}</div>
-            <div className="mt-1 text-2xl font-semibold">{kpi.counts[s] || 0}</div>
-            <div className="mt-1 text-[11px] text-slate-500">Today {kpi.todayCounts[s]||0} · Week {kpi.weekCounts[s]||0}</div>
+        {statusCards.map(([label, stats]) => (
+          <div key={label} className="rounded-xl bg-white ring-1 ring-slate-200 p-3">
+            <div className="text-xs text-slate-500">{label}</div>
+            <div className="mt-1 text-2xl font-semibold">{stats.total}</div>
+            <div className="mt-1 text-[11px] text-slate-500">Today {stats.today} · Week {stats.week}</div>
           </div>
         ))}
-        <div className="rounded-xl bg-white ring-1 ring-slate-200 p-3">
-          <div className="text-xs text-slate-500">Pincode Not Service</div>
-          <div className="mt-1 text-2xl font-semibold">{kpi.counts.PNS || 0}</div>
-          <div className="mt-1 text-[11px] text-slate-500">Today {kpi.todayCounts.PNS||0} · Week {kpi.weekCounts.PNS||0}</div>
-        </div>
       </div>
 
       {/* Table */}
@@ -659,10 +764,10 @@ export default function ManualOrdersDashboard() {
                   {/* Status */}
                   <th>
                     <div className="flex items-center gap-1">
-                      <select multiple value={statusFilter as any} onChange={(e)=>{ setStatusFilter(Array.from(e.target.selectedOptions).map(o=>o.value)); setPage(1); }} className="ring-1 ring-slate-200 rounded px-1 py-0.5 text-xs bg-white min-w-[140px]" title="Filter by status">
-                        {STATUS_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
+                      <select multiple value={statusFilter} onChange={(e)=>{ setStatusFilter(Array.from(e.target.selectedOptions).map(o=>o.value)); setPage(1); }} className="ring-1 ring-slate-200 rounded px-1 py-0.5 text-xs bg-white min-w-[140px]" title="Filter by status">
+                        {statusOptions.map(s => <option key={s} value={s}>{s}</option>)}
                       </select>
-                      <button className="px-1.5 py-0.5 text-[11px] ring-1 ring-slate-200 rounded hover:bg-slate-50" title="Select all statuses" onClick={(e)=>{ e.preventDefault(); setStatusFilter(STATUS_OPTIONS as any); setPage(1); }}>All</button>
+                      <button className="px-1.5 py-0.5 text-[11px] ring-1 ring-slate-200 rounded hover:bg-slate-50" title="Select all statuses" onClick={(e)=>{ e.preventDefault(); setStatusFilter(statusOptions); setPage(1); }}>All</button>
                       <button className="px-1.5 py-0.5 text-[11px] ring-1 ring-slate-200 rounded hover:bg-slate-50" title="Clear statuses" onClick={(e)=>{ e.preventDefault(); setStatusFilter([]); setPage(1); }}>Clear</button>
                     </div>
                   </th>
@@ -706,10 +811,10 @@ export default function ManualOrdersDashboard() {
                   {/* Source */}
                   <th>
                     <div className="flex items-center gap-1">
-                      <select multiple value={sourceFilter as any} onChange={(e)=>{ setSourceFilter(Array.from(e.target.selectedOptions).map(o=>o.value)); setPage(1); }} className="ring-1 ring-slate-200 rounded px-1 py-0.5 text-xs bg-white min-w-[140px]" title="Filter by source">
-                        {SOURCE_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
+                      <select multiple value={sourceFilter} onChange={(e)=>{ setSourceFilter(Array.from(e.target.selectedOptions).map(o=>o.value)); setPage(1); }} className="ring-1 ring-slate-200 rounded px-1 py-0.5 text-xs bg-white min-w-[140px]" title="Filter by source">
+                        {sourceOptions.map(s => <option key={s} value={s}>{s}</option>)}
                       </select>
-                      <button className="px-1.5 py-0.5 text-[11px] ring-1 ring-slate-200 rounded hover:bg-slate-50" title="Select all sources" onClick={(e)=>{ e.preventDefault(); setSourceFilter(SOURCE_OPTIONS as any); setPage(1); }}>All</button>
+                      <button className="px-1.5 py-0.5 text-[11px] ring-1 ring-slate-200 rounded hover:bg-slate-50" title="Select all sources" onClick={(e)=>{ e.preventDefault(); setSourceFilter(sourceOptions); setPage(1); }}>All</button>
                       <button className="px-1.5 py-0.5 text-[11px] ring-1 ring-slate-200 rounded hover:bg-slate-50" title="Clear sources" onClick={(e)=>{ e.preventDefault(); setSourceFilter([]); setPage(1); }}>Clear</button>
                     </div>
                   </th>
@@ -756,7 +861,7 @@ export default function ManualOrdersDashboard() {
                         className="px-1 py-0.5 text-xs ring-1 ring-slate-300 rounded bg-white hover:bg-slate-50"
                         title="Change status"
                       >
-                        {STATUS_OPTIONS.map(s => (
+                        {statusOptions.map(s => (
                           <option key={s} value={s}>{s}</option>
                         ))}
                       </select>
@@ -831,8 +936,8 @@ export default function ManualOrdersDashboard() {
               {orderFetchError && <div className="sm:col-span-3 text-sm text-rose-700">{orderFetchError}</div>}
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <label className="text-sm block">Source<select className="mt-1 w-full ring-1 ring-slate-200 rounded-lg px-3 py-2 bg-white" value={String(createForm.source || '')} onChange={(e)=>setCreateForm(v=>({ ...v, source: e.target.value as any }))}>{['',...SOURCE_OPTIONS].map(s => <option key={s} value={s}>{s||'Select…'}</option>)}</select></label>
-              <label className="text-sm block">Status<select className="mt-1 w-full ring-1 ring-slate-200 rounded-lg px-3 py-2 bg-white" value={String(createForm.status || 'New')} onChange={(e)=>setCreateForm(v=>({ ...v, status: e.target.value as any }))}>{STATUS_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}</select></label>
+              <label className="text-sm block">Source<select className="mt-1 w-full ring-1 ring-slate-200 rounded-lg px-3 py-2 bg-white" value={String(createForm.source || '')} onChange={(e)=>setCreateForm(v=>({ ...v, source: e.target.value }))}>{['',...sourceOptions].map(s => <option key={s || 'empty'} value={s}>{s||'Select…'}</option>)}</select></label>
+              <label className="text-sm block">Status<select className="mt-1 w-full ring-1 ring-slate-200 rounded-lg px-3 py-2 bg-white" value={String(createForm.status || 'New')} onChange={(e)=>setCreateForm(v=>({ ...v, status: e.target.value }))}>{statusOptions.map(s => <option key={s} value={s}>{s}</option>)}</select></label>
               <label className="text-sm block">Customer Name<input className="mt-1 w-full ring-1 ring-slate-200 rounded-lg px-3 py-2" value={String(createForm.customer_name || '')} onChange={(e)=>setCreateForm(v=>({ ...v, customer_name: e.target.value }))}/></label>
               <label className="text-sm block">Phone Number<input className="mt-1 w-full ring-1 ring-slate-200 rounded-lg px-3 py-2" value={String(createForm.phone_number || '')} onChange={(e)=>setCreateForm(v=>({ ...v, phone_number: e.target.value }))} placeholder="+919999999999"/></label>
               <label className="text-sm block sm:col-span-2">Address<textarea className="mt-1 w-full ring-1 ring-slate-200 rounded-lg px-3 py-2 min-h-[80px]" value={String(createForm.address || '')} onChange={(e)=>setCreateForm(v=>({ ...v, address: e.target.value }))}/></label>
@@ -883,7 +988,7 @@ export default function ManualOrdersDashboard() {
               <div className="rounded-xl ring-1 ring-slate-200 p-3">
                 <div className="text-sm font-semibold mb-2">Update Status</div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <label className="text-sm block">New Status<select className="mt-1 w-full ring-1 ring-slate-200 rounded-lg px-3 py-2 bg-white" value={updateStatus || openOrder.status} onChange={(e)=>setUpdateStatus(e.target.value)}>{STATUS_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}</select></label>
+                  <label className="text-sm block">New Status<select className="mt-1 w-full ring-1 ring-slate-200 rounded-lg px-3 py-2 bg-white" value={updateStatus || openOrder.status} onChange={(e)=>setUpdateStatus(e.target.value)}>{statusOptions.map(s => <option key={s} value={s}>{s}</option>)}</select></label>
                   <label className="text-sm block">Remark (required for RTO/NDR/Cancelled)<textarea className="mt-1 w-full ring-1 ring-slate-200 rounded-lg px-3 py-2 min-h-[60px]" placeholder="Reason / discussion…" value={noteRemark} onChange={(e)=>setNoteRemark(e.target.value)} /></label>
                   <label className="text-sm block">Shipping Partner<input className="mt-1 w-full ring-1 ring-slate-200 rounded-lg px-3 py-2" value={updatePartner} onChange={(e)=>setUpdatePartner(e.target.value)} placeholder="ST Courier / Delhivery / …"/></label>
                   <label className="text-sm block">Tracking Code<input className="mt-1 w-full ring-1 ring-slate-200 rounded-lg px-3 py-2" value={updateTracking} onChange={(e)=>setUpdateTracking(e.target.value)} placeholder="TRK123…"/></label>
