@@ -625,11 +625,11 @@ export default function ManualOrdersDashboard() {
           <input value={q} onChange={(e)=>{ setQ(e.target.value); setPage(1); }} placeholder="Search name/phone/order/tracking…" aria-label="Search manual orders" className="flex-1 bg-transparent outline-none text-sm min-w-[220px]" />
           {/* Filters */}
           <div className="flex items-center gap-2 flex-wrap">
-            <select multiple value={statusFilter as any} onChange={(e)=>setStatusFilter(Array.from(e.target.selectedOptions).map(o=>o.value))} className="ring-1 ring-slate-200 rounded-lg px-2 py-1 text-sm bg-white min-w-[160px]" title="Filter by status" aria-label="Filter by status">
-              {STATUS_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
+            <select multiple value={statusFilter} onChange={(e)=>setStatusFilter(Array.from(e.target.selectedOptions).map(o=>o.value))} className="ring-1 ring-slate-200 rounded-lg px-2 py-1 text-sm bg-white min-w-[160px]" title="Filter by status" aria-label="Filter by status">
+              {statusOptions.map(s => <option key={s} value={s}>{s}</option>)}
             </select>
-            <select multiple value={sourceFilter as any} onChange={(e)=>setSourceFilter(Array.from(e.target.selectedOptions).map(o=>o.value))} className="ring-1 ring-slate-200 rounded-lg px-2 py-1 text-sm bg-white min-w-[180px]" title="Filter by source" aria-label="Filter by source">
-              {SOURCE_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
+            <select multiple value={sourceFilter} onChange={(e)=>setSourceFilter(Array.from(e.target.selectedOptions).map(o=>o.value))} className="ring-1 ring-slate-200 rounded-lg px-2 py-1 text-sm bg-white min-w-[180px]" title="Filter by source" aria-label="Filter by source">
+              {sourceOptions.map(s => <option key={s} value={s}>{s}</option>)}
             </select>
             <select multiple value={partnerFilter as any} onChange={(e)=>setPartnerFilter(Array.from(e.target.selectedOptions).map(o=>o.value))} className="ring-1 ring-slate-200 rounded-lg px-2 py-1 text-sm bg-white min-w-[160px]" title="Filter by shipping partner" aria-label="Filter by shipping partner">
               {partners.map(p => <option key={p} value={p}>{p}</option>)}
