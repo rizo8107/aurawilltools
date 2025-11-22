@@ -20,6 +20,7 @@ const TABLES: Array<{ id: string; label: string; defaultViewId?: string }> = [
   { id: 'm135bs690ngf28r', label: 'Missed call', defaultViewId: 'vw6crj6fzeftwwwh' },
   { id: 'md2i0xibfqgmv9y', label: 'Incoming Email' },
   { id: 'mkq6wdce7yukjl9', label: 'Incoming calls' },
+  { id: 'mis8ifo8jxfn2ws', label: 'Manual Orders', defaultViewId: 'vwpjkriu2g0u8vhn' },
 ];
 
 export default function AgentAnalyticsPage() {
@@ -28,6 +29,7 @@ export default function AgentAnalyticsPage() {
   const [startDate, setStartDate] = useState<string>('');
   const [endDate, setEndDate] = useState<string>('');
   const [agentQuery, setAgentQuery] = useState('');
+  const [agentFilter, setAgentFilter] = useState<string>('');
   const [minTotal, setMinTotal] = useState<number | ''>('');
   const [sortKey, setSortKey] = useState<'agent'|'total'|'lastActivity'>('total');
   const [sortDir, setSortDir] = useState<'asc'|'desc'>('desc');
@@ -185,10 +187,21 @@ export default function AgentAnalyticsPage() {
     });
   }, [rows, startDate, endDate, getDateKey]);
 
+  const agentNames = useMemo(() => {
+    const set = new Set<string>();
+    for (const r of filtered) {
+      const raw = r['Agent'] ?? r['agent'] ?? r[agentField];
+      const a = String(raw ?? '').trim() || '(Unassigned)';
+      set.add(a);
+    }
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [filtered, agentField]);
+
   const aggs = useMemo<AgentAgg[]>(() => {
     const map = new Map<string, AgentAgg>();
     for (const r of filtered) {
-      const a = String(r[agentField] ?? '').trim() || '(Unassigned)';
+      const raw = r['Agent'] ?? r['agent'] ?? r[agentField];
+      const a = String(raw ?? '').trim() || '(Unassigned)';
       const cur = map.get(a) || { agent: a, total: 0, lastActivity: undefined };
       cur.total += 1;
       // track latest date
@@ -202,6 +215,9 @@ export default function AgentAnalyticsPage() {
     }
     let arr = Array.from(map.values());
     // agent filters
+    if (agentFilter && tableId === 'mis8ifo8jxfn2ws') {
+      arr = arr.filter(x => x.agent === agentFilter);
+    }
     if (agentQuery.trim()) {
       const q = agentQuery.trim().toLowerCase();
       arr = arr.filter(x => x.agent.toLowerCase().includes(q));
@@ -223,12 +239,73 @@ export default function AgentAnalyticsPage() {
       }
     });
     return arr;
-  }, [filtered, agentField, agentQuery, minTotal, sortKey, sortDir]);
+  }, [filtered, agentField, agentQuery, agentFilter, minTotal, sortKey, sortDir, tableId]);
 
   const total = filtered.length;
   const uniqueAgents = aggs.length;
   const PIVOT_TABLE_IDS = new Set<string>(['m135bs690ngf28r','mkq6wdce7yukjl9','md2i0xibfqgmv9y']);
   const isPivotMode = PIVOT_TABLE_IDS.has(tableId);
+  const isManualOrdersMode = tableId === 'mis8ifo8jxfn2ws';
+
+  // Rows used for Manual Orders KPIs (respect agent dropdown if set)
+  const manualRows = useMemo(() => {
+    if (!isManualOrdersMode) return filtered;
+    if (!agentFilter) return filtered;
+    return filtered.filter(r => {
+      const raw = r['Agent'] ?? r['agent'] ?? r[agentField];
+      const a = String(raw ?? '').trim() || '(Unassigned)';
+      return a === agentFilter;
+    });
+  }, [filtered, isManualOrdersMode, agentFilter, agentField]);
+
+  // Reset agent dropdown when leaving Manual Orders tab so other tables are unaffected
+  useEffect(() => {
+    if (!isManualOrdersMode && agentFilter) setAgentFilter('');
+  }, [isManualOrdersMode, agentFilter]);
+
+  // Manual Orders KPI computations (use existing filtered rows)
+  const manualOrdersKPI = useMemo(() => {
+    if (!isManualOrdersMode) return null;
+    const agentMap = new Map<string, number>();
+    const reasonMap = new Map<string, number>();
+    const firstSenderMap = new Map<string, number>();
+    const shippingMap = new Map<string, number>();
+    const sourceMap = new Map<string, number>();
+    
+    for (const r of manualRows) {
+      const agent = String(r['Agent'] ?? r['agent'] ?? '').trim() || '(Unassigned)';
+      agentMap.set(agent, (agentMap.get(agent) || 0) + 1);
+      
+      const reason = String(r['Reason for Manual'] ?? r['reason_for_manual'] ?? '').trim() || '(No Reason)';
+      reasonMap.set(reason, (reasonMap.get(reason) || 0) + 1);
+      
+      const firstSender = String(r['First Sender'] ?? r['first_sender'] ?? '').trim() || '(Unknown)';
+      firstSenderMap.set(firstSender, (firstSenderMap.get(firstSender) || 0) + 1);
+      
+      const shipping = String(r['Shipping'] ?? r['shipping'] ?? '').trim() || '(Unknown)';
+      shippingMap.set(shipping, (shippingMap.get(shipping) || 0) + 1);
+      
+      const source = String(r['Source'] ?? r['source'] ?? '').trim() || '(Unknown)';
+      sourceMap.set(source, (sourceMap.get(source) || 0) + 1);
+    }
+    
+    const sortByCount = (map: Map<string, number>) =>
+      Array.from(map.entries()).sort((a, b) => b[1] - a[1]).slice(0, 20);
+    
+    return {
+      total: manualRows.length,
+      agentBreakdown: sortByCount(agentMap),
+      reasonBreakdown: sortByCount(reasonMap),
+      firstSenderBreakdown: sortByCount(firstSenderMap),
+      shippingBreakdown: sortByCount(shippingMap),
+      sourceBreakdown: sortByCount(sourceMap),
+      agentOptions: Array.from(agentMap.keys()).sort(),
+      reasonOptions: Array.from(reasonMap.keys()).sort(),
+      firstSenderOptions: Array.from(firstSenderMap.keys()).sort(),
+      shippingOptions: Array.from(shippingMap.keys()).sort(),
+      sourceOptions: Array.from(sourceMap.keys()).sort(),
+    };
+  }, [manualRows, isManualOrdersMode]);
   const agentTotalPages = Math.max(1, Math.ceil(uniqueAgents / agentPageSize));
   const agentStart = (agentPage - 1) * agentPageSize;
   const agentSlice = aggs.slice(agentStart, agentStart + agentPageSize);
@@ -254,14 +331,33 @@ export default function AgentAnalyticsPage() {
       {/* Controls */}
       <div className="bg-white rounded-lg shadow p-4 mb-4">
         <div className="flex flex-wrap items-end gap-3">
-          <div>
-            <label className="block text-xs text-gray-600 mb-1">Agent Field</label>
-            <input value={agentField} onChange={(e)=>setAgentField(e.target.value)} placeholder="agent" className="ring-1 ring-slate-200 rounded px-2 py-1 text-sm w-[160px]" />
-          </div>
-          <div>
-            <label className="block text-xs text-gray-600 mb-1">Agent search</label>
-            <input value={agentQuery} onChange={(e)=>setAgentQuery(e.target.value)} placeholder="type to filter" className="ring-1 ring-slate-200 rounded px-2 py-1 text-sm w-[200px]" />
-          </div>
+          {isManualOrdersMode ? (
+            <div>
+              <label className="block text-xs text-gray-600 mb-1">Agent filter</label>
+              <select
+                title="Filter by agent"
+                value={agentFilter}
+                onChange={(e)=>setAgentFilter(e.target.value)}
+                className="ring-1 ring-slate-200 rounded px-2 py-1 text-sm w-[180px]"
+              >
+                <option value="">All agents</option>
+                {agentNames.map(name => (
+                  <option key={name} value={name}>{name}</option>
+                ))}
+              </select>
+            </div>
+          ) : (
+            <>
+              <div>
+                <label className="block text-xs text-gray-600 mb-1">Agent Field</label>
+                <input value={agentField} onChange={(e)=>setAgentField(e.target.value)} placeholder="Agent" className="ring-1 ring-slate-200 rounded px-2 py-1 text-sm w-[160px]" />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-600 mb-1">Agent search</label>
+                <input value={agentQuery} onChange={(e)=>setAgentQuery(e.target.value)} placeholder="type to filter" className="ring-1 ring-slate-200 rounded px-2 py-1 text-sm w-[200px]" />
+              </div>
+            </>
+          )}
           <div>
             <label className="block text-xs text-gray-600 mb-1">Min total</label>
             <input type="number" value={minTotal} onChange={(e)=>setMinTotal(e.target.value===''? '' : Number(e.target.value))} placeholder="e.g. 5" className="ring-1 ring-slate-200 rounded px-2 py-1 text-sm w-[100px]" />
@@ -329,7 +425,124 @@ export default function AgentAnalyticsPage() {
         </div>
       </div>
 
-      {!isPivotMode && (
+      {isManualOrdersMode && manualOrdersKPI && (
+        <div className="space-y-4">
+          {/* Manual Orders KPI Modules – styled like wireframe */}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4">
+            {/* Date module */}
+            <div className="bg-slate-50 rounded-xl p-3 flex flex-col gap-2">
+              <div className="text-xs font-semibold text-slate-700">Date module</div>
+              <div className="bg-white rounded-lg border border-slate-200 p-3 flex flex-col justify-center min-h-[80px]">
+                <div className="text-xs text-slate-500 mb-1">Total Manual order</div>
+                <div className="text-2xl font-semibold text-slate-900">{manualOrdersKPI.total}</div>
+              </div>
+              <div className="text-[11px] text-slate-400">use field - Order ID</div>
+            </div>
+
+            {/* Agent filter */}
+            <div className="bg-slate-50 rounded-xl p-3 flex flex-col gap-2">
+              <div className="text-xs font-semibold text-slate-700">Agent filter</div>
+              <div className="bg-white rounded-lg border border-slate-200 p-3 min-h-[80px]">
+                <div className="text-xs text-slate-500 mb-2">Agent wise</div>
+                <div className="space-y-1 text-xs max-h-24 overflow-y-auto">
+                  {manualOrdersKPI.agentBreakdown.slice(0, 4).map(([name, count]) => (
+                    <div key={name} className="flex justify-between">
+                      <span className="truncate mr-2">{name}</span>
+                      <span className="font-medium">{count}</span>
+                    </div>
+                  ))}
+                  {!manualOrdersKPI.agentBreakdown.length && (
+                    <div className="text-slate-400">No data</div>
+                  )}
+                </div>
+              </div>
+              <div className="text-[11px] text-slate-400">use field - Agent</div>
+            </div>
+
+            {/* Reason for Manual Filter */}
+            <div className="bg-slate-50 rounded-xl p-3 flex flex-col gap-2">
+              <div className="text-xs font-semibold text-slate-700">Reason for Manual Filter</div>
+              <div className="bg-white rounded-lg border border-slate-200 p-3 min-h-[80px]">
+                <div className="text-xs text-slate-500 mb-2">Reason for Manual</div>
+                <div className="space-y-1 text-xs max-h-24 overflow-y-auto">
+                  {manualOrdersKPI.reasonBreakdown.slice(0, 4).map(([name, count]) => (
+                    <div key={name} className="flex justify-between">
+                      <span className="truncate mr-2">{name}</span>
+                      <span className="font-medium">{count}</span>
+                    </div>
+                  ))}
+                  {!manualOrdersKPI.reasonBreakdown.length && (
+                    <div className="text-slate-400">No data</div>
+                  )}
+                </div>
+              </div>
+              <div className="text-[11px] text-slate-400">use field - Reason for Manual</div>
+            </div>
+
+            {/* Reason for Manual - filter (First Sender) */}
+            <div className="bg-slate-50 rounded-xl p-3 flex flex-col gap-2">
+              <div className="text-xs font-semibold text-slate-700">Reason for Manual - filter</div>
+              <div className="bg-white rounded-lg border border-slate-200 p-3 min-h-[80px]">
+                <div className="text-xs text-slate-500 mb-2">First sender</div>
+                <div className="space-y-1 text-xs max-h-24 overflow-y-auto">
+                  {manualOrdersKPI.firstSenderBreakdown.slice(0, 4).map(([name, count]) => (
+                    <div key={name} className="flex justify-between">
+                      <span className="truncate mr-2">{name}</span>
+                      <span className="font-medium">{count}</span>
+                    </div>
+                  ))}
+                  {!manualOrdersKPI.firstSenderBreakdown.length && (
+                    <div className="text-slate-400">No data</div>
+                  )}
+                </div>
+              </div>
+              <div className="text-[11px] text-slate-400">use field - First Sender</div>
+            </div>
+
+            {/* Shipping - filter */}
+            <div className="bg-slate-50 rounded-xl p-3 flex flex-col gap-2">
+              <div className="text-xs font-semibold text-slate-700">Shipping - filter</div>
+              <div className="bg-white rounded-lg border border-slate-200 p-3 min-h-[80px]">
+                <div className="text-xs text-slate-500 mb-2">Resender / Courier</div>
+                <div className="space-y-1 text-xs max-h-24 overflow-y-auto">
+                  {manualOrdersKPI.shippingBreakdown.slice(0, 4).map(([name, count]) => (
+                    <div key={name} className="flex justify-between">
+                      <span className="truncate mr-2">{name}</span>
+                      <span className="font-medium">{count}</span>
+                    </div>
+                  ))}
+                  {!manualOrdersKPI.shippingBreakdown.length && (
+                    <div className="text-slate-400">No data</div>
+                  )}
+                </div>
+              </div>
+              <div className="text-[11px] text-slate-400">use field - Shipping</div>
+            </div>
+
+            {/* Source - filter */}
+            <div className="bg-slate-50 rounded-xl p-3 flex flex-col gap-2">
+              <div className="text-xs font-semibold text-slate-700">Source - filter</div>
+              <div className="bg-white rounded-lg border border-slate-200 p-3 min-h-[80px]">
+                <div className="text-xs text-slate-500 mb-2">Source</div>
+                <div className="space-y-1 text-xs max-h-24 overflow-y-auto">
+                  {manualOrdersKPI.sourceBreakdown.slice(0, 4).map(([name, count]) => (
+                    <div key={name} className="flex justify-between">
+                      <span className="truncate mr-2">{name}</span>
+                      <span className="font-medium">{count}</span>
+                    </div>
+                  ))}
+                  {!manualOrdersKPI.sourceBreakdown.length && (
+                    <div className="text-slate-400">No data</div>
+                  )}
+                </div>
+              </div>
+              <div className="text-[11px] text-slate-400">use field - Source</div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {!isPivotMode && !isManualOrdersMode && (
       <div className="bg-white rounded-lg shadow overflow-auto">
         <table className="min-w-full text-sm">
           <thead className="bg-slate-50">
