@@ -30,6 +30,8 @@ export default function AgentAnalyticsPage() {
   const [endDate, setEndDate] = useState<string>('');
   const [agentQuery, setAgentQuery] = useState('');
   const [agentFilter, setAgentFilter] = useState<string>('');
+  const [orderTypeFilter, setOrderTypeFilter] = useState<string>('');
+  const [hideMahesh, setHideMahesh] = useState<boolean>(false);
   const [minTotal, setMinTotal] = useState<number | ''>('');
   const [sortKey, setSortKey] = useState<'agent'|'total'|'lastActivity'>('total');
   const [sortDir, setSortDir] = useState<'asc'|'desc'>('desc');
@@ -250,18 +252,40 @@ export default function AgentAnalyticsPage() {
   // Rows used for Manual Orders KPIs (respect agent dropdown if set)
   const manualRows = useMemo(() => {
     if (!isManualOrdersMode) return filtered;
-    if (!agentFilter) return filtered;
     return filtered.filter(r => {
-      const raw = r['Agent'] ?? r['agent'] ?? r[agentField];
-      const a = String(raw ?? '').trim() || '(Unassigned)';
-      return a === agentFilter;
-    });
-  }, [filtered, isManualOrdersMode, agentFilter, agentField]);
+      // Agent filter (dropdown)
+      if (agentFilter) {
+        const rawAgent = r['Agent'] ?? r['agent'] ?? r[agentField];
+        const agent = String(rawAgent ?? '').trim() || '(Unassigned)';
+        if (agent !== agentFilter) return false;
+      }
 
-  // Reset agent dropdown when leaving Manual Orders tab so other tables are unaffected
+      // Order type filter (NocoDB 'Order type' field)
+      if (orderTypeFilter) {
+        const rawType = r['Order type'] ?? r['order_type'] ?? r['Order Type'];
+        const orderType = String(rawType ?? '').trim();
+        if (orderType !== orderTypeFilter) return false;
+      }
+
+      // Hide Mahesh checkbox
+      if (hideMahesh) {
+        const rawAgent = r['Agent'] ?? r['agent'] ?? r[agentField];
+        const agent = String(rawAgent ?? '').trim();
+        if (agent.toLowerCase() === 'mahesh') return false;
+      }
+
+      return true;
+    });
+  }, [filtered, isManualOrdersMode, agentFilter, orderTypeFilter, hideMahesh, agentField]);
+
+  // Reset Manual Orders specific filters when leaving Manual Orders tab so other tables are unaffected
   useEffect(() => {
-    if (!isManualOrdersMode && agentFilter) setAgentFilter('');
-  }, [isManualOrdersMode, agentFilter]);
+    if (!isManualOrdersMode) {
+      if (agentFilter) setAgentFilter('');
+      if (orderTypeFilter) setOrderTypeFilter('');
+      if (hideMahesh) setHideMahesh(false);
+    }
+  }, [isManualOrdersMode, agentFilter, orderTypeFilter, hideMahesh]);
 
   // Manual Orders KPI computations (use existing filtered rows)
   const manualOrdersKPI = useMemo(() => {
@@ -292,6 +316,14 @@ export default function AgentAnalyticsPage() {
     const sortByCount = (map: Map<string, number>) =>
       Array.from(map.entries()).sort((a, b) => b[1] - a[1]).slice(0, 20);
     
+    // Distinct order types for Manual Orders filter dropdown
+    const orderTypeSet = new Set<string>();
+    manualRows.forEach(r => {
+      const rawType = r['Order type'] ?? r['order_type'] ?? r['Order Type'];
+      const val = String(rawType ?? '').trim();
+      if (val) orderTypeSet.add(val);
+    });
+
     return {
       total: manualRows.length,
       agentBreakdown: sortByCount(agentMap),
@@ -304,6 +336,7 @@ export default function AgentAnalyticsPage() {
       firstSenderOptions: Array.from(firstSenderMap.keys()).sort(),
       shippingOptions: Array.from(shippingMap.keys()).sort(),
       sourceOptions: Array.from(sourceMap.keys()).sort(),
+      orderTypeOptions: Array.from(orderTypeSet.values()).sort(),
     };
   }, [manualRows, isManualOrdersMode]);
   const agentTotalPages = Math.max(1, Math.ceil(uniqueAgents / agentPageSize));
@@ -332,20 +365,46 @@ export default function AgentAnalyticsPage() {
       <div className="bg-white rounded-lg shadow p-4 mb-4">
         <div className="flex flex-wrap items-end gap-3">
           {isManualOrdersMode ? (
-            <div>
-              <label className="block text-xs text-gray-600 mb-1">Agent filter</label>
-              <select
-                title="Filter by agent"
-                value={agentFilter}
-                onChange={(e)=>setAgentFilter(e.target.value)}
-                className="ring-1 ring-slate-200 rounded px-2 py-1 text-sm w-[180px]"
-              >
-                <option value="">All agents</option>
-                {agentNames.map(name => (
-                  <option key={name} value={name}>{name}</option>
-                ))}
-              </select>
-            </div>
+            <>
+              <div>
+                <label className="block text-xs text-gray-600 mb-1">Agent filter</label>
+                <select
+                  title="Filter by agent"
+                  value={agentFilter}
+                  onChange={(e)=>setAgentFilter(e.target.value)}
+                  className="ring-1 ring-slate-200 rounded px-2 py-1 text-sm w-[180px]"
+                >
+                  <option value="">All agents</option>
+                  {agentNames.map(name => (
+                    <option key={name} value={name}>{name}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs text-gray-600 mb-1">Order type</label>
+                <select
+                  title="Filter by Order type"
+                  value={orderTypeFilter}
+                  onChange={(e)=>setOrderTypeFilter(e.target.value)}
+                  className="ring-1 ring-slate-200 rounded px-2 py-1 text-sm w-[180px]"
+                >
+                  <option value="">All types</option>
+                  {(manualOrdersKPI?.orderTypeOptions ?? []).map(t => (
+                    <option key={t} value={t}>{t}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex items-center gap-1 mt-5">
+                <input
+                  id="hide-mahesh"
+                  type="checkbox"
+                  className="h-3 w-3 rounded border-slate-300"
+                  checked={hideMahesh}
+                  onChange={(e)=>setHideMahesh(e.target.checked)}
+                />
+                <label htmlFor="hide-mahesh" className="text-xs text-gray-700 select-none">Hide Mahesh</label>
+              </div>
+            </>
           ) : (
             <>
               <div>
@@ -481,7 +540,7 @@ export default function AgentAnalyticsPage() {
 
             {/* Reason for Manual - filter (First Sender) */}
             <div className="bg-slate-50 rounded-xl p-3 flex flex-col gap-2">
-              <div className="text-xs font-semibold text-slate-700">Reason for Manual - filter</div>
+              <div className="text-xs font-semibold text-slate-700">First Sender</div>
               <div className="bg-white rounded-lg border border-slate-200 p-3 min-h-[80px]">
                 <div className="text-xs text-slate-500 mb-2">First sender</div>
                 <div className="space-y-1 text-xs max-h-24 overflow-y-auto">
