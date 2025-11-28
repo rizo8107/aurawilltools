@@ -156,6 +156,20 @@
 }
 
 
+.india-post-note {
+  background: #fffbe6;
+  border-top: 1px dashed #d4b106;
+  border-bottom: 1px dashed #d4b106;
+  font-weight: 700;
+  font-size: 14px;
+}
+
+.customer-id-note {
+  font-size: 16px;
+  font-weight: 700;
+}
+
+
 .barcode-section {
   padding: 5px;
   text-align: center;

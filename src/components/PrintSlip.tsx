@@ -120,6 +120,7 @@ export default function PrintSlip() {
   const [totalPages, setTotalPages] = useState(1);
   const [pageSize] = useState(25);
   const [selectedRecords, setSelectedRecords] = useState<Set<number>>(new Set());
+  const [customerIdNoteRecords, setCustomerIdNoteRecords] = useState<Set<number>>(new Set());
   
   // Filters
   const [dateFilter, setDateFilter] = useState('');
@@ -130,6 +131,12 @@ export default function PrintSlip() {
   
   const [output, setOutput] = useState<string>('');
   const [apiError, setApiError] = useState('');
+
+  const startIndex = (currentPage - 1) * pageSize;
+  const paginatedRecords = records.slice(startIndex, startIndex + pageSize);
+  const allPageSelected =
+    paginatedRecords.length > 0 &&
+    paginatedRecords.every((r) => selectedRecords.has(r.Id));
 
   useEffect(() => {
     // Load JsBarcode script
@@ -160,6 +167,12 @@ export default function PrintSlip() {
   // When records refresh, drop any selections that no longer exist
   useEffect(() => {
     setSelectedRecords(prev => {
+      const ids = new Set(records.map(r => r.Id));
+      const next = new Set<number>();
+      prev.forEach(id => { if (ids.has(id)) next.add(id); });
+      return next;
+    });
+    setCustomerIdNoteRecords(prev => {
       const ids = new Set(records.map(r => r.Id));
       const next = new Set<number>();
       prev.forEach(id => { if (ids.has(id)) next.add(id); });
@@ -271,6 +284,9 @@ export default function PrintSlip() {
       const phone = record["Phone number"];
       const date = getDateField(record);
       const tracking = record.Tracking;
+      const courierRaw = (shipping || '').toString().trim();
+      const isIndiaPost = courierRaw.toLowerCase() === 'india post';
+      const addCustomerIdNote = customerIdNoteRecords.has(record.Id);
 
       // Parse address to extract customer name and address parts
       const addressParts = address.split(',').map(s => s.trim());
@@ -288,6 +304,10 @@ export default function PrintSlip() {
         <div class="slip">
           <div class="slip-header">
             <div class="ship-to-label">SHIP TO:</div>
+            ${isIndiaPost ? `
+            <div class="detail-row india-post-note" style="margin-top:2px;">
+              <div class="detail-value">Speed Post Booked Under Advance Customer ID: 1790889211 @coimbatore HPO</div>
+            </div>` : ''}
             <div class="address">
               ${customerName ? `<div class="to-name">${customerName}</div>` : ''}
               ${streetLines.length ? `<div>${streetLines.join(', ')}</div>` : ''}
@@ -314,6 +334,10 @@ export default function PrintSlip() {
               <div class="detail-label">SHIPPING:</div>
               <div class="detail-value">${shipping} | Qty: ${qty}</div>
             </div>
+            ${addCustomerIdNote ? `
+            <div class="detail-row">
+              <div class="detail-value customer-id-note">Speed post booked under the customer id 1790889211</div>
+            </div>` : ''}
             ${tracking ? `
             <div class="detail-row">
               <div class="detail-label">TRACKING:</div>
@@ -357,12 +381,24 @@ export default function PrintSlip() {
     setSelectedRecords(newSelected);
   };
 
-  const handleSelectAll = () => {
-    if (selectedRecords.size === records.length) {
-      setSelectedRecords(new Set());
+  const handleToggleCustomerIdNote = (recordId: number) => {
+    const next = new Set(customerIdNoteRecords);
+    if (next.has(recordId)) {
+      next.delete(recordId);
     } else {
-      setSelectedRecords(new Set(records.map(r => r.Id)));
+      next.add(recordId);
     }
+    setCustomerIdNoteRecords(next);
+  };
+
+  const handleSelectAll = () => {
+    const newSelected = new Set(selectedRecords);
+    if (allPageSelected) {
+      paginatedRecords.forEach((r) => newSelected.delete(r.Id));
+    } else {
+      paginatedRecords.forEach((r) => newSelected.add(r.Id));
+    }
+    setSelectedRecords(newSelected);
   };
 
   const generateSelectedSlips = () => {
@@ -648,11 +684,12 @@ export default function PrintSlip() {
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                   <input
                     type="checkbox"
-                    checked={selectedRecords.size === records.length && records.length > 0}
+                    checked={allPageSelected}
                     onChange={handleSelectAll}
                     className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                   />
                 </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Cust ID Note</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Order ID</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Agent</th>
@@ -674,14 +711,28 @@ export default function PrintSlip() {
                     No records found
                   </td>
                 </tr>
+              ) : paginatedRecords.length === 0 ? (
+                <tr>
+                  <td colSpan={7} className="px-6 py-4 text-center text-gray-500">
+                    No records on this page
+                  </td>
+                </tr>
               ) : (
-                records.map((record) => (
+                paginatedRecords.map((record) => (
                   <tr key={record.Id} className={selectedRecords.has(record.Id) ? 'bg-blue-50' : ''}>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <input
                         type="checkbox"
                         checked={selectedRecords.has(record.Id)}
                         onChange={() => handleSelectRecord(record.Id)}
+                        className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                      />
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      <input
+                        type="checkbox"
+                        checked={customerIdNoteRecords.has(record.Id)}
+                        onChange={() => handleToggleCustomerIdNote(record.Id)}
                         className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                       />
                     </td>
