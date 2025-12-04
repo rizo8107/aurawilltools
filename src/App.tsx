@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import OrderForm from './components/OrderForm';
 import PrintSlip from './components/PrintSlip';
+import N8nPrintSlip from './components/N8nPrintSlip';
 import UpdateTracking from './components/UpdateTracking';
 import CreateManifest from './components/CreateManifest';
 import RepeatCampaign from './components/RepeatCampaign';
@@ -20,7 +21,7 @@ import ManualOrdersDashboard from './components/ManualOrdersDashboard';
 import SegmentationPage from './components/SegmentationPage';
 import SubscriptionContractForm from './components/SubscriptionContractForm';
 
-type TabType = 'order' | 'printslip' | 'tracking' | 'manifest' | 'campaign' | 'repeatorders' | 'repeat_dashboard' | 'orderhistory' | 'gstinvoice' | 'ndr' | 'teams' | 'allocation' | 'team_analytics' | 'agent_analytics' | 'segmentation' | 'manual_orders' | 'subscription_contract';
+type TabType = 'order' | 'printslip' | 'n8n_printslip' | 'tracking' | 'manifest' | 'campaign' | 'repeatorders' | 'repeat_dashboard' | 'orderhistory' | 'gstinvoice' | 'ndr' | 'teams' | 'allocation' | 'team_analytics' | 'agent_analytics' | 'segmentation' | 'manual_orders' | 'subscription_contract';
 
 function App() {
   const [activeTab, setActiveTab] = useState<TabType>('order');
@@ -73,6 +74,7 @@ function App() {
   const navigationItems = [
     { id: 'order', label: 'Order Form', icon: <Package size={20} /> },
     { id: 'printslip', label: 'Print Slip', icon: <Printer size={20} /> },
+    { id: 'n8n_printslip', label: 'n8n Print Slip', icon: <Printer size={20} /> },
     { id: 'tracking', label: 'Update Tracking', icon: <Truck size={20} /> },
     { id: 'manifest', label: 'Create Manifest', icon: <FileText size={20} /> },
     { id: 'campaign', label: 'Repeat Campaign', icon: <Users size={20} /> },
@@ -91,6 +93,7 @@ function App() {
   const pageDescriptions: Record<TabType, string> = {
     order: 'Create a new order by filling out the form below',
     printslip: 'Generate and print courier slips',
+    n8n_printslip: 'Generate and print courier slips from n8n JSON output',
     tracking: 'Update tracking information for orders',
     manifest: 'Create and manage shipping manifests',
     campaign: 'Manage repeat customer campaigns and feedback',
@@ -183,6 +186,7 @@ function App() {
           } ${(activeTab === 'ndr' || activeTab === 'repeat_dashboard' || activeTab === 'manual_orders') ? '' : 'mx-auto'}`}>
             {activeTab === 'order' && <OrderForm />}
             {activeTab === 'printslip' && <PrintSlip />}
+            {activeTab === 'n8n_printslip' && <N8nPrintSlip />}
             {activeTab === 'tracking' && <UpdateTracking />}
             {activeTab === 'manifest' && <CreateManifest />}
             {activeTab === 'campaign' && (
