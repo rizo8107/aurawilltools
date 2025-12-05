@@ -5,9 +5,10 @@ interface OrderDetailsDialogProps {
   isOpen: boolean;
   onClose: () => void;
   orderNumber: string;
+  onCallStatusChange?: (email: string, newStatus: string) => void;
 }
 
-export default function OrderDetailsDialog({ isOpen, onClose, orderNumber }: OrderDetailsDialogProps) {
+export default function OrderDetailsDialog({ isOpen, onClose, orderNumber, onCallStatusChange }: OrderDetailsDialogProps) {
   if (!isOpen) return null;
 
   return (
@@ -25,7 +26,7 @@ export default function OrderDetailsDialog({ isOpen, onClose, orderNumber }: Ord
         </div>
         
         <div className="p-4">
-          <RepeatCampaign initialOrderNumber={orderNumber} />
+          <RepeatCampaign initialOrderNumber={orderNumber} onCallStatusChange={onCallStatusChange} />
         </div>
       </div>
     </div>

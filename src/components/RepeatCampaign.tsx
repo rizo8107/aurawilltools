@@ -65,11 +65,12 @@ interface FeedbackForm {
 interface RepeatCampaignProps {
   initialOrderNumber?: string;
   hideFeedback?: boolean;
+  onCallStatusChange?: (email: string, newStatus: string) => void;
 }
 
 // Caller selection removed; agent taken from localStorage('ndr_user') if present
 
-export default function RepeatCampaign({ initialOrderNumber = '', hideFeedback = false }: RepeatCampaignProps) {
+export default function RepeatCampaign({ initialOrderNumber = '', hideFeedback = false, onCallStatusChange }: RepeatCampaignProps) {
   const [orderId, setOrderId] = useState(initialOrderNumber || '');
   const [customerData, setCustomerData] = useState<CustomerData | null>(null);
   const [loading, setLoading] = useState(false);
@@ -220,7 +221,15 @@ export default function RepeatCampaign({ initialOrderNumber = '', hideFeedback =
             orderType: prev.order_type || prevState.orderType,
           }));
           // Adopt previous call status if present (default to 'Called')
-          setSelectedCallStatus(prev.call_status || 'Called');
+          const prevStatus = prev.call_status || 'Called';
+          setSelectedCallStatus(prevStatus);
+          // Notify parent to sync the call status in the table (use email or phone)
+          if (onCallStatusChange) {
+            const identifier = customerData?.customer_email || customerData?.customer_phone || '';
+            if (identifier) {
+              onCallStatusChange(identifier, prevStatus);
+            }
+          }
         } else {
           setReadOnlyFeedback(false);
         }
@@ -230,7 +239,7 @@ export default function RepeatCampaign({ initialOrderNumber = '', hideFeedback =
       }
     };
     loadPrev();
-  }, [customerData, feedbackForm.orderId, orderId]);
+  }, [customerData, feedbackForm.orderId, orderId, onCallStatusChange]);
   
   // Caller selection removed
   
@@ -441,6 +450,13 @@ export default function RepeatCampaign({ initialOrderNumber = '', hideFeedback =
 
       setSelectedCallStatus(newStatus);
       setMessage('Call status updated successfully!');
+      // Notify parent of the change (use email or phone)
+      if (onCallStatusChange) {
+        const identifier = customerData?.customer_email || customerData?.customer_phone || '';
+        if (identifier) {
+          onCallStatusChange(identifier, newStatus);
+        }
+      }
       setMessageType('success');
 
     } catch (err) {

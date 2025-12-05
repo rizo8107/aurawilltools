@@ -2563,6 +2563,22 @@ export default function RepeatDashboard() {
         isOpen={isDialogOpen}
         onClose={() => setIsDialogOpen(false)}
         orderNumber={selectedOrderNumber}
+        onCallStatusChange={(emailOrPhone, newStatus) => {
+          // Update the local rows state to sync call_status in the table
+          // Match by email (case-insensitive) or phone
+          const needle = (emailOrPhone || '').trim().toLowerCase();
+          setRows((prev) =>
+            prev.map((r) => {
+              const rowEmail = (r.email || '').trim().toLowerCase();
+              const rowPhone = (r.phone || '').replace(/\D/g, '');
+              const needlePhone = needle.replace(/\D/g, '');
+              if (rowEmail === needle || (needlePhone && rowPhone.endsWith(needlePhone))) {
+                return { ...r, call_status: newStatus };
+              }
+              return r;
+            })
+          );
+        }}
       />
 
       {/* Feedback details dialog */}
