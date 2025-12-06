@@ -126,6 +126,7 @@ export default function PrintSlip() {
   const [dateFilter, setDateFilter] = useState('');
   const [agentFilter, setAgentFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
+  const [shippingFilter, setShippingFilter] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
   const [showOnlyWithTracking, setShowOnlyWithTracking] = useState(false);
   
@@ -156,13 +157,13 @@ export default function PrintSlip() {
 
   useEffect(() => {
     fetchRecords();
-  }, [currentPage, dateFilter, agentFilter, statusFilter, searchTerm, showOnlyWithTracking]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [currentPage, dateFilter, agentFilter, statusFilter, shippingFilter, searchTerm, showOnlyWithTracking]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Reset pagination and selection when filters change
   useEffect(() => {
     setCurrentPage(1);
     setSelectedRecords(new Set());
-  }, [dateFilter, agentFilter, statusFilter, searchTerm, showOnlyWithTracking]);
+  }, [dateFilter, agentFilter, statusFilter, shippingFilter, searchTerm, showOnlyWithTracking]);
 
   // When records refresh, drop any selections that no longer exist
   useEffect(() => {
@@ -246,6 +247,13 @@ export default function PrintSlip() {
       if (statusFilter) {
         filteredRecords = filteredRecords.filter(record => {
           return record["Order status"] === statusFilter;
+        });
+      }
+
+      if (shippingFilter) {
+        const needle = shippingFilter.toLowerCase();
+        filteredRecords = filteredRecords.filter(record => {
+          return (record.Shipping || '').toLowerCase() === needle;
         });
       }
       
@@ -581,7 +589,7 @@ export default function PrintSlip() {
         <h2 className="text-xl font-semibold mb-4 text-gray-900">Print Slip Generator</h2>
         
         {/* Filters */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
+        <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
               <Filter className="inline w-4 h-4 mr-1" />
@@ -637,6 +645,20 @@ export default function PrintSlip() {
               placeholder="Enter Order ID"
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
             />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Shipping</label>
+            <select
+              value={shippingFilter}
+              onChange={(e) => setShippingFilter(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            >
+              <option value="">All Shipping</option>
+              <option value="Proff">Proff</option>
+              <option value="India Post">India Post</option>
+              <option value="ST Courier">ST Courier</option>
+            </select>
           </div>
         </div>
 
