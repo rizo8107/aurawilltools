@@ -426,7 +426,7 @@ export default function PrintSlip() {
           <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
           <style>
             @page {
-              size: 4in 6in portrait;
+              size: auto;
               margin: 0;
             }
             body {
@@ -434,15 +434,15 @@ export default function PrintSlip() {
               margin: 0;
               padding: 0;
               background: white;
-              width: 4in;
-              height: 6in;
+              width: 100%;
+              height: 100%;
             }
             .slip {
               background: white;
               border: 2px solid #000;
               box-sizing: border-box;
-              width: 4in;
-              height: 6in;
+              width: 100%;
+              height: 100%;
               padding: 0;
               margin: 0;
               page-break-after: always;
@@ -505,15 +505,15 @@ export default function PrintSlip() {
             }
             .barcode-container {
               background-color: white;
-              padding: 8px;
+              padding: 15px;
               display: inline-block;
               border: 1px solid #ddd;
             }
             .barcode {
-              width: 95%;
-              height: 60px;
+              width: 100%;
+              height: 100px;
               background-color: white;
-              font-size: 24px;
+              font-size: 40px;
             }
             .from-section {
               padding: 5px;
