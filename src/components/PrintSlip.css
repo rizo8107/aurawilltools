@@ -142,7 +142,7 @@
   padding: 3px 5px;
   display: flex;
   border-bottom: 1px solid #ddd;
-  font-size: 11px;
+  font-size: 14px;
 }
 
 .detail-label {
@@ -188,9 +188,9 @@
 
 .barcode {
   width: 95%;
-  height: 100px;
+  height: 140px;
   background-color: white;
-  font-size: 16px;
+  font-size: 24px;
 }
 
 .from-section {
@@ -246,3 +246,13 @@
     border-color: #000 !important;
   }
 }
+
+
+/* Inspecta CSS Changes - Auto Applied */
+body > #root > div.flex.h-screen.bg-gray-100 > div.flex-1.flex.flex-col.overflow-hidden > main.flex-grow.p-0.overflow-y-auto.bg-gray-50.flex.justify-center.items-start > div.w-full.max-w-12xl.mx-auto > div.max-w-4xl.mx-auto.p-4 {
+  margin-left: 919.826px → 20px;
+  margin-right: 469.913px → 20px;
+  max-width: 896px → none;
+  width: 895.99px → 96.81%;
+}
+

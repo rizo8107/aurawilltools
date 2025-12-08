@@ -355,7 +355,7 @@ export default function PrintSlip() {
           
           <div class="barcode-section">
             <div class="barcode-container">
-              <svg class="barcode" jsbarcode-format="code128" jsbarcode-value="${tracking || orderId}" jsbarcode-textmargin="5" jsbarcode-fontoptions="bold" jsbarcode-height="100" jsbarcode-width="3" jsbarcode-fontsize="16"></svg>
+              <svg class="barcode" jsbarcode-format="code128" jsbarcode-value="${tracking || orderId}" jsbarcode-textmargin="5" jsbarcode-fontoptions="bold" jsbarcode-height="100" jsbarcode-width="3" jsbarcode-fontsize="50"></svg>
             </div>
           </div>
           
@@ -564,9 +564,9 @@ export default function PrintSlip() {
           <script>
             window.onload = function() {
               JsBarcode(".barcode", { 
-                width: 3,
-                height: 100,
-                fontSize: 16,
+                width: 5,
+                height: 200,
+                fontSize: 50,
                 margin: 5,
                 displayValue: true,
                 textMargin: 5

@@ -74,7 +74,7 @@ function App() {
   const navigationItems = [
     { id: 'order', label: 'Order Form', icon: <Package size={20} /> },
     { id: 'printslip', label: 'Print Slip', icon: <Printer size={20} /> },
-    { id: 'n8n_printslip', label: 'n8n Print Slip', icon: <Printer size={20} /> },
+    { id: 'n8n_printslip', label: 'Proffessional ', icon: <Printer size={20} /> },
     { id: 'tracking', label: 'Update Tracking', icon: <Truck size={20} /> },
     { id: 'manifest', label: 'Create Manifest', icon: <FileText size={20} /> },
     { id: 'campaign', label: 'Repeat Campaign', icon: <Users size={20} /> },
@@ -87,7 +87,7 @@ function App() {
     { id: 'segmentation', label: 'Segmentation', icon: <FileText size={20} /> },
     { id: 'gstinvoice', label: 'GST Invoice', icon: <FileSpreadsheet size={20} /> },
     { id: 'manual_orders', label: 'Manual Orders', icon: <FileText size={20} /> },
-    { id: 'subscription_contract', label: 'Subscription Contract', icon: <FileText size={20} /> },
+    { id: 'subscription_contract', label: 'Subscription', icon: <FileText size={20} /> },
   ];
 
   const pageDescriptions: Record<TabType, string> = {
@@ -177,7 +177,7 @@ function App() {
           activeTab === 'order' ? 'flex justify-center items-start' : '' 
         }`}>
           <div className={`w-full ${ 
-            activeTab === 'order' ? 'max-w-6xl' : 
+            activeTab === 'order' ? 'max-w-12xl' : 
             activeTab === 'tracking' || activeTab === 'manifest' ? 'max-w-3xl' : 
             activeTab === 'campaign' ? 'max-w-5xl' : 
             activeTab === 'team_analytics' || activeTab === 'agent_analytics' ? 'max-w-[95vw]' : 
