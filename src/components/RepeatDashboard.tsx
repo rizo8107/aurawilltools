@@ -186,6 +186,36 @@ export default function RepeatDashboard() {
 
   /** View: list vs analytics */
   const [view, setView] = useState<'leads' | 'analytics'>('leads');
+  // Non-Repeated Dashboard state
+  const [nrRows, setNrRows] = useState<any[]>([]);
+  const [nrLoading, setNrLoading] = useState<boolean>(false);
+  const [nrError, setNrError] = useState<string>('');
+  const [nrFrom, setNrFrom] = useState<string>('');
+  const [nrTo, setNrTo] = useState<string>('');
+  // Non-Repeated pivot controls
+  const [nrPivotPage, setNrPivotPage] = useState<number>(1);
+  const [nrPivotPageSize, setNrPivotPageSize] = useState<number>(15);
+  const [nrShowStatusTable, setNrShowStatusTable] = useState<boolean>(false);
+  const [nrShowAgentTable, setNrShowAgentTable] = useState<boolean>(false);
+  const [nrShowReasonTable, setNrShowReasonTable] = useState<boolean>(false);
+  const [nrPivotFilterStatus, setNrPivotFilterStatus] = useState('');
+  const [nrPivotSortStatus, setNrPivotSortStatus] = useState<'name'|'total'>('total');
+  const [nrPivotDirStatus, setNrPivotDirStatus] = useState<'asc'|'desc'>('desc');
+  const [nrPivotFilterAgent, setNrPivotFilterAgent] = useState('');
+  const [nrPivotSortAgent, setNrPivotSortAgent] = useState<'name'|'total'>('total');
+  const [nrPivotDirAgent, setNrPivotDirAgent] = useState<'asc'|'desc'>('desc');
+  const [nrPivotFilterReason, setNrPivotFilterReason] = useState('');
+  const [nrPivotSortReason, setNrPivotSortReason] = useState<'name'|'total'>('total');
+  const [nrPivotDirReason, setNrPivotDirReason] = useState<'asc'|'desc'>('desc');
+  const [nrPivotColsStatus, setNrPivotColsStatus] = useState<string[] | null>(null);
+  const [nrPivotColsAgent, setNrPivotColsAgent] = useState<string[] | null>(null);
+  const [nrPivotColsReason, setNrPivotColsReason] = useState<string[] | null>(null);
+  // Non-Repeated drilldown
+  const [nrDrillOpen, setNrDrillOpen] = useState(false);
+  const [nrDrillTitle, setNrDrillTitle] = useState('');
+  const [nrDrillRows, setNrDrillRows] = useState<any[]>([]);
+  const [nrDrillPage, setNrDrillPage] = useState(1);
+  const [nrDrillPageSize, setNrDrillPageSize] = useState(20);
   // Feedback analytics state
   const [feedback, setFeedback] = useState<FeedbackRow[]>([]);
   const [fbAgent, setFbAgent] = useState<string>('all'); // 'me' | 'all'
@@ -315,6 +345,70 @@ export default function RepeatDashboard() {
       setView('leads');
     }
   }, [isAdmin, view]);
+
+  // Load Non-Repeated data from NocoDB
+  const loadNonRepeated = useCallback(async () => {
+    try {
+      setNrLoading(true); setNrError('');
+      const base = 'https://app-nocodb.9krcxo.easypanel.host/api/v2/tables/mqbw6pkcd8gxuhp/records';
+      const limit = 500;
+      let offset = 0; const out: any[] = [];
+      while (true) {
+        const params = new URLSearchParams();
+        params.set('offset', String(offset));
+        params.set('limit', String(limit));
+        params.set('viewId', 'vww5ym2wgborsava');
+        const url = `${base}?${params.toString()}`;
+        const res = await fetch(url, { headers: { 'xc-token': nocoToken } });
+        if (!res.ok) throw new Error(await res.text());
+        const payload = await res.json();
+        const list = Array.isArray(payload?.list) ? payload.list : [];
+        out.push(...list);
+        if (list.length < limit) break;
+        offset += limit; if (offset > 100000) break;
+      }
+      setNrRows(out);
+    } catch (e: any) {
+      setNrRows([]); setNrError(e?.message || 'Failed to load Non-Repeated data');
+    } finally { setNrLoading(false); }
+  }, [nocoToken]);
+
+  useEffect(() => {
+    if (isAdmin) loadNonRepeated();
+  }, [isAdmin, loadNonRepeated]);
+
+  // Quick date helpers for Non-Repeated section
+  const applyNrQuick = (key: string) => {
+    const today = new Date();
+    const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+    const endOfMonth = new Date(today.getFullYear(), today.getMonth()+1, 0);
+    const startOfLastMonth = new Date(today.getFullYear(), today.getMonth()-1, 1);
+    const endOfLastMonth = new Date(today.getFullYear(), today.getMonth(), 0);
+    const minus = (n:number) => new Date(today.getFullYear(), today.getMonth(), today.getDate()-n);
+    const fmt = (d: Date) => d.toISOString().slice(0,10);
+    switch (key) {
+      case 'today': setNrFrom(fmt(today)); setNrTo(fmt(today)); break;
+      case 'yesterday': { const y=minus(1); setNrFrom(fmt(y)); setNrTo(fmt(y)); break; }
+      case 'last7': setNrFrom(fmt(minus(6))); setNrTo(fmt(today)); break;
+      case 'last14': setNrFrom(fmt(minus(13))); setNrTo(fmt(today)); break;
+      case 'last30': setNrFrom(fmt(minus(29))); setNrTo(fmt(today)); break;
+      case 'thisMonth': setNrFrom(fmt(startOfMonth)); setNrTo(fmt(endOfMonth)); break;
+      case 'lastMonth': setNrFrom(fmt(startOfLastMonth)); setNrTo(fmt(endOfLastMonth)); break;
+      default: setNrFrom(''); setNrTo('');
+    }
+  };
+
+  // Filter Non-Repeated rows by date
+  const nrFiltered = useMemo(() => {
+    return nrRows.filter((r: any) => {
+      // Non-repeated dataset uses 'Timestamp' (YYYY-MM-DD) for date
+      const raw = (r && (r.Timestamp ?? r['Timestamp'])) || '';
+      const d = String(raw).slice(0, 10);
+      if (nrFrom && d < nrFrom) return false;
+      if (nrTo && d > nrTo) return false;
+      return true;
+    });
+  }, [nrRows, nrFrom, nrTo]);
 
   // Note: agentOptions was unused; removed to avoid lint
 
@@ -2554,6 +2648,622 @@ export default function RepeatDashboard() {
               );
             })()}
             <div className="text-xs text-gray-500 mt-1">Use pagination to browse all forms in the selected scope and date range.</div>
+          </div>
+        </div>
+      )}
+
+      {/* Non-Repeated Dashboard view (embedded in Analytics) */}
+      {view === 'analytics' && isAdmin && (
+        <div className="bg-white rounded-xl shadow p-4 space-y-4">
+          <div className="flex flex-wrap items-end gap-2 mb-3">
+            <div className="text-base font-semibold">Non-Repeated Dashboard</div>
+            {nrLoading && <span className="text-xs text-gray-500">Loading…</span>}
+            {nrError && <span className="text-xs text-rose-600">{nrError}</span>}
+            <div className="ml-auto flex items-end gap-2 text-xs">
+              <div>
+                <label className="block text-[11px] text-gray-600 mb-1">From</label>
+                <input type="date" value={nrFrom} onChange={(e)=>setNrFrom(e.target.value)} className="border rounded px-2 py-1" title="From date"/>
+              </div>
+              <div>
+                <label className="block text-[11px] text-gray-600 mb-1">To</label>
+                <input type="date" value={nrTo} onChange={(e)=>setNrTo(e.target.value)} className="border rounded px-2 py-1" title="To date"/>
+              </div>
+              <div>
+                <label className="block text-[11px] text-gray-600 mb-1">Quick</label>
+                <select title="Quick range" value="" onChange={(e)=>{ applyNrQuick(e.target.value); e.currentTarget.selectedIndex=0; }} className="border rounded px-2 py-1">
+                  <option value="" disabled>Select…</option>
+                  <option value="today">Today</option>
+                  <option value="yesterday">Yesterday</option>
+                  <option value="last7">Last 7 days</option>
+                  <option value="last14">Last 14 days</option>
+                  <option value="last30">Last 30 days</option>
+                  <option value="thisMonth">This Month</option>
+                  <option value="lastMonth">Last Month</option>
+                  <option value="all">All Time</option>
+                </select>
+              </div>
+              <IconButton onClick={loadNonRepeated} title="Reload from NocoDB"><RefreshCcw className="w-4 h-4"/>Reload</IconButton>
+            </div>
+          </div>
+
+          {/* KPI Cards */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+            <div className="bg-white rounded-lg shadow p-4 border">
+              <div className="text-xs text-gray-500">Grand Total</div>
+              <div className="text-2xl font-semibold">{nrLoading ? '…' : nrFiltered.length}</div>
+            </div>
+            <div className="bg-white rounded-lg shadow p-4 border">
+              <div className="text-xs text-gray-500">Unique Agents</div>
+              <div className="text-2xl font-semibold">{nrLoading ? '…' : new Set(nrFiltered.map((r: any) => {
+                const raw = r['Agent Name'] ?? r.Agent ?? r.agent;
+                return String(raw ?? '').trim() || '(Unassigned)';
+              })).size}</div>
+            </div>
+            <div className="bg-white rounded-lg shadow p-4 border">
+              <div className="text-xs text-gray-500">Source</div>
+              <div className="text-sm">Non-Repeated Calls</div>
+            </div>
+            <div className="bg-white rounded-lg shadow p-4 border">
+              <div className="text-xs text-gray-500">Range</div>
+              <div className="text-sm">{nrFrom || '—'} → {nrTo || '—'}</div>
+            </div>
+          </div>
+
+          {/* Pivot Reports */}
+          {(() => {
+            // helpers
+            const dk = nrFiltered.length ? (['Date','date'].find(k=>k in nrFiltered[0]) || Object.keys(nrFiltered[0]).find(k => /date|created/i.test(k))) : undefined;
+            if (!dk && nrFiltered.length > 0) return <div className="bg-white rounded-lg shadow p-4 text-slate-500 text-sm">No date field detected for pivot</div>;
+            
+            const toDay = (v: any) => {
+              if (!v) return '';
+              const s = String(v).trim();
+              // Handle dd/mm/yyyy or dd-mm-yyyy
+              const m = s.match(/^([0-3]?\d)[/-]([0-1]?\d)[/-](\d{4})$/);
+              if (m) {
+                const dd = m[1].padStart(2, '0');
+                const mm = m[2].padStart(2, '0');
+                const yyyy = m[3];
+                return `${yyyy}-${mm}-${dd}`;
+              }
+              const d = new Date(s);
+              return isNaN(d.getTime()) ? '' : d.toISOString().slice(0,10);
+            };
+            const uniqueSorted = (arr: string[]) => Array.from(new Set(arr)).sort();
+
+            // generic pivot builder
+            const buildPivot = (colKeyCandidates: string[]) => {
+              const ck = nrFiltered.length ? colKeyCandidates.find(k => k in nrFiltered[0]) : undefined;
+              const rowsByDay = new Map<string, any[]>();
+              for (const r of nrFiltered) {
+                const day = dk ? toDay(r[dk]) : '';
+                if (!day) continue;
+                const list = rowsByDay.get(day) || [];
+                list.push(r);
+                rowsByDay.set(day, list);
+              }
+              const days = Array.from(rowsByDay.keys()).sort();
+              const cols = ck ? uniqueSorted(days.flatMap(day => rowsByDay.get(day)!.map((r: any) => String(r[ck] ?? '').trim() || '(Empty)'))) : [];
+              // compute matrix counts
+              const matrix = days.map(day => {
+                const counts = new Map<string, number>();
+                for (const r of rowsByDay.get(day)!) {
+                  const val = ck ? (String(r[ck] ?? '').trim() || '(Empty)') : '';
+                  counts.set(val, (counts.get(val) || 0) + 1);
+                }
+                const row = cols.map(c => counts.get(c) || 0);
+                const total = row.reduce((a,b)=>a+b,0);
+                return { day, row, total };
+              });
+              const grandTotals = cols.map((_, ci) => matrix.reduce((a,m)=>a + m.row[ci], 0));
+              const grandTotalAll = matrix.reduce((a,m)=>a + m.total, 0);
+              return { ck, days, cols, matrix, grandTotals, grandTotalAll } as const;
+            };
+
+            // Build pivots
+            const p1 = buildPivot(['Call Status','Status','Call status','call_status']);
+            const p2 = buildPivot(['Agent','agent']);
+            const p3 = buildPivot(['Call reason','Reason','call_reason','Call Reason']);
+
+            const renderPivot = (title: string, p: ReturnType<typeof buildPivot>, kind: 'status'|'agent'|'reason') => {
+              // derive displayed columns with filter/sort controls
+              const q = (kind==='status'?nrPivotFilterStatus:kind==='agent'?nrPivotFilterAgent:nrPivotFilterReason).toLowerCase();
+              const sortKey = (kind==='status'?nrPivotSortStatus:kind==='agent'?nrPivotSortAgent:nrPivotSortReason);
+              const dir = (kind==='status'?nrPivotDirStatus:kind==='agent'?nrPivotDirAgent:nrPivotDirReason);
+              const sel = (kind==='status'?nrPivotColsStatus:kind==='agent'?nrPivotColsAgent:nrPivotColsReason);
+              const setSel = (v: string[] | null) => {
+                if (kind==='status') setNrPivotColsStatus(v); else if (kind==='agent') setNrPivotColsAgent(v); else setNrPivotColsReason(v);
+              };
+              const shown = (kind==='status'?nrShowStatusTable:kind==='agent'?nrShowAgentTable:nrShowReasonTable);
+              const toggleShown = () => {
+                if (kind==='status') setNrShowStatusTable(v=>!v);
+                else if (kind==='agent') setNrShowAgentTable(v=>!v);
+                else setNrShowReasonTable(v=>!v);
+              };
+              const baseCols = p.cols.map((name, idx) => ({ name, total: p.grandTotals[idx], idx }));
+              let colsView = baseCols;
+              if (q) colsView = colsView.filter(c => c.name.toLowerCase().includes(q));
+              if (sel !== null) {
+                const allowed = new Set(sel);
+                colsView = colsView.filter(c => allowed.has(c.name));
+              }
+              colsView = colsView.sort((a,b)=>{
+                const sign = dir==='asc'?1:-1;
+                return sortKey==='name' ? sign * a.name.localeCompare(b.name) : sign * (a.total - b.total);
+              });
+              const openDrill = (value: string) => {
+                if (!p.ck) return;
+                const norm = (v: any) => {
+                  const s = String(v ?? '').trim();
+                  return s || '(Empty)';
+                };
+                const rowsMatch = nrFiltered.filter((r: any) => norm(r[p.ck!]) === value);
+                setNrDrillRows(rowsMatch);
+                setNrDrillTitle(`${title} — ${value}`);
+                setNrDrillPage(1);
+                setNrDrillOpen(true);
+              };
+              return (
+              <div className="bg-white rounded-lg shadow p-3 overflow-auto border">
+                <div className="text-sm font-semibold mb-2">{title}</div>
+                {!p.ck ? (
+                  <div className="text-slate-500 text-sm">Field not found</div>
+                ) : (
+                  <>
+                  {/* Column controls */}
+                  <div className="flex items-end gap-2 mb-2 text-xs">
+                    <div>
+                      <label className="block text-[11px] text-gray-600 mb-1">Filter columns</label>
+                      <input value={kind==='status'?nrPivotFilterStatus:kind==='agent'?nrPivotFilterAgent:nrPivotFilterReason}
+                        onChange={(e)=>{ const v=e.target.value; if(kind==='status') setNrPivotFilterStatus(v); else if(kind==='agent') setNrPivotFilterAgent(v); else setNrPivotFilterReason(v); }}
+                        placeholder="type to filter"
+                        className="ring-1 ring-slate-200 rounded px-2 py-1" />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] text-gray-600 mb-1">Sort by</label>
+                      <select value={sortKey} onChange={(e)=>{ const v=e.target.value as 'name'|'total'; if(kind==='status') setNrPivotSortStatus(v); else if(kind==='agent') setNrPivotSortAgent(v); else setNrPivotSortReason(v);} } className="ring-1 ring-slate-200 rounded px-2 py-1" title="Sort by">
+                        <option value="total">Total</option>
+                        <option value="name">Name</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-[11px] text-gray-600 mb-1">Direction</label>
+                      <select value={dir} onChange={(e)=>{ const v=e.target.value as 'asc'|'desc'; if(kind==='status') setNrPivotDirStatus(v); else if(kind==='agent') setNrPivotDirAgent(v); else setNrPivotDirReason(v);} } className="ring-1 ring-slate-200 rounded px-2 py-1" title="Direction">
+                        <option value="desc">Desc</option>
+                        <option value="asc">Asc</option>
+                      </select>
+                    </div>
+                    <div>
+                      <details>
+                        <summary className="cursor-pointer select-none px-2 py-1 border rounded bg-white">Columns</summary>
+                        <div className="mt-2 p-2 border rounded bg-white shadow-sm max-h-64 overflow-auto min-w-[220px]">
+                          <div className="flex items-center justify-between mb-2">
+                            <button className="px-2 py-1 border rounded text-xs" onClick={(e)=>{e.preventDefault(); setSel([...p.cols]);}}>Select All</button>
+                            <button className="px-2 py-1 border rounded text-xs" onClick={(e)=>{e.preventDefault(); setSel([]);}}>Clear</button>
+                            <button className="px-2 py-1 border rounded text-xs" onClick={(e)=>{e.preventDefault(); setSel(null);}}>Reset</button>
+                          </div>
+                          <div className="space-y-1">
+                            {p.cols.map(name=>{
+                              const checked = sel===null ? true : sel.includes(name);
+                              return (
+                                <label key={name} className="flex items-center gap-2 text-xs">
+                                  <input type="checkbox" checked={checked} onChange={(e)=>{
+                                    if (sel===null) {
+                                      const next = p.cols.slice();
+                                      if (!e.target.checked) {
+                                        const i = next.indexOf(name); if (i>=0) next.splice(i,1);
+                                      }
+                                      setSel(next);
+                                    } else {
+                                      const set = new Set(sel);
+                                      if (e.target.checked) set.add(name); else set.delete(name);
+                                      setSel(Array.from(set));
+                                    }
+                                  }} />
+                                  <span className="truncate" title={name}>{name}</span>
+                                </label>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      </details>
+                    </div>
+                  </div>
+                  <div className="mb-3">
+                    <button onClick={()=>{ if(p.ck){ setNrDrillRows(nrFiltered); setNrDrillTitle(`${title} — All (${p.grandTotalAll})`); setNrDrillPage(1); setNrDrillOpen(true);} }} className="inline-flex items-baseline bg-slate-50 border border-slate-200 rounded px-3 py-2 hover:bg-slate-100">
+                      <div className="text-xs text-gray-500 mr-2">Grand Total</div>
+                      <div className="text-xl font-semibold">{p.grandTotalAll}</div>
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-2 mb-3">
+                    {colsView.map((c) => (
+                      <button key={c.name} onClick={()=>openDrill(c.name)} className="text-left bg-white border border-slate-200 rounded p-2 hover:bg-slate-50 cursor-pointer">
+                        <div className="text-[11px] text-gray-500 truncate" title={c.name}>{c.name}</div>
+                        <div className="text-lg font-semibold">{c.total}</div>
+                      </button>
+                    ))}
+                  </div>
+                  <div className="flex items-center justify-end mb-2 text-xs">
+                    <button onClick={toggleShown} className="px-2 py-1 rounded border hover:bg-slate-50">{shown?'Hide Table':'Show Table'}</button>
+                  </div>
+                  {shown && (() => {
+                    const totalPages = Math.max(1, Math.ceil(p.matrix.length / nrPivotPageSize));
+                    const start = (nrPivotPage - 1) * nrPivotPageSize;
+                    const slice = p.matrix.slice(start, start + nrPivotPageSize);
+                    return (
+                      <>
+                        <div className="flex items-center justify-between mb-2 text-xs">
+                          <div className="text-slate-600">Rows Page {nrPivotPage} / {totalPages}</div>
+                          <div className="flex items-center gap-2">
+                            <button disabled={nrPivotPage<=1} onClick={() => setNrPivotPage(pv=>Math.max(1,pv-1))} className={`px-2 py-1 rounded border ${nrPivotPage<=1?'opacity-50':'hover:bg-slate-50'}`}>Prev</button>
+                            <button disabled={nrPivotPage>=totalPages} onClick={() => setNrPivotPage(pv=>Math.min(totalPages,pv+1))} className={`px-2 py-1 rounded border ${nrPivotPage>=totalPages?'opacity-50':'hover:bg-slate-50'}`}>Next</button>
+                            <select title="Rows per page" value={nrPivotPageSize} onChange={(e)=>{ setNrPivotPageSize(Number(e.target.value)); setNrPivotPage(1); }} className="ring-1 ring-slate-200 rounded px-2 py-1">
+                              {[10,15,25,50].map(n=> <option key={n} value={n}>{n}/page</option>)}
+                            </select>
+                          </div>
+                        </div>
+                        <table className="min-w-full text-xs">
+                          <thead className="bg-slate-50">
+                            <tr className="*:px-2 *:py-1 *:whitespace-nowrap text-left">
+                              <th>Date</th>
+                              {colsView.map(c => <th key={c.name}>{c.name}</th>)}
+                              <th>Grand Total</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y">
+                            {slice.map(m => (
+                              <tr key={m.day} className="*:px-2 *:py-1">
+                                <td className="font-medium">{m.day}</td>
+                                {colsView.map(c => {
+                                  const originalIdx = c.idx;
+                                  const val = m.row[originalIdx] || 0;
+                                  return <td key={c.name}>{val || ''}</td>;
+                                })}
+                                <td className="font-semibold">{m.total}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                          <tfoot className="bg-slate-50">
+                            <tr className="*:px-2 *:py-1">
+                              <td className="font-semibold">Grand Total</td>
+                              {colsView.map(c => (<td key={c.name} className="font-semibold">{c.total}</td>))}
+                              <td className="font-bold">{p.grandTotalAll}</td>
+                            </tr>
+                          </tfoot>
+                        </table>
+                      </>
+                    );
+                  })()}
+                  </>
+                )}
+              </div>
+            ); } 
+
+            return (
+              <div className="space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                  <div className="bg-white rounded-lg shadow p-4 border">
+                    <div className="text-xs text-gray-500">By Call Status  Grand Total</div>
+                    <div className="text-2xl font-semibold">{p1.grandTotalAll}</div>
+                  </div>
+                  <div className="bg-white rounded-lg shadow p-4 border">
+                    <div className="text-xs text-gray-500">By Agent  Grand Total</div>
+                    <div className="text-2xl font-semibold">{p2.grandTotalAll}</div>
+                  </div>
+                  <div className="bg-white rounded-lg shadow p-4 border">
+                    <div className="text-xs text-gray-500">By Call Reason  Grand Total</div>
+                    <div className="text-2xl font-semibold">{p3.grandTotalAll}</div>
+                  </div>
+                </div>
+                <div className="space-y-4">
+                  {renderPivot('By Call Status (Date   Status)', p1, 'status')}
+                  {renderPivot('By Agent (Date   Agent)', p2, 'agent')}
+                  {renderPivot('By Call Reason (Date   Reason)', p3, 'reason')}
+                </div>
+                <div className="bg-white rounded-lg shadow p-4 border">
+                  {(() => {
+                    if (!nrFiltered.length) {
+                      return <div className="text-sm text-gray-500">No data for agent text report.</div>;
+                    }
+
+                    const q1Keys = [
+                      'How was your experience using our health mix so far?',
+                      'experience_using_health_mix',
+                      'Experience using our health mix so far',
+                    ];
+                    const q2Keys = [
+                      'May I know what stopped you from buying again after your second purchase?',
+                      'stopped_buying_reason',
+                      'Reason for not buying again',
+                    ];
+
+                    const getText = (r: any, keys: string[]): string => {
+                      for (const k of keys) {
+                        if (k in r && r[k]) return String(r[k]);
+                      }
+                      return '';
+                    };
+
+                    const categorizeExperience = (raw: string): string => {
+                      const s = String(raw || '').toLowerCase();
+                      if (!s.trim()) return '(Empty)';
+                      if (s.includes('no change') || s.includes("didn't notice") || s.includes('didnt notice')) return 'No noticeable change';
+                      if (s.includes('not good') || s.includes('bad') || s.includes('issue') || s.includes('problem') || s.includes('not properly')) return 'Negative / Issue';
+                      if (s.includes('energetic') || s.includes('felt good') || s.includes('overall experience was good') || s.includes('overall experience is good')) return 'Positive / Good';
+                      if (s.includes('good') || s.includes('tasty') || s.includes('taste') || s.includes('like the product') || s.includes('liked the product')) return 'Positive / Good';
+                      return 'Other / Mixed';
+                    };
+
+                    const categorizeStopReason = (raw: string): string => {
+                      const s = String(raw || '').toLowerCase();
+                      if (!s.trim()) return '(Empty)';
+                      if (s.includes('personal reason') || s.includes('personal')) return 'Personal reason';
+                      if (s.includes('busy') || s.includes('work') || s.includes('no time') || s.includes('time') || s.includes('convenient')) return 'Time / Busy';
+                      if (s.includes('health') || s.includes('doctor') || s.includes('pregnan') || s.includes('bp') || s.includes('sugar')) return 'Health reasons';
+                      if (s.includes('taste') || s.includes('flavour') || s.includes('flavor')) return 'Taste / Product experience';
+                      if (s.includes('not properly roasted') || s.includes('grinded') || s.includes('quality') || s.includes('result')) return 'Product quality / result';
+                      if (s.includes('parent') || s.includes('family') || s.includes('wife')) return 'Family decision';
+                      if (s.includes('afford') || s.includes('money') || s.includes('price') || s.includes('cost') || s.includes('rate is also bit high')) return 'Price / Affordability';
+                      if (s.includes('no specific reason') || s === 'no' || s.includes('nothing')) return 'No specific reason';
+                      return 'Other';
+                    };
+
+                    type AgentBucket = {
+                      total: number;
+                      q1: Map<string, number>;
+                      q2: Map<string, number>;
+                    };
+
+                    const byAgent = new Map<string, AgentBucket>();
+                    for (const r of nrFiltered as any[]) {
+                      const rawAgent = r['Agent Name'] ?? r['Agent'] ?? r['agent'];
+                      const agent = String(rawAgent ?? '').trim() || '(Unassigned)';
+                      const bucket = byAgent.get(agent) || { total: 0, q1: new Map(), q2: new Map() };
+                      bucket.total += 1;
+
+                      const t1 = getText(r, q1Keys).trim();
+                      if (t1) bucket.q1.set(t1, (bucket.q1.get(t1) || 0) + 1);
+
+                      const t2 = getText(r, q2Keys).trim();
+                      if (t2) bucket.q2.set(t2, (bucket.q2.get(t2) || 0) + 1);
+
+                      byAgent.set(agent, bucket);
+                    }
+
+                    const agents = Array.from(byAgent.entries()).sort((a, b) => b[1].total - a[1].total);
+
+                    return (
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between mb-1">
+                          <div className="text-sm font-semibold">Agent Text Report</div>
+                          <div className="text-[11px] text-gray-500">Layout inspired by your spreadsheet (agent-wise counts and answers)</div>
+                        </div>
+                        {agents.map(([agent, bucket]) => (
+                          <div key={agent} className="border rounded-lg p-3">
+                            <div className="flex items-center justify-between mb-2">
+                              <div className="font-semibold text-sm">{agent}</div>
+                              <div className="text-xs text-gray-600">Total forms: {bucket.total}</div>
+                            </div>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+                              <div>
+                                <div className="text-xs font-semibold text-gray-700 mb-1">How was your experience using our health mix so far?</div>
+                                {(() => {
+                                  if (bucket.q1.size === 0) {
+                                    return <div className="text-xs text-gray-500">No answers</div>;
+                                  }
+                                  const catCounts = new Map<string, number>();
+                                  for (const [text, count] of Array.from(bucket.q1.entries())) {
+                                    const cat = categorizeExperience(text);
+                                    catCounts.set(cat, (catCounts.get(cat) || 0) + count);
+                                  }
+                                  const rows = Array.from(catCounts.entries()).sort((a, b) => b[1] - a[1]);
+
+                                  // Group similar answer texts (e.g. many variants of "product was good")
+                                  const buildKey = (raw: string): string => {
+                                    const s = String(raw || '').toLowerCase();
+                                    const cleaned = s.replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+                                    if (!cleaned) return '(empty)';
+                                    if (cleaned.includes('product was good')) return 'product was good';
+                                    const words = cleaned.split(' ');
+                                    return words.slice(0, 3).join(' ');
+                                  };
+                                  const grouped = new Map<string, { key: string; text: string; count: number }>();
+                                  for (const [text, count] of Array.from(bucket.q1.entries())) {
+                                    const key = buildKey(text);
+                                    const existing = grouped.get(key);
+                                    if (existing) {
+                                      existing.count += count;
+                                    } else {
+                                      grouped.set(key, { key, text, count });
+                                    }
+                                  }
+                                  const answerRows = Array.from(grouped.values()).sort((a, b) => b.count - a.count);
+                                  return (
+                                    <>
+                                      <div className="overflow-x-auto mb-1">
+                                        <table className="w-full text-[11px] border border-slate-200 rounded">
+                                          <thead className="bg-slate-50">
+                                            <tr>
+                                              <th className="text-left px-2 py-1">Category</th>
+                                              <th className="text-right px-2 py-1">Count</th>
+                                            </tr>
+                                          </thead>
+                                          <tbody>
+                                            {rows.map(([name, count]) => (
+                                              <tr key={name} className="border-t border-slate-100">
+                                                <td className="px-2 py-1 whitespace-nowrap text-xs">{name}</td>
+                                                <td className="px-2 py-1 text-right text-xs">{count}</td>
+                                              </tr>
+                                            ))}
+                                          </tbody>
+                                        </table>
+                                      </div>
+                                      <div className="space-y-1 max-h-60 overflow-y-auto">
+                                        {answerRows.map(({ key, text, count }) => (
+                                          <div
+                                            key={key}
+                                            className="grid grid-cols-[1fr_auto] gap-2 items-start cursor-pointer hover:bg-slate-50 rounded px-1"
+                                            onClick={() => {
+                                              const rows = (nrFiltered as any[]).filter((r) => {
+                                                const rawAgent = r['Agent Name'] ?? r['Agent'] ?? r['agent'];
+                                                const agentName = String(rawAgent ?? '').trim() || '(Unassigned)';
+                                                if (agentName !== agent) return false;
+                                                const t = getText(r, q1Keys);
+                                                return buildKey(t) === key;
+                                              });
+                                              setNrDrillRows(rows);
+                                              setNrDrillTitle(`${agent} — Experience — ${text}`);
+                                              setNrDrillPage(1);
+                                              setNrDrillOpen(true);
+                                            }}
+                                          >
+                                            <div className="text-xs whitespace-pre-wrap">{text}</div>
+                                            <div className="text-xs font-semibold text-right">{count}</div>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    </>
+                                  );
+                                })()}
+                              </div>
+                              <div>
+                                <div className="text-xs font-semibold text-gray-700 mb-1">May I know what stopped you from buying again after your second purchase?</div>
+                                {(() => {
+                                  if (bucket.q2.size === 0) {
+                                    return <div className="text-xs text-gray-500">No answers</div>;
+                                  }
+                                  const catCounts = new Map<string, number>();
+                                  for (const [text, count] of Array.from(bucket.q2.entries())) {
+                                    const cat = categorizeStopReason(text);
+                                    catCounts.set(cat, (catCounts.get(cat) || 0) + count);
+                                  }
+                                  const rows = Array.from(catCounts.entries()).sort((a, b) => b[1] - a[1]);
+
+                                  const buildKey = (raw: string): string => {
+                                    const s = String(raw || '').toLowerCase();
+                                    const cleaned = s.replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+                                    if (!cleaned) return '(empty)';
+                                    if (cleaned.includes('personal reason')) return 'personal reason';
+                                    const words = cleaned.split(' ');
+                                    return words.slice(0, 3).join(' ');
+                                  };
+                                  const grouped = new Map<string, { key: string; text: string; count: number }>();
+                                  for (const [text, count] of Array.from(bucket.q2.entries())) {
+                                    const key = buildKey(text);
+                                    const existing = grouped.get(key);
+                                    if (existing) {
+                                      existing.count += count;
+                                    } else {
+                                      grouped.set(key, { key, text, count });
+                                    }
+                                  }
+                                  const answerRows = Array.from(grouped.values()).sort((a, b) => b.count - a.count);
+                                  return (
+                                    <>
+                                      <div className="overflow-x-auto mb-1">
+                                        <table className="w-full text-[11px] border border-slate-200 rounded">
+                                          <thead className="bg-slate-50">
+                                            <tr>
+                                              <th className="text-left px-2 py-1">Category</th>
+                                              <th className="text-right px-2 py-1">Count</th>
+                                            </tr>
+                                          </thead>
+                                          <tbody>
+                                            {rows.map(([name, count]) => (
+                                              <tr key={name} className="border-t border-slate-100">
+                                                <td className="px-2 py-1 whitespace-nowrap text-xs">{name}</td>
+                                                <td className="px-2 py-1 text-right text-xs">{count}</td>
+                                              </tr>
+                                            ))}
+                                          </tbody>
+                                        </table>
+                                      </div>
+                                      <div className="space-y-1 max-h-60 overflow-y-auto">
+                                        {answerRows.map(({ text, count }) => (
+                                          <div key={text} className="grid grid-cols-[1fr_auto] gap-2 items-start">
+                                            <div className="text-xs whitespace-pre-wrap">{text}</div>
+                                            <div className="text-xs font-semibold text-right">{count}</div>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    </>
+                                  );
+                                })()}
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })()}
+                </div>
+              </div>
+            );
+          })()}
+        </div>
+      )}
+
+      {/* Non-Repeated Drilldown Modal */}
+      {nrDrillOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-white rounded-lg shadow-lg w-[95vw] max-w-5xl max-h-[85vh] flex flex-col">
+            <div className="flex items-center justify-between px-4 py-3 border-b">
+              <div className="font-semibold text-sm truncate pr-3">{nrDrillTitle}</div>
+              <button onClick={()=>setNrDrillOpen(false)} className="px-2 py-1 rounded border hover:bg-slate-50">Close</button>
+            </div>
+            <div className="px-4 py-3 overflow-auto">
+              {(() => {
+                const totalPages = Math.max(1, Math.ceil(nrDrillRows.length / nrDrillPageSize));
+                const start = (nrDrillPage - 1) * nrDrillPageSize;
+                const slice = nrDrillRows.slice(start, start + nrDrillPageSize);
+                return (
+                  <>
+                    <div className="flex items-center justify-between mb-2 text-xs">
+                      <div className="text-slate-600">Rows {start+1}-{Math.min(start+nrDrillPageSize, nrDrillRows.length)} of {nrDrillRows.length} • Page {nrDrillPage}/{totalPages}</div>
+                      <div className="flex items-center gap-2">
+                        <button disabled={nrDrillPage<=1} onClick={()=>setNrDrillPage(p=>Math.max(1,p-1))} className={`px-2 py-1 rounded border ${nrDrillPage<=1?'opacity-50':'hover:bg-slate-50'}`}>Prev</button>
+                        <button disabled={nrDrillPage>=totalPages} onClick={()=>setNrDrillPage(p=>Math.min(totalPages,p+1))} className={`px-2 py-1 rounded border ${nrDrillPage>=totalPages?'opacity-50':'hover:bg-slate-50'}`}>Next</button>
+                        <select title="Rows per page" value={nrDrillPageSize} onChange={(e)=>{ setNrDrillPageSize(Number(e.target.value)); setNrDrillPage(1); }} className="ring-1 ring-slate-200 rounded px-2 py-1">
+                          {[10,20,50,100].map(n=> <option key={n} value={n}>{n}/page</option>)}
+                        </select>
+                      </div>
+                    </div>
+                    <div className="overflow-auto">
+                      <table className="min-w-full text-xs">
+                        <thead className="bg-slate-50">
+                          <tr className="*:px-2 *:py-1 *:whitespace-nowrap text-left">
+                            <th>Id</th>
+                            <th>Date</th>
+                            <th>Customer Number</th>
+                            <th>Agent</th>
+                            <th>Call Status</th>
+                            <th>Call Reason</th>
+                            <th>Agent Call Details</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y">
+                          {slice.map((r: any, i: number)=>{
+                            const dtKey = ['Date','date','created_at','Created At'].find(k => k in r);
+                            const dt = dtKey ? r[dtKey] : '';
+                            return (
+                              <tr key={String(r.id ?? r.Id ?? i)} className="*:px-2 *:py-1">
+                                <td>{String(r.id ?? r.Id ?? '')}</td>
+                                <td>{dt ? String(dt).slice(0,10) : ''}</td>
+                                <td>{String(r['Customer Number'] ?? r.customer_number ?? '')}</td>
+                                <td>{String(r['Agent'] ?? r.agent ?? '')}</td>
+                                <td>{String(r['Call Status'] ?? r['Call status'] ?? r.call_status ?? '')}</td>
+                                <td>{String(r['Call reason'] ?? r['Call Reason'] ?? r.call_reason ?? '')}</td>
+                                <td className="max-w-[360px] truncate" title={String(r['Agent call details'] ?? r.agent_call_details ?? '')}>{String(r['Agent call details'] ?? r.agent_call_details ?? '')}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </>
+                );
+              })()}
+            </div>
           </div>
         </div>
       )}
