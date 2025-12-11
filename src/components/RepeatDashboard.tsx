@@ -45,6 +45,7 @@ interface NocoRepeatRow {
   profession_text?: string | null;
   city?: string | null;
   new_product_expectation?: string | null;
+  family_user?: string | null;
 }
 
 // Feedback row (call_feedback table). Keep keys optional to be resilient to schema diff.
@@ -2283,6 +2284,8 @@ export default function RepeatDashboard() {
                 const s = String((r as any).agent || '').trim();
                 return s || '(Empty)';
               });
+              const usageTimeT = makeSimpleLocal(r => String((r as any).usage_time || '').trim().replace(/\s{2,}/g,' ') || '(Empty)');
+              const familyUserT = makeSimpleLocal(r => String((r as any).family_user || '').trim().replace(/\s{2,}/g,' ') || '(Empty)');
 
               return (
                 <>
@@ -2303,6 +2306,8 @@ export default function RepeatDashboard() {
                     {renderTable('Profession', professionT, 'profession_text')}
                     {renderTable('City', cityT, 'city')}
                     {renderTable('New Product Expectation', npeT, 'new_product_expectation')}
+                    {renderTable('Usage Time', usageTimeT, 'usage_time')}
+                    {renderTable('Family User', familyUserT, 'family_user')}
                   </div>
                 </>
               );
