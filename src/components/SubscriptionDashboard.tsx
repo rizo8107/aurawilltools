@@ -49,17 +49,23 @@ const formatCurrency = (val: string | null) => {
   return new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(num);
 };
 
-const getMonthStatus = (val: string | null): { status: 'delivered' | 'placed' | 'pending' | 'empty'; orderId: string } => {
+type MonthStatus = 'delivered' | 'packed' | 'placed' | 'pending' | 'empty';
+
+const getMonthStatus = (val: string | null): { status: MonthStatus; orderId: string } => {
   if (!val) return { status: 'empty', orderId: '' };
-  const lower = val.toLowerCase();
-  if (lower.includes('delivered')) return { status: 'delivered', orderId: val.replace(/delivered\s*/i, '').trim() };
-  if (lower.includes('placed')) return { status: 'placed', orderId: val.replace(/placed\s*/i, '').trim() };
-  // Just an order number
-  return { status: 'placed', orderId: val.trim() };
+  const s = String(val || '').trim();
+  if (!s) return { status: 'empty', orderId: '' };
+  const lower = s.toLowerCase();
+  if (lower.includes('delivered')) return { status: 'delivered', orderId: s.replace(/delivered\s*/i, '').trim() };
+  if (lower.includes('packed')) return { status: 'packed', orderId: s.replace(/packed\s*/i, '').trim() };
+  if (lower.includes('placed')) return { status: 'placed', orderId: s.replace(/placed\s*/i, '').trim() };
+  if (lower.includes('pending')) return { status: 'pending', orderId: '' };
+  return { status: 'placed', orderId: s };
 };
 
 const statusColors: Record<string, string> = {
   delivered: 'bg-emerald-100 text-emerald-800 border-emerald-300',
+  packed: 'bg-sky-100 text-sky-800 border-sky-300',
   placed: 'bg-amber-100 text-amber-800 border-amber-300',
   pending: 'bg-slate-100 text-slate-600 border-slate-300',
   empty: 'bg-gray-50 text-gray-400 border-gray-200',
@@ -114,6 +120,29 @@ export default function SubscriptionDashboard() {
   const [saving, setSaving] = useState<boolean>(false);
   const [saveError, setSaveError] = useState<string>('');
 
+  const [detailsEditMode, setDetailsEditMode] = useState<boolean>(false);
+  const [detailsForm, setDetailsForm] = useState<Record<string, string>>({});
+  const [detailsSaving, setDetailsSaving] = useState<boolean>(false);
+  const [detailsSaveError, setDetailsSaveError] = useState<string>('');
+  const [detailsInitId, setDetailsInitId] = useState<number | null>(null);
+
+  const [monthPickerKey, setMonthPickerKey] = useState<string>('');
+  const [monthPickerStatus, setMonthPickerStatus] = useState<MonthStatus>('pending');
+  const [monthPickerOrderId, setMonthPickerOrderId] = useState<string>('');
+  const [monthPickerSaving, setMonthPickerSaving] = useState<boolean>(false);
+  const [monthPickerError, setMonthPickerError] = useState<string>('');
+
+  const closeDetail = useCallback(() => {
+    setDetailRow(null);
+    setEditMode(false);
+    setSaveError('');
+    setMonthPickerKey('');
+    setMonthPickerError('');
+    setDetailsEditMode(false);
+    setDetailsSaveError('');
+    setDetailsInitId(null);
+  }, []);
+
   // Load data from NocoDB
   const loadData = useCallback(async () => {
     try {
@@ -147,19 +176,35 @@ export default function SubscriptionDashboard() {
     }
   }, [nocoToken]);
 
-  // Initialize edit months when detail row changes
+  // Initialize edit state when opening a different record
   useEffect(() => {
-    if (detailRow) {
-      const months: Record<string, string> = {};
-      for (let i = 1; i <= 12; i++) {
-        const key = `Month ${i}`;
-        months[key] = (detailRow[key as keyof SubscriptionRow] as string) || '';
-      }
-      setEditMonths(months);
-      setEditMode(false);
-      setSaveError('');
+    if (!detailRow) return;
+    if (detailsInitId === detailRow.Id) return;
+
+    const months: Record<string, string> = {};
+    for (let i = 1; i <= 12; i++) {
+      const key = `Month ${i}`;
+      months[key] = (detailRow[key as keyof SubscriptionRow] as string) || '';
     }
-  }, [detailRow]);
+    setEditMonths(months);
+    setEditMode(false);
+    setSaveError('');
+
+    setDetailsForm({
+      City: String(detailRow.City || ''),
+      'Dispatch address': String(detailRow['Dispatch address'] || ''),
+      'Selected subscription plan': String(detailRow['Selected subscription plan'] || ''),
+      'Amount collected': String(detailRow['Amount collected'] || ''),
+      'No of 450 gram packs/Month': String(detailRow['No of 450 gram packs/Month'] || ''),
+      'confirmed  date of Dispatch': String(detailRow['confirmed  date of Dispatch'] || ''),
+      'Start Date and Month': String(detailRow['Start Date and Month'] || ''),
+      'End Date and Month': String(detailRow['End Date and Month'] || ''),
+      'Email Sent': String(detailRow['Email Sent'] || ''),
+    });
+    setDetailsEditMode(false);
+    setDetailsSaveError('');
+    setDetailsInitId(detailRow.Id);
+  }, [detailRow, detailsInitId]);
 
   // Save months to NocoDB
   const saveMonths = useCallback(async () => {
@@ -203,6 +248,82 @@ export default function SubscriptionDashboard() {
     }
   }, [detailRow, editMonths, nocoToken]);
 
+  const saveSingleMonth = useCallback(async (monthKey: string, status: MonthStatus, orderId: string) => {
+    if (!detailRow) return;
+    try {
+      setMonthPickerSaving(true);
+      setMonthPickerError('');
+
+      const normalizedOrderId = String(orderId || '').trim();
+      let value: string | null = null;
+      if (status === 'delivered') value = normalizedOrderId ? `Delivered ${normalizedOrderId}` : 'Delivered';
+      else if (status === 'packed') value = normalizedOrderId ? `Packed ${normalizedOrderId}` : 'Packed';
+      else if (status === 'placed') value = normalizedOrderId ? `Placed ${normalizedOrderId}` : 'Placed';
+      else if (status === 'pending') value = 'Pending';
+      else value = null;
+
+      const url = `https://app-nocodb.9krcxo.easypanel.host/api/v2/tables/mt68ug4tshyfwao/records`;
+      const payload: Record<string, string | number | null> = { Id: detailRow.Id };
+      payload[monthKey] = value;
+      const res = await fetch(url, {
+        method: 'PATCH',
+        headers: {
+          'xc-token': nocoToken,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) throw new Error(await res.text());
+
+      setRows(prev => prev.map(r => (r.Id === detailRow.Id ? { ...r, ...payload } : r)));
+      setDetailRow(prev => (prev ? { ...prev, ...payload } : null));
+      setEditMonths(prev => ({ ...prev, [monthKey]: value || '' }));
+      setMonthPickerKey('');
+    } catch (e: unknown) {
+      setMonthPickerError((e as Error)?.message || 'Failed to save');
+    } finally {
+      setMonthPickerSaving(false);
+    }
+  }, [detailRow, nocoToken]);
+
+  const saveDetails = useCallback(async () => {
+    if (!detailRow) return;
+    try {
+      setDetailsSaving(true);
+      setDetailsSaveError('');
+      const url = `https://app-nocodb.9krcxo.easypanel.host/api/v2/tables/mt68ug4tshyfwao/records`;
+      const payload: Record<string, string | number | null> = {
+        Id: detailRow.Id,
+        City: detailsForm.City || null,
+        'Dispatch address': detailsForm['Dispatch address'] || null,
+        'Selected subscription plan': detailsForm['Selected subscription plan'] || null,
+        'Amount collected': detailsForm['Amount collected'] || null,
+        'No of 450 gram packs/Month': detailsForm['No of 450 gram packs/Month'] || null,
+        'confirmed  date of Dispatch': detailsForm['confirmed  date of Dispatch'] || null,
+        'Start Date and Month': detailsForm['Start Date and Month'] || null,
+        'End Date and Month': detailsForm['End Date and Month'] || null,
+        'Email Sent': detailsForm['Email Sent'] || null,
+      };
+      const res = await fetch(url, {
+        method: 'PATCH',
+        headers: {
+          'xc-token': nocoToken,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) throw new Error(await res.text());
+
+      setRows(prev => prev.map(r => (r.Id === detailRow.Id ? { ...r, ...payload } : r)));
+      setDetailRow(prev => (prev ? { ...prev, ...payload } : null));
+      setDetailsEditMode(false);
+    } catch (e: unknown) {
+      setDetailsSaveError((e as Error)?.message || 'Failed to save');
+    } finally {
+      setDetailsSaving(false);
+    }
+  }, [detailRow, detailsForm, nocoToken]);
+
   useEffect(() => {
     loadData();
   }, [loadData]);
@@ -229,6 +350,15 @@ export default function SubscriptionDashboard() {
     });
   }, [rows, q, filterAgent, filterPlan, filterCity]);
 
+  const planBreakdown = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const r of filtered) {
+      const p = String(r['Selected subscription plan'] || '').trim() || '(Empty)';
+      m.set(p, (m.get(p) || 0) + 1);
+    }
+    return Array.from(m.entries()).sort((a, b) => b[1] - a[1]);
+  }, [filtered]);
+
   // KPIs
   const kpis = useMemo(() => {
     const totalSubs = filtered.length;
@@ -238,18 +368,7 @@ export default function SubscriptionDashboard() {
     }, 0);
     const uniqueAgents = new Set(filtered.map(r => r.Agent || '').filter(Boolean)).size;
     const uniqueCities = new Set(filtered.map(r => r.City || '').filter(Boolean)).size;
-    // Count delivered months
-    let deliveredCount = 0;
-    let placedCount = 0;
-    for (const r of filtered) {
-      for (let m = 1; m <= 12; m++) {
-        const val = r[`Month ${m}` as keyof SubscriptionRow] as string | null;
-        const { status } = getMonthStatus(val);
-        if (status === 'delivered') deliveredCount++;
-        else if (status === 'placed') placedCount++;
-      }
-    }
-    return { totalSubs, totalRevenue, uniqueAgents, uniqueCities, deliveredCount, placedCount };
+    return { totalSubs, totalRevenue, uniqueAgents, uniqueCities };
   }, [filtered]);
 
   // Pagination
@@ -316,19 +435,22 @@ export default function SubscriptionDashboard() {
           </div>
           <div className="text-2xl font-bold">{loading ? '…' : kpis.uniqueCities}</div>
         </div>
-        <div className="bg-white rounded-xl shadow p-4 border">
-          <div className="flex items-center gap-2 text-emerald-600 mb-1">
-            <CheckCircle2 className="w-5 h-5" />
-            <span className="text-xs text-gray-500">Delivered</span>
+        <div className="bg-white rounded-xl shadow p-4 border md:col-span-3 lg:col-span-2">
+          <div className="flex items-center gap-2 text-indigo-600 mb-2">
+            <Package className="w-5 h-5" />
+            <span className="text-xs text-gray-500">Plans</span>
           </div>
-          <div className="text-2xl font-bold">{loading ? '…' : kpis.deliveredCount}</div>
-        </div>
-        <div className="bg-white rounded-xl shadow p-4 border">
-          <div className="flex items-center gap-2 text-amber-600 mb-1">
-            <Clock className="w-5 h-5" />
-            <span className="text-xs text-gray-500">Placed</span>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 text-sm">
+            {(loading ? [] : planBreakdown.slice(0, 6)).map(([plan, count]) => (
+              <div key={plan} className="flex items-center justify-between gap-3">
+                <div className="truncate text-gray-700" title={plan}>{plan}</div>
+                <div className="font-semibold text-gray-900">{count}</div>
+              </div>
+            ))}
+            {!loading && planBreakdown.length === 0 && (
+              <div className="text-gray-400 text-sm">—</div>
+            )}
           </div>
-          <div className="text-2xl font-bold">{loading ? '…' : kpis.placedCount}</div>
         </div>
       </div>
 
@@ -477,7 +599,7 @@ export default function SubscriptionDashboard() {
                             )}
                             title={val || 'Pending'}
                           >
-                            {status === 'delivered' ? '✓' : status === 'placed' ? '◷' : '—'}
+                            {status === 'delivered' ? '✓' : status === 'packed' ? '▣' : status === 'placed' ? '◷' : '—'}
                             {orderId && <span className="ml-0.5 font-mono">{orderId.slice(-4)}</span>}
                           </span>
                         </td>
@@ -527,7 +649,7 @@ export default function SubscriptionDashboard() {
 
       {/* Detail Modal */}
       {detailRow && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setDetailRow(null)}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={closeDetail}>
           <div
             className="bg-white rounded-xl shadow-xl w-full max-w-3xl max-h-[90vh] overflow-y-auto"
             onClick={(e) => e.stopPropagation()}
@@ -537,12 +659,48 @@ export default function SubscriptionDashboard() {
                 <h2 className="text-lg font-bold text-gray-800">{detailRow.Name || 'Subscription Details'}</h2>
                 <p className="text-sm text-gray-500">ID: {detailRow.Id}</p>
               </div>
-              <button onClick={() => setDetailRow(null)} className="p-2 hover:bg-gray-100 rounded-full" title="Close">
+              <div className="flex items-center gap-2">
+                {detailsEditMode ? (
+                  <>
+                    <button
+                      className="px-3 py-1.5 text-xs border rounded-lg hover:bg-gray-50"
+                      onClick={() => { setDetailsEditMode(false); setDetailsSaveError(''); }}
+                      disabled={detailsSaving}
+                      title="Cancel"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      className="px-3 py-1.5 text-xs bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 inline-flex items-center gap-1"
+                      onClick={saveDetails}
+                      disabled={detailsSaving}
+                      title="Save"
+                    >
+                      {detailsSaving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />}
+                      {detailsSaving ? 'Saving…' : 'Save'}
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    className="px-3 py-1.5 text-xs border rounded-lg hover:bg-gray-50 inline-flex items-center gap-1"
+                    onClick={() => { setDetailsEditMode(true); setDetailsSaveError(''); }}
+                    title="Edit Details"
+                  >
+                    <Edit3 className="w-3 h-3" /> Edit Details
+                  </button>
+                )}
+                <button onClick={closeDetail} className="p-2 hover:bg-gray-100 rounded-full" title="Close">
                 <X className="w-5 h-5" />
               </button>
+              </div>
             </div>
 
             <div className="p-5 space-y-5">
+              {detailsSaveError && (
+                <div className="bg-rose-50 border border-rose-200 text-rose-700 rounded-lg p-3 text-sm flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4" /> {detailsSaveError}
+                </div>
+              )}
               {/* Customer Info */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="space-y-3">
@@ -558,7 +716,16 @@ export default function SubscriptionDashboard() {
                   </div>
                   <div>
                     <div className="text-xs text-gray-500 mb-1">City</div>
-                    <div className="flex items-center gap-1"><MapPin className="w-4 h-4 text-gray-400" /> {detailRow.City || '—'}</div>
+                    {detailsEditMode ? (
+                      <input
+                        className="w-full px-3 py-2 border rounded-lg text-sm"
+                        title="City"
+                        value={detailsForm.City || ''}
+                        onChange={(e) => setDetailsForm(p => ({ ...p, City: e.target.value }))}
+                      />
+                    ) : (
+                      <div className="flex items-center gap-1"><MapPin className="w-4 h-4 text-gray-400" /> {detailRow.City || '—'}</div>
+                    )}
                   </div>
                   <div>
                     <div className="text-xs text-gray-500 mb-1">Agent</div>
@@ -568,21 +735,61 @@ export default function SubscriptionDashboard() {
                 <div className="space-y-3">
                   <div>
                     <div className="text-xs text-gray-500 mb-1">Subscription Plan</div>
-                    <div className="font-medium text-indigo-700">{detailRow['Selected subscription plan'] || '—'}</div>
+                    {detailsEditMode ? (
+                      <input
+                        className="w-full px-3 py-2 border rounded-lg text-sm"
+                        title="Subscription plan"
+                        value={detailsForm['Selected subscription plan'] || ''}
+                        onChange={(e) => setDetailsForm(p => ({ ...p, 'Selected subscription plan': e.target.value }))}
+                      />
+                    ) : (
+                      <div className="font-medium text-indigo-700">{detailRow['Selected subscription plan'] || '—'}</div>
+                    )}
                   </div>
                   <div>
                     <div className="text-xs text-gray-500 mb-1">Amount Collected</div>
-                    <div className="text-xl font-bold text-emerald-700">{formatCurrency(detailRow['Amount collected'])}</div>
+                    {detailsEditMode ? (
+                      <input
+                        className="w-full px-3 py-2 border rounded-lg text-sm"
+                        title="Amount collected"
+                        value={detailsForm['Amount collected'] || ''}
+                        onChange={(e) => setDetailsForm(p => ({ ...p, 'Amount collected': e.target.value }))}
+                      />
+                    ) : (
+                      <div className="text-xl font-bold text-emerald-700">{formatCurrency(detailRow['Amount collected'])}</div>
+                    )}
                   </div>
                   <div>
                     <div className="text-xs text-gray-500 mb-1">Packs per Month</div>
-                    <div>{detailRow['No of 450 gram packs/Month'] || '—'} × 450g</div>
+                    {detailsEditMode ? (
+                      <input
+                        className="w-full px-3 py-2 border rounded-lg text-sm"
+                        title="Packs per month"
+                        value={detailsForm['No of 450 gram packs/Month'] || ''}
+                        onChange={(e) => setDetailsForm(p => ({ ...p, 'No of 450 gram packs/Month': e.target.value }))}
+                      />
+                    ) : (
+                      <div>{detailRow['No of 450 gram packs/Month'] || '—'} × 450g</div>
+                    )}
                   </div>
                   <div>
                     <div className="text-xs text-gray-500 mb-1">Email Sent</div>
-                    <div className={detailRow['Email Sent']?.toLowerCase() === 'yes' ? 'text-emerald-600' : 'text-gray-500'}>
-                      {detailRow['Email Sent'] || 'No'}
-                    </div>
+                    {detailsEditMode ? (
+                      <select
+                        className="w-full px-3 py-2 border rounded-lg text-sm"
+                        title="Email sent"
+                        value={detailsForm['Email Sent'] || ''}
+                        onChange={(e) => setDetailsForm(p => ({ ...p, 'Email Sent': e.target.value }))}
+                      >
+                        <option value="">(Empty)</option>
+                        <option value="Yes">Yes</option>
+                        <option value="No">No</option>
+                      </select>
+                    ) : (
+                      <div className={detailRow['Email Sent']?.toLowerCase() === 'yes' ? 'text-emerald-600' : 'text-gray-500'}>
+                        {detailRow['Email Sent'] || 'No'}
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
@@ -595,15 +802,42 @@ export default function SubscriptionDashboard() {
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
                   <div>
                     <div className="text-xs text-gray-500">Dispatch Date</div>
-                    <div className="font-medium">{detailRow['confirmed  date of Dispatch'] || '—'}</div>
+                    {detailsEditMode ? (
+                      <input
+                        className="w-full px-3 py-2 border rounded-lg text-sm"
+                        title="Dispatch date"
+                        value={detailsForm['confirmed  date of Dispatch'] || ''}
+                        onChange={(e) => setDetailsForm(p => ({ ...p, 'confirmed  date of Dispatch': e.target.value }))}
+                      />
+                    ) : (
+                      <div className="font-medium">{detailRow['confirmed  date of Dispatch'] || '—'}</div>
+                    )}
                   </div>
                   <div>
                     <div className="text-xs text-gray-500">Start</div>
-                    <div className="font-medium">{detailRow['Start Date and Month'] || '—'}</div>
+                    {detailsEditMode ? (
+                      <input
+                        className="w-full px-3 py-2 border rounded-lg text-sm"
+                        title="Start date"
+                        value={detailsForm['Start Date and Month'] || ''}
+                        onChange={(e) => setDetailsForm(p => ({ ...p, 'Start Date and Month': e.target.value }))}
+                      />
+                    ) : (
+                      <div className="font-medium">{detailRow['Start Date and Month'] || '—'}</div>
+                    )}
                   </div>
                   <div>
                     <div className="text-xs text-gray-500">End</div>
-                    <div className="font-medium">{detailRow['End Date and Month'] || '—'}</div>
+                    {detailsEditMode ? (
+                      <input
+                        className="w-full px-3 py-2 border rounded-lg text-sm"
+                        title="End date"
+                        value={detailsForm['End Date and Month'] || ''}
+                        onChange={(e) => setDetailsForm(p => ({ ...p, 'End Date and Month': e.target.value }))}
+                      />
+                    ) : (
+                      <div className="font-medium">{detailRow['End Date and Month'] || '—'}</div>
+                    )}
                   </div>
                 </div>
               </div>
@@ -611,9 +845,19 @@ export default function SubscriptionDashboard() {
               {/* Address */}
               <div>
                 <div className="text-xs text-gray-500 mb-1">Dispatch Address</div>
-                <div className="bg-gray-50 rounded-lg p-3 border text-sm whitespace-pre-wrap">
-                  {detailRow['Dispatch address'] || '—'}
-                </div>
+                {detailsEditMode ? (
+                  <textarea
+                    className="w-full bg-gray-50 rounded-lg p-3 border text-sm"
+                    title="Dispatch address"
+                    rows={4}
+                    value={detailsForm['Dispatch address'] || ''}
+                    onChange={(e) => setDetailsForm(p => ({ ...p, 'Dispatch address': e.target.value }))}
+                  />
+                ) : (
+                  <div className="bg-gray-50 rounded-lg p-3 border text-sm whitespace-pre-wrap">
+                    {detailRow['Dispatch address'] || '—'}
+                  </div>
+                )}
               </div>
 
               {/* Month-by-Month Tracking */}
@@ -682,12 +926,23 @@ export default function SubscriptionDashboard() {
                       const val = detailRow[m as keyof SubscriptionRow] as string | null;
                       const { status, orderId } = getMonthStatus(val);
                       return (
-                        <div
+                        <button
                           key={m}
+                          type="button"
+                          title="Update month status"
+                          onClick={() => {
+                            setMonthPickerKey(m);
+                            setMonthPickerError('');
+                            const parsed = getMonthStatus(val);
+                            setMonthPickerStatus(parsed.status === 'empty' ? 'pending' : parsed.status);
+                            setMonthPickerOrderId(parsed.orderId);
+                          }}
                           className={clsx(
-                            'rounded-lg border p-3 text-center',
+                            'rounded-lg border p-3 text-center w-full hover:shadow-sm transition',
                             status === 'delivered' ? 'bg-emerald-50 border-emerald-300' :
+                            status === 'packed' ? 'bg-sky-50 border-sky-300' :
                             status === 'placed' ? 'bg-amber-50 border-amber-300' :
+                            status === 'pending' ? 'bg-slate-50 border-slate-300' :
                             'bg-gray-50 border-gray-200'
                           )}
                         >
@@ -695,6 +950,8 @@ export default function SubscriptionDashboard() {
                           <div className="flex items-center justify-center gap-1">
                             {status === 'delivered' ? (
                               <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                            ) : status === 'packed' ? (
+                              <Package className="w-4 h-4 text-sky-600" />
                             ) : status === 'placed' ? (
                               <Clock className="w-4 h-4 text-amber-600" />
                             ) : (
@@ -709,12 +966,82 @@ export default function SubscriptionDashboard() {
                           <div className="text-[10px] mt-1 capitalize text-gray-600">
                             {status === 'empty' ? 'Pending' : status}
                           </div>
-                        </div>
+                        </button>
                       );
                     })}
                   </div>
                 )}
               </div>
+
+              {monthPickerKey && (
+                <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 p-4" onClick={() => setMonthPickerKey('')}>
+                  <div className="bg-white rounded-xl shadow-xl w-full max-w-md border" onClick={(e) => e.stopPropagation()}>
+                    <div className="flex items-center justify-between px-4 py-3 border-b">
+                      <div className="font-semibold text-sm">Update {monthPickerKey}</div>
+                      <button className="p-2 hover:bg-gray-100 rounded-full" title="Close" onClick={() => setMonthPickerKey('')}>
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                    <div className="p-4 space-y-3">
+                      {monthPickerError && (
+                        <div className="p-2 bg-rose-50 border border-rose-200 rounded-lg text-rose-700 text-xs flex items-center gap-2">
+                          <AlertCircle className="w-4 h-4" /> {monthPickerError}
+                        </div>
+                      )}
+                      <div>
+                        <label className="block text-xs text-gray-600 mb-1">Status</label>
+                        <select
+                          className="w-full border rounded-lg px-3 py-2 text-sm"
+                          title="Select status"
+                          value={monthPickerStatus}
+                          onChange={(e) => setMonthPickerStatus(e.target.value as MonthStatus)}
+                          disabled={monthPickerSaving}
+                        >
+                          <option value="pending">Pending</option>
+                          <option value="packed">Packed</option>
+                          <option value="placed">Placed</option>
+                          <option value="delivered">Delivered</option>
+                          <option value="empty">Clear</option>
+                        </select>
+                      </div>
+
+                      {(monthPickerStatus === 'packed' || monthPickerStatus === 'placed' || monthPickerStatus === 'delivered') && (
+                        <div>
+                          <label className="block text-xs text-gray-600 mb-1">Order ID (optional)</label>
+                          <input
+                            className="w-full border rounded-lg px-3 py-2 text-sm"
+                            title="Order ID"
+                            value={monthPickerOrderId}
+                            onChange={(e) => setMonthPickerOrderId(e.target.value)}
+                            disabled={monthPickerSaving}
+                            placeholder="#12345"
+                          />
+                        </div>
+                      )}
+
+                      <div className="flex items-center justify-end gap-2 pt-2">
+                        <button
+                          className="px-3 py-2 text-sm border rounded-lg hover:bg-gray-50"
+                          onClick={() => setMonthPickerKey('')}
+                          disabled={monthPickerSaving}
+                          title="Cancel"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          className="px-3 py-2 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 inline-flex items-center gap-2"
+                          onClick={() => saveSingleMonth(monthPickerKey, monthPickerStatus, monthPickerOrderId)}
+                          disabled={monthPickerSaving}
+                          title="Save"
+                        >
+                          {monthPickerSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                          {monthPickerSaving ? 'Saving…' : 'Save'}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>

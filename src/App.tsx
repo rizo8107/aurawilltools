@@ -133,7 +133,7 @@ function App() {
   }
   
   return (
-    <div className="flex h-screen bg-gray-100">
+    <div className="flex h-screen bg-gray-100 overflow-x-hidden">
       {/* Sidebar */}
       <aside className="w-64 bg-gray-800 text-white p-6 flex flex-col">
         <h1 className="text-3xl font-bold mb-8 text-center">
@@ -170,13 +170,13 @@ function App() {
       </aside>
 
       {/* Main Content Area */}
-      <div className="flex-1 flex flex-col overflow-hidden">
+      <div className="flex-1 flex flex-col overflow-hidden min-w-0">
         <header className="bg-white shadow-sm p-3 md:p-4">
           <h2 className="text-2xl font-semibold text-gray-800">{navigationItems.find(item => item.id === activeTab)?.label}</h2>
           <p className="text-gray-600 mt-1">{pageDescriptions[activeTab]}</p>
         </header>
 
-        <main className={`flex-grow p-0 md:p-2 overflow-y-auto bg-gray-50 ${ 
+        <main className={`flex-grow p-0 md:p-2 overflow-y-auto bg-gray-50 min-w-0 ${ 
           activeTab === 'order' ? 'flex justify-center items-start' : '' 
         }`}>
           <div className={`w-full ${ 
