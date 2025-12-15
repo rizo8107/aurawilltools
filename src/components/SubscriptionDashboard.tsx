@@ -406,45 +406,80 @@ export default function SubscriptionDashboard() {
       )}
 
       {/* KPI Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-        <div className="bg-white rounded-xl shadow p-4 border">
-          <div className="flex items-center gap-2 text-indigo-600 mb-1">
-            <Package className="w-5 h-5" />
-            <span className="text-xs text-gray-500">Total Subscriptions</span>
+      <div className="space-y-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="bg-white rounded-2xl border shadow-sm p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="text-xs font-medium text-gray-500">Total Subscriptions</div>
+                <div className="mt-1 text-3xl font-semibold tracking-tight text-gray-900">{loading ? '…' : kpis.totalSubs}</div>
+              </div>
+              <div className="h-10 w-10 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center border border-indigo-100">
+                <Package className="w-5 h-5" />
+              </div>
+            </div>
           </div>
-          <div className="text-2xl font-bold">{loading ? '…' : kpis.totalSubs}</div>
+
+          <div className="bg-white rounded-2xl border shadow-sm p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="text-xs font-medium text-gray-500">Total Revenue</div>
+                <div className="mt-1 text-3xl font-semibold tracking-tight text-gray-900">{loading ? '…' : formatCurrency(String(kpis.totalRevenue))}</div>
+              </div>
+              <div className="h-10 w-10 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center border border-emerald-100">
+                <IndianRupee className="w-5 h-5" />
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-2xl border shadow-sm p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="text-xs font-medium text-gray-500">Agents</div>
+                <div className="mt-1 text-3xl font-semibold tracking-tight text-gray-900">{loading ? '…' : kpis.uniqueAgents}</div>
+              </div>
+              <div className="h-10 w-10 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center border border-blue-100">
+                <Users className="w-5 h-5" />
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-2xl border shadow-sm p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="text-xs font-medium text-gray-500">Cities</div>
+                <div className="mt-1 text-3xl font-semibold tracking-tight text-gray-900">{loading ? '…' : kpis.uniqueCities}</div>
+              </div>
+              <div className="h-10 w-10 rounded-xl bg-purple-50 text-purple-600 flex items-center justify-center border border-purple-100">
+                <MapPin className="w-5 h-5" />
+              </div>
+            </div>
+          </div>
         </div>
-        <div className="bg-white rounded-xl shadow p-4 border">
-          <div className="flex items-center gap-2 text-emerald-600 mb-1">
-            <IndianRupee className="w-5 h-5" />
-            <span className="text-xs text-gray-500">Total Revenue</span>
+
+        <div className="bg-white rounded-2xl border shadow-sm p-4">
+          <div className="flex items-center justify-between gap-3 mb-3">
+            <div className="flex items-center gap-2">
+              <div className="h-9 w-9 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center border border-indigo-100">
+                <Package className="w-5 h-5" />
+              </div>
+              <div>
+                <div className="text-sm font-semibold text-gray-900">Plans breakdown</div>
+                <div className="text-xs text-gray-500">Top plans by subscription count</div>
+              </div>
+            </div>
+            {!loading && (
+              <div className="text-xs text-gray-500">{planBreakdown.length} plans</div>
+            )}
           </div>
-          <div className="text-2xl font-bold">{loading ? '…' : formatCurrency(String(kpis.totalRevenue))}</div>
-        </div>
-        <div className="bg-white rounded-xl shadow p-4 border">
-          <div className="flex items-center gap-2 text-blue-600 mb-1">
-            <Users className="w-5 h-5" />
-            <span className="text-xs text-gray-500">Agents</span>
-          </div>
-          <div className="text-2xl font-bold">{loading ? '…' : kpis.uniqueAgents}</div>
-        </div>
-        <div className="bg-white rounded-xl shadow p-4 border">
-          <div className="flex items-center gap-2 text-purple-600 mb-1">
-            <MapPin className="w-5 h-5" />
-            <span className="text-xs text-gray-500">Cities</span>
-          </div>
-          <div className="text-2xl font-bold">{loading ? '…' : kpis.uniqueCities}</div>
-        </div>
-        <div className="bg-white rounded-xl shadow p-4 border md:col-span-3 lg:col-span-2">
-          <div className="flex items-center gap-2 text-indigo-600 mb-2">
-            <Package className="w-5 h-5" />
-            <span className="text-xs text-gray-500">Plans</span>
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 text-sm">
-            {(loading ? [] : planBreakdown.slice(0, 6)).map(([plan, count]) => (
-              <div key={plan} className="flex items-center justify-between gap-3">
-                <div className="truncate text-gray-700" title={plan}>{plan}</div>
-                <div className="font-semibold text-gray-900">{count}</div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
+            {(loading ? [] : planBreakdown.slice(0, 9)).map(([plan, count]) => (
+              <div key={plan} className="flex items-center justify-between gap-3 rounded-xl border bg-slate-50 px-3 py-2">
+                <div className="truncate text-sm text-gray-800" title={plan}>{plan}</div>
+                <div className="shrink-0 rounded-lg bg-white border px-2 py-0.5 text-xs font-semibold text-gray-900">
+                  {count}
+                </div>
               </div>
             ))}
             {!loading && planBreakdown.length === 0 && (
