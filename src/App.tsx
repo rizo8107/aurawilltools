@@ -16,12 +16,13 @@ import NdrLogin from './components/NdrLogin';
 import NdrAllocationPage from './components/NdrAllocationPage';
 import TeamAnalyticsPage from './components/TeamAnalyticsPage';
 import AgentAnalyticsPage from './components/AgentAnalyticsPage';
-import { Package, Printer, Truck, FileText, Users, LogOut, FileSpreadsheet, RefreshCw } from 'lucide-react';
+import { Package, Printer, Truck, FileText, Users, LogOut, FileSpreadsheet } from 'lucide-react';
 import ManualOrdersDashboard from './components/ManualOrdersDashboard';
 import SegmentationPage from './components/SegmentationPage';
 import SubscriptionContractForm from './components/SubscriptionContractForm';
+import SubscriptionDashboard from './components/SubscriptionDashboard';
 
-type TabType = 'order' | 'printslip' | 'n8n_printslip' | 'tracking' | 'manifest' | 'campaign' | 'repeatorders' | 'repeat_dashboard' | 'orderhistory' | 'gstinvoice' | 'ndr' | 'teams' | 'allocation' | 'team_analytics' | 'agent_analytics' | 'segmentation' | 'manual_orders' | 'subscription_contract';
+type TabType = 'order' | 'printslip' | 'n8n_printslip' | 'tracking' | 'manifest' | 'campaign' | 'repeatorders' | 'repeat_dashboard' | 'orderhistory' | 'gstinvoice' | 'ndr' | 'teams' | 'allocation' | 'team_analytics' | 'agent_analytics' | 'segmentation' | 'manual_orders' | 'subscription_contract' | 'subscription_dashboard';
 
 function App() {
   const [activeTab, setActiveTab] = useState<TabType>('order');
@@ -77,6 +78,7 @@ function App() {
     { id: 'n8n_printslip', label: 'Proffessional ', icon: <Printer size={20} /> },
     { id: 'tracking', label: 'Update Tracking', icon: <Truck size={20} /> },
     { id: 'manifest', label: 'Create Manifest', icon: <FileText size={20} /> },
+    { id: 'subscription_dashboard', label: 'Sub Dashboard', icon: <Package size={20} /> },
     { id: 'campaign', label: 'Repeat Campaign', icon: <Users size={20} /> },
     { id: 'repeat_dashboard', label: 'Repeat Dashboard', icon: <Users size={20} /> },
     { id: 'ndr', label: 'NDR Dashboard', icon: <Truck size={20} /> },
@@ -110,6 +112,7 @@ function App() {
     segmentation: 'Group and export orders by State/City/Pincode/Area',
     manual_orders: 'Create manual orders, update status, and record agent notes with full audit trail',
     subscription_contract: 'Create a Shopify subscription contract from plan + product + pricing',
+    subscription_dashboard: 'Track and manage product subscriptions with delivery status',
   };
 
   // Handle logout
@@ -181,9 +184,9 @@ function App() {
             activeTab === 'tracking' || activeTab === 'manifest' ? 'max-w-3xl' : 
             activeTab === 'campaign' ? 'max-w-5xl' : 
             activeTab === 'team_analytics' || activeTab === 'agent_analytics' ? 'max-w-[95vw]' : 
-            activeTab === 'ndr' || activeTab === 'repeat_dashboard' || activeTab === 'manual_orders' ? 'max-w-none' : 
+            activeTab === 'ndr' || activeTab === 'repeat_dashboard' || activeTab === 'manual_orders' || activeTab === 'subscription_dashboard' ? 'max-w-none' : 
             activeTab === 'gstinvoice' || activeTab === 'orderhistory' ? 'max-w-7xl' : 'max-w-4xl'
-          } ${(activeTab === 'ndr' || activeTab === 'repeat_dashboard' || activeTab === 'manual_orders') ? '' : 'mx-auto'}`}>
+          } ${(activeTab === 'ndr' || activeTab === 'repeat_dashboard' || activeTab === 'manual_orders' || activeTab === 'subscription_dashboard') ? '' : 'mx-auto'}`}>
             {activeTab === 'order' && <OrderForm />}
             {activeTab === 'printslip' && <PrintSlip />}
             {activeTab === 'n8n_printslip' && <N8nPrintSlip />}
@@ -230,6 +233,7 @@ function App() {
             {activeTab === 'segmentation' && <SegmentationPage />}
             {activeTab === 'manual_orders' && <ManualOrdersDashboard />}
             {activeTab === 'subscription_contract' && <SubscriptionContractForm />}
+            {activeTab === 'subscription_dashboard' && <SubscriptionDashboard />}
           </div>
         </main>
         
