@@ -3043,17 +3043,6 @@ export default function RepeatDashboard() {
 
                     const agents = Array.from(byAgent.entries()).sort((a, b) => b[1].total - a[1].total);
 
-                    // Apply custom groupings from nrGrouping state
-                    const applyGrouping = (key: string, items: Map<string, number>): Map<string, number> => {
-                      const gmap = nrGrouping[key] || {};
-                      const result = new Map<string, number>();
-                      for (const [text, count] of Array.from(items.entries())) {
-                        const groupName = gmap[text] || text;
-                        result.set(groupName, (result.get(groupName) || 0) + count);
-                      }
-                      return result;
-                    };
-
                     // Get all unique Q1 and Q2 texts across all agents for grouping modal
                     const allQ1Texts = new Set<string>();
                     const allQ2Texts = new Set<string>();
@@ -3095,41 +3084,27 @@ export default function RepeatDashboard() {
                                   }
                                   const rows = Array.from(catCounts.entries()).sort((a, b) => b[1] - a[1]);
 
-                                  // Apply custom groupings first, then auto-grouping for remaining
-                                  const customGrouped = applyGrouping('q1', bucket.q1);
-                                  
-                                  // Group similar answer texts (e.g. many variants of "product was good", "felt energetic")
-                                  const buildKey = (raw: string): string => {
-                                    const s = String(raw || '').toLowerCase();
-                                    const cleaned = s.replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
-                                    if (!cleaned) return '(empty)';
-                                    // Energetic variations
-                                    if (cleaned.includes('energetic') || cleaned.includes('energy')) return 'Felt energetic';
-                                    // Good product / positive feedback variations
-                                    if (cleaned.includes('product was good') || cleaned.includes('product is good') || cleaned.includes('product good')) return 'Product was good';
-                                    if (cleaned.includes('felt good') || cleaned.includes('feel good') || cleaned.includes('feeling good')) return 'Felt good';
-                                    if (cleaned.includes('like the product') || cleaned.includes('liked the product') || cleaned.includes('likes the product')) return 'Liked the product';
-                                    if (cleaned.includes('aurawill is good') || cleaned.includes('aurawill good')) return 'Aurawill is good';
-                                    if (cleaned.includes('good quality') || cleaned.includes('good in quality')) return 'Good quality';
-                                    if (cleaned.includes('overall experience') && (cleaned.includes('good') || cleaned.includes('great'))) return 'Overall experience was good';
-                                    if (cleaned.includes('no change') || cleaned.includes('no changes') || cleaned.includes('didnt notice') || cleaned.includes("didn't notice")) return 'No changes noticed';
-                                    if (cleaned.includes('tasty') || cleaned.includes('taste is good') || cleaned.includes('good taste')) return 'Good taste';
-                                    if (cleaned.includes('useful') || cleaned.includes('good for use')) return 'Product is useful';
-                                    if (cleaned.includes('suggested to family') || cleaned.includes('recommend')) return 'Recommended to others';
-                                    if (cleaned.includes('control') && cleaned.includes('hunger')) return 'Controls hunger';
-                                    if (cleaned.includes('active') || cleaned.includes('stamina')) return 'Felt active';
-                                    // Fallback: first 4 words for better grouping
-                                    const words = cleaned.split(' ');
-                                    return words.slice(0, 4).join(' ');
-                                  };
-                                  const grouped = new Map<string, { key: string; text: string; count: number }>();
-                                  for (const [text, count] of Array.from(customGrouped.entries())) {
-                                    const key = buildKey(text);
-                                    const existing = grouped.get(key);
-                                    if (existing) {
-                                      existing.count += count;
+                                  // Apply custom groupings - merge items assigned to same group
+                                  const gmap = nrGrouping['q1'] || {};
+                                  const grouped = new Map<string, { key: string; text: string; count: number; isCustomGroup: boolean }>();
+                                  for (const [text, count] of Array.from(bucket.q1.entries())) {
+                                    // If this text is assigned to a custom group, use the group name as key
+                                    const customGroup = gmap[text];
+                                    if (customGroup) {
+                                      const existing = grouped.get(customGroup);
+                                      if (existing) {
+                                        existing.count += count;
+                                      } else {
+                                        grouped.set(customGroup, { key: customGroup, text: customGroup, count, isCustomGroup: true });
+                                      }
                                     } else {
-                                      grouped.set(key, { key, text, count });
+                                      // No custom group - use original text as key
+                                      const existing = grouped.get(text);
+                                      if (existing) {
+                                        existing.count += count;
+                                      } else {
+                                        grouped.set(text, { key: text, text, count, isCustomGroup: false });
+                                      }
                                     }
                                   }
                                   const answerRows = Array.from(grouped.values()).sort((a, b) => b.count - a.count);
@@ -3144,35 +3119,56 @@ export default function RepeatDashboard() {
                                             </tr>
                                           </thead>
                                           <tbody>
-                                            {rows.map(([name, count]) => (
-                                              <tr key={name} className="border-t border-slate-100">
-                                                <td className="px-2 py-1 whitespace-nowrap text-xs">{name}</td>
-                                                <td className="px-2 py-1 text-right text-xs">{count}</td>
+                                            {rows.map(([catName, catCount]) => (
+                                              <tr 
+                                                key={catName} 
+                                                className="border-t border-slate-100 cursor-pointer hover:bg-indigo-50"
+                                                onClick={() => {
+                                                  const matchRows = (nrFiltered as any[]).filter((r) => {
+                                                    const rawAgent = r['Agent Name'] ?? r['Agent'] ?? r['agent'];
+                                                    const agentName = String(rawAgent ?? '').trim() || '(Unassigned)';
+                                                    if (agentName !== agent) return false;
+                                                    const t = getText(r, q1Keys);
+                                                    return categorizeExperience(t) === catName;
+                                                  });
+                                                  setNrDrillRows(matchRows);
+                                                  setNrDrillTitle(`${agent} — Experience — ${catName}`);
+                                                  setNrDrillPage(1);
+                                                  setNrDrillOpen(true);
+                                                }}
+                                              >
+                                                <td className="px-2 py-1 whitespace-nowrap text-xs">{catName}</td>
+                                                <td className="px-2 py-1 text-right text-xs text-indigo-600 font-medium">{catCount}</td>
                                               </tr>
                                             ))}
                                           </tbody>
                                         </table>
                                       </div>
                                       <div className="space-y-1 max-h-60 overflow-y-auto">
-                                        {answerRows.map(({ key, text, count }) => (
+                                        {answerRows.map(({ key, text, count, isCustomGroup }) => (
                                           <div
                                             key={key}
-                                            className="grid grid-cols-[1fr_auto] gap-2 items-start cursor-pointer hover:bg-slate-50 rounded px-1"
+                                            className={`grid grid-cols-[1fr_auto] gap-2 items-start cursor-pointer hover:bg-slate-50 rounded px-1 ${isCustomGroup ? 'bg-indigo-50 border-l-2 border-indigo-400' : ''}`}
                                             onClick={() => {
-                                              const rows = (nrFiltered as any[]).filter((r) => {
+                                              const matchRows = (nrFiltered as any[]).filter((r) => {
                                                 const rawAgent = r['Agent Name'] ?? r['Agent'] ?? r['agent'];
                                                 const agentName = String(rawAgent ?? '').trim() || '(Unassigned)';
                                                 if (agentName !== agent) return false;
                                                 const t = getText(r, q1Keys);
-                                                return buildKey(t) === key;
+                                                // For custom groups, match all texts assigned to this group
+                                                if (isCustomGroup) {
+                                                  return gmap[t] === key;
+                                                }
+                                                // For non-grouped items, match exact text
+                                                return t === key && !gmap[t];
                                               });
-                                              setNrDrillRows(rows);
+                                              setNrDrillRows(matchRows);
                                               setNrDrillTitle(`${agent} — Experience — ${text}`);
                                               setNrDrillPage(1);
                                               setNrDrillOpen(true);
                                             }}
                                           >
-                                            <div className="text-xs whitespace-pre-wrap">{text}</div>
+                                            <div className="text-xs whitespace-pre-wrap">{text}{isCustomGroup && <span className="ml-1 text-[10px] text-indigo-600">(grouped)</span>}</div>
                                             <div className="text-xs font-semibold text-right">{count}</div>
                                           </div>
                                         ))}
@@ -3197,49 +3193,27 @@ export default function RepeatDashboard() {
                                   }
                                   const rows = Array.from(catCounts.entries()).sort((a, b) => b[1] - a[1]);
 
-                                  // Apply custom groupings first
-                                  const customGroupedQ2 = applyGrouping('q2', bucket.q2);
-
-                                  const buildKeyQ2 = (raw: string): string => {
-                                    const s = String(raw || '').toLowerCase();
-                                    const cleaned = s.replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
-                                    if (!cleaned) return '(empty)';
-                                    // Personal reasons
-                                    if (cleaned.includes('personal reason') || cleaned.includes('some personal')) return 'Personal reason';
-                                    // Time / Busy
-                                    if (cleaned.includes('busy') || cleaned.includes('no time') || cleaned.includes('work so') || cleaned.includes('time to use')) return 'Busy / No time';
-                                    // Out of station / Travel
-                                    if (cleaned.includes('out of station') || cleaned.includes('went to') || cleaned.includes('transfer') || cleaned.includes('foreign')) return 'Out of station / Travel';
-                                    // Health reasons
-                                    if (cleaned.includes('health') || cleaned.includes('doctor') || cleaned.includes('pregnant') || cleaned.includes('bp') || cleaned.includes('sugar') || cleaned.includes('stomach')) return 'Health reasons';
-                                    // Family decision
-                                    if (cleaned.includes('family') || cleaned.includes('wife') || cleaned.includes('parent') || cleaned.includes('mother') || cleaned.includes('father')) return 'Family decision';
-                                    // Price / Affordability
-                                    if (cleaned.includes('afford') || cleaned.includes('money') || cleaned.includes('price') || cleaned.includes('cost') || cleaned.includes('financially')) return 'Price / Affordability';
-                                    // Product related
-                                    if (cleaned.includes('taste') || cleaned.includes('flavour') || cleaned.includes('flavor')) return 'Taste / Product experience';
-                                    if (cleaned.includes('quality') || cleaned.includes('roasted') || cleaned.includes('grinded')) return 'Product quality issue';
-                                    // Still have stock
-                                    if (cleaned.includes('still') && (cleaned.includes('have') || cleaned.includes('not over') || cleaned.includes('balance'))) return 'Still have product';
-                                    if (cleaned.includes('bulk') || cleaned.includes('quantity')) return 'Purchased in bulk';
-                                    // Delivery issues
-                                    if (cleaned.includes('delay') || cleaned.includes('delivery')) return 'Delivery issue';
-                                    // No changes / results
-                                    if (cleaned.includes('no change') || cleaned.includes('no result') || cleaned.includes('nothing feel')) return 'No changes felt';
-                                    // Will order / planning
-                                    if (cleaned.includes('will order') || cleaned.includes('will purchase') || cleaned.includes('planning')) return 'Planning to order';
-                                    // Fallback: first 5 words for better grouping
-                                    const words = cleaned.split(' ');
-                                    return words.slice(0, 5).join(' ');
-                                  };
-                                  const grouped = new Map<string, { key: string; text: string; count: number }>();
-                                  for (const [text, count] of Array.from(customGroupedQ2.entries())) {
-                                    const key = buildKeyQ2(text);
-                                    const existing = grouped.get(key);
-                                    if (existing) {
-                                      existing.count += count;
+                                  // Apply custom groupings - merge items assigned to same group
+                                  const gmapQ2 = nrGrouping['q2'] || {};
+                                  const grouped = new Map<string, { key: string; text: string; count: number; isCustomGroup: boolean }>();
+                                  for (const [text, count] of Array.from(bucket.q2.entries())) {
+                                    // If this text is assigned to a custom group, use the group name as key
+                                    const customGroup = gmapQ2[text];
+                                    if (customGroup) {
+                                      const existing = grouped.get(customGroup);
+                                      if (existing) {
+                                        existing.count += count;
+                                      } else {
+                                        grouped.set(customGroup, { key: customGroup, text: customGroup, count, isCustomGroup: true });
+                                      }
                                     } else {
-                                      grouped.set(key, { key, text, count });
+                                      // No custom group - use original text as key
+                                      const existing = grouped.get(text);
+                                      if (existing) {
+                                        existing.count += count;
+                                      } else {
+                                        grouped.set(text, { key: text, text, count, isCustomGroup: false });
+                                      }
                                     }
                                   }
                                   const answerRows = Array.from(grouped.values()).sort((a, b) => b.count - a.count);
@@ -3254,19 +3228,56 @@ export default function RepeatDashboard() {
                                             </tr>
                                           </thead>
                                           <tbody>
-                                            {rows.map(([name, count]) => (
-                                              <tr key={name} className="border-t border-slate-100">
-                                                <td className="px-2 py-1 whitespace-nowrap text-xs">{name}</td>
-                                                <td className="px-2 py-1 text-right text-xs">{count}</td>
+                                            {rows.map(([catName, catCount]) => (
+                                              <tr 
+                                                key={catName} 
+                                                className="border-t border-slate-100 cursor-pointer hover:bg-indigo-50"
+                                                onClick={() => {
+                                                  const matchRows = (nrFiltered as any[]).filter((r) => {
+                                                    const rawAgent = r['Agent Name'] ?? r['Agent'] ?? r['agent'];
+                                                    const agentName = String(rawAgent ?? '').trim() || '(Unassigned)';
+                                                    if (agentName !== agent) return false;
+                                                    const t = getText(r, q2Keys);
+                                                    return categorizeStopReason(t) === catName;
+                                                  });
+                                                  setNrDrillRows(matchRows);
+                                                  setNrDrillTitle(`${agent} — Stop Reason — ${catName}`);
+                                                  setNrDrillPage(1);
+                                                  setNrDrillOpen(true);
+                                                }}
+                                              >
+                                                <td className="px-2 py-1 whitespace-nowrap text-xs">{catName}</td>
+                                                <td className="px-2 py-1 text-right text-xs text-indigo-600 font-medium">{catCount}</td>
                                               </tr>
                                             ))}
                                           </tbody>
                                         </table>
                                       </div>
                                       <div className="space-y-1 max-h-60 overflow-y-auto">
-                                        {answerRows.map(({ text, count }) => (
-                                          <div key={text} className="grid grid-cols-[1fr_auto] gap-2 items-start">
-                                            <div className="text-xs whitespace-pre-wrap">{text}</div>
+                                        {answerRows.map(({ key, text, count, isCustomGroup }) => (
+                                          <div 
+                                            key={key} 
+                                            className={`grid grid-cols-[1fr_auto] gap-2 items-start cursor-pointer hover:bg-slate-50 rounded px-1 ${isCustomGroup ? 'bg-indigo-50 border-l-2 border-indigo-400' : ''}`}
+                                            onClick={() => {
+                                              const matchRows = (nrFiltered as any[]).filter((r) => {
+                                                const rawAgent = r['Agent Name'] ?? r['Agent'] ?? r['agent'];
+                                                const agentName = String(rawAgent ?? '').trim() || '(Unassigned)';
+                                                if (agentName !== agent) return false;
+                                                const t = getText(r, q2Keys);
+                                                // For custom groups, match all texts assigned to this group
+                                                if (isCustomGroup) {
+                                                  return gmapQ2[t] === key;
+                                                }
+                                                // For non-grouped items, match exact text
+                                                return t === key && !gmapQ2[t];
+                                              });
+                                              setNrDrillRows(matchRows);
+                                              setNrDrillTitle(`${agent} — Stop Reason — ${text}`);
+                                              setNrDrillPage(1);
+                                              setNrDrillOpen(true);
+                                            }}
+                                          >
+                                            <div className="text-xs whitespace-pre-wrap">{text}{isCustomGroup && <span className="ml-1 text-[10px] text-indigo-600">(grouped)</span>}</div>
                                             <div className="text-xs font-semibold text-right">{count}</div>
                                           </div>
                                         ))}
@@ -3490,23 +3501,31 @@ export default function RepeatDashboard() {
                             <th>Customer Number</th>
                             <th>Agent</th>
                             <th>Call Status</th>
-                            <th>Call Reason</th>
-                            <th>Agent Call Details</th>
+                            <th>Experience Answer</th>
+                            <th>Stop Reason Answer</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y">
                           {slice.map((r: any, i: number)=>{
-                            const dtKey = ['Date','date','created_at','Created At'].find(k => k in r);
+                            const dtKey = ['Date','date','created_at','Created At','CreatedAt'].find(k => k in r);
                             const dt = dtKey ? r[dtKey] : '';
+                            const custNum = r['Customer Number'] ?? r['customer_number'] ?? r['Phone'] ?? r['phone'] ?? r['Mobile'] ?? r['mobile'] ?? '';
+                            const agentName = r['Agent Name'] ?? r['Agent'] ?? r['agent'] ?? r['agent_name'] ?? '';
+                            const callStatus = r['Call Status'] ?? r['Call status'] ?? r['call_status'] ?? r['Status'] ?? r['status'] ?? '';
+                            const q1Keys = ['How was your experience using our health mix so far?', 'experience_using_health_mix', 'Experience using our health mix so far'];
+                            const q2Keys = ['May I know what stopped you from buying again after your second purchase?', 'stopped_buying_reason', 'Reason for not buying again'];
+                            const getVal = (keys: string[]) => { for (const k of keys) if (k in r && r[k]) return String(r[k]); return ''; };
+                            const q1Val = getVal(q1Keys);
+                            const q2Val = getVal(q2Keys);
                             return (
-                              <tr key={String(r.id ?? r.Id ?? i)} className="*:px-2 *:py-1">
+                              <tr key={String(r.id ?? r.Id ?? r.Id ?? i)} className="*:px-2 *:py-1">
                                 <td>{String(r.id ?? r.Id ?? '')}</td>
                                 <td>{dt ? String(dt).slice(0,10) : ''}</td>
-                                <td>{String(r['Customer Number'] ?? r.customer_number ?? '')}</td>
-                                <td>{String(r['Agent'] ?? r.agent ?? '')}</td>
-                                <td>{String(r['Call Status'] ?? r['Call status'] ?? r.call_status ?? '')}</td>
-                                <td>{String(r['Call reason'] ?? r['Call Reason'] ?? r.call_reason ?? '')}</td>
-                                <td className="max-w-[360px] truncate" title={String(r['Agent call details'] ?? r.agent_call_details ?? '')}>{String(r['Agent call details'] ?? r.agent_call_details ?? '')}</td>
+                                <td>{String(custNum)}</td>
+                                <td>{String(agentName)}</td>
+                                <td>{String(callStatus)}</td>
+                                <td className="max-w-[280px] truncate" title={q1Val}>{q1Val || '—'}</td>
+                                <td className="max-w-[280px] truncate" title={q2Val}>{q2Val || '—'}</td>
                               </tr>
                             );
                           })}
