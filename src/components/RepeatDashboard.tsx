@@ -217,6 +217,17 @@ export default function RepeatDashboard() {
   const [nrDrillRows, setNrDrillRows] = useState<any[]>([]);
   const [nrDrillPage, setNrDrillPage] = useState(1);
   const [nrDrillPageSize, setNrDrillPageSize] = useState(20);
+  // Non-Repeated grouping state (for Agent Text Report Q1/Q2)
+  const [nrGrouping, setNrGrouping] = useState<Record<string, Record<string, string>>>(() => {
+    try { const s = localStorage.getItem('nr_grouping_v1'); return s ? JSON.parse(s) : {}; } catch { return {}; }
+  });
+  const [nrGroupDefs, setNrGroupDefs] = useState<Record<string, string[]>>(() => {
+    try { const s = localStorage.getItem('nr_groupdefs_v1'); return s ? JSON.parse(s) : {}; } catch { return {}; }
+  });
+  const [nrGroupOpen, setNrGroupOpen] = useState<{ key: string | null }>({ key: null });
+  const [nrGroupNewName, setNrGroupNewName] = useState<string>('');
+  const [nrGroupAddInput, setNrGroupAddInput] = useState<Record<string, string>>({});
+  const [nrGroupUngroupedQuery, setNrGroupUngroupedQuery] = useState<string>('');
   // Feedback analytics state
   const [feedback, setFeedback] = useState<FeedbackRow[]>([]);
   const [fbAgent, setFbAgent] = useState<string>('all'); // 'me' | 'all'
@@ -2960,11 +2971,6 @@ export default function RepeatDashboard() {
                     <div className="text-2xl font-semibold">{p3.grandTotalAll}</div>
                   </div>
                 </div>
-                <div className="space-y-4">
-                  {renderPivot('By Call Status (Date   Status)', p1, 'status')}
-                  {renderPivot('By Agent (Date   Agent)', p2, 'agent')}
-                  {renderPivot('By Call Reason (Date   Reason)', p3, 'reason')}
-                </div>
                 <div className="bg-white rounded-lg shadow p-4 border">
                   {(() => {
                     if (!nrFiltered.length) {
@@ -3037,11 +3043,34 @@ export default function RepeatDashboard() {
 
                     const agents = Array.from(byAgent.entries()).sort((a, b) => b[1].total - a[1].total);
 
+                    // Apply custom groupings from nrGrouping state
+                    const applyGrouping = (key: string, items: Map<string, number>): Map<string, number> => {
+                      const gmap = nrGrouping[key] || {};
+                      const result = new Map<string, number>();
+                      for (const [text, count] of Array.from(items.entries())) {
+                        const groupName = gmap[text] || text;
+                        result.set(groupName, (result.get(groupName) || 0) + count);
+                      }
+                      return result;
+                    };
+
+                    // Get all unique Q1 and Q2 texts across all agents for grouping modal
+                    const allQ1Texts = new Set<string>();
+                    const allQ2Texts = new Set<string>();
+                    for (const [, bucket] of agents) {
+                      for (const [text] of Array.from(bucket.q1.entries())) allQ1Texts.add(text);
+                      for (const [text] of Array.from(bucket.q2.entries())) allQ2Texts.add(text);
+                    }
+
                     return (
                       <div className="space-y-3">
                         <div className="flex items-center justify-between mb-1">
                           <div className="text-sm font-semibold">Agent Text Report</div>
-                          <div className="text-[11px] text-gray-500">Layout inspired by your spreadsheet (agent-wise counts and answers)</div>
+                          <div className="flex items-center gap-3">
+                            <button className="text-[11px] text-indigo-700 hover:underline" onClick={() => setNrGroupOpen({ key: 'q1' })} title="Group Q1 answers">Group Experience</button>
+                            <button className="text-[11px] text-indigo-700 hover:underline" onClick={() => setNrGroupOpen({ key: 'q2' })} title="Group Q2 answers">Group Stop Reason</button>
+                            <div className="text-[11px] text-gray-500">Layout inspired by your spreadsheet</div>
+                          </div>
                         </div>
                         {agents.map(([agent, bucket]) => (
                           <div key={agent} className="border rounded-lg p-3">
@@ -3051,7 +3080,10 @@ export default function RepeatDashboard() {
                             </div>
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
                               <div>
-                                <div className="text-xs font-semibold text-gray-700 mb-1">How was your experience using our health mix so far?</div>
+                                <div className="flex items-center justify-between mb-1">
+                                  <div className="text-xs font-semibold text-gray-700">How was your experience using our health mix so far?</div>
+                                  <button className="text-[10px] text-indigo-600 hover:underline" onClick={() => setNrGroupOpen({ key: 'q1' })} title="Group similar answers">Group</button>
+                                </div>
                                 {(() => {
                                   if (bucket.q1.size === 0) {
                                     return <div className="text-xs text-gray-500">No answers</div>;
@@ -3063,17 +3095,35 @@ export default function RepeatDashboard() {
                                   }
                                   const rows = Array.from(catCounts.entries()).sort((a, b) => b[1] - a[1]);
 
-                                  // Group similar answer texts (e.g. many variants of "product was good")
+                                  // Apply custom groupings first, then auto-grouping for remaining
+                                  const customGrouped = applyGrouping('q1', bucket.q1);
+                                  
+                                  // Group similar answer texts (e.g. many variants of "product was good", "felt energetic")
                                   const buildKey = (raw: string): string => {
                                     const s = String(raw || '').toLowerCase();
                                     const cleaned = s.replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
                                     if (!cleaned) return '(empty)';
-                                    if (cleaned.includes('product was good')) return 'product was good';
+                                    // Energetic variations
+                                    if (cleaned.includes('energetic') || cleaned.includes('energy')) return 'Felt energetic';
+                                    // Good product / positive feedback variations
+                                    if (cleaned.includes('product was good') || cleaned.includes('product is good') || cleaned.includes('product good')) return 'Product was good';
+                                    if (cleaned.includes('felt good') || cleaned.includes('feel good') || cleaned.includes('feeling good')) return 'Felt good';
+                                    if (cleaned.includes('like the product') || cleaned.includes('liked the product') || cleaned.includes('likes the product')) return 'Liked the product';
+                                    if (cleaned.includes('aurawill is good') || cleaned.includes('aurawill good')) return 'Aurawill is good';
+                                    if (cleaned.includes('good quality') || cleaned.includes('good in quality')) return 'Good quality';
+                                    if (cleaned.includes('overall experience') && (cleaned.includes('good') || cleaned.includes('great'))) return 'Overall experience was good';
+                                    if (cleaned.includes('no change') || cleaned.includes('no changes') || cleaned.includes('didnt notice') || cleaned.includes("didn't notice")) return 'No changes noticed';
+                                    if (cleaned.includes('tasty') || cleaned.includes('taste is good') || cleaned.includes('good taste')) return 'Good taste';
+                                    if (cleaned.includes('useful') || cleaned.includes('good for use')) return 'Product is useful';
+                                    if (cleaned.includes('suggested to family') || cleaned.includes('recommend')) return 'Recommended to others';
+                                    if (cleaned.includes('control') && cleaned.includes('hunger')) return 'Controls hunger';
+                                    if (cleaned.includes('active') || cleaned.includes('stamina')) return 'Felt active';
+                                    // Fallback: first 4 words for better grouping
                                     const words = cleaned.split(' ');
-                                    return words.slice(0, 3).join(' ');
+                                    return words.slice(0, 4).join(' ');
                                   };
                                   const grouped = new Map<string, { key: string; text: string; count: number }>();
-                                  for (const [text, count] of Array.from(bucket.q1.entries())) {
+                                  for (const [text, count] of Array.from(customGrouped.entries())) {
                                     const key = buildKey(text);
                                     const existing = grouped.get(key);
                                     if (existing) {
@@ -3132,7 +3182,10 @@ export default function RepeatDashboard() {
                                 })()}
                               </div>
                               <div>
-                                <div className="text-xs font-semibold text-gray-700 mb-1">May I know what stopped you from buying again after your second purchase?</div>
+                                <div className="flex items-center justify-between mb-1">
+                                  <div className="text-xs font-semibold text-gray-700">May I know what stopped you from buying again after your second purchase?</div>
+                                  <button className="text-[10px] text-indigo-600 hover:underline" onClick={() => setNrGroupOpen({ key: 'q2' })} title="Group similar answers">Group</button>
+                                </div>
                                 {(() => {
                                   if (bucket.q2.size === 0) {
                                     return <div className="text-xs text-gray-500">No answers</div>;
@@ -3144,17 +3197,44 @@ export default function RepeatDashboard() {
                                   }
                                   const rows = Array.from(catCounts.entries()).sort((a, b) => b[1] - a[1]);
 
-                                  const buildKey = (raw: string): string => {
+                                  // Apply custom groupings first
+                                  const customGroupedQ2 = applyGrouping('q2', bucket.q2);
+
+                                  const buildKeyQ2 = (raw: string): string => {
                                     const s = String(raw || '').toLowerCase();
                                     const cleaned = s.replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
                                     if (!cleaned) return '(empty)';
-                                    if (cleaned.includes('personal reason')) return 'personal reason';
+                                    // Personal reasons
+                                    if (cleaned.includes('personal reason') || cleaned.includes('some personal')) return 'Personal reason';
+                                    // Time / Busy
+                                    if (cleaned.includes('busy') || cleaned.includes('no time') || cleaned.includes('work so') || cleaned.includes('time to use')) return 'Busy / No time';
+                                    // Out of station / Travel
+                                    if (cleaned.includes('out of station') || cleaned.includes('went to') || cleaned.includes('transfer') || cleaned.includes('foreign')) return 'Out of station / Travel';
+                                    // Health reasons
+                                    if (cleaned.includes('health') || cleaned.includes('doctor') || cleaned.includes('pregnant') || cleaned.includes('bp') || cleaned.includes('sugar') || cleaned.includes('stomach')) return 'Health reasons';
+                                    // Family decision
+                                    if (cleaned.includes('family') || cleaned.includes('wife') || cleaned.includes('parent') || cleaned.includes('mother') || cleaned.includes('father')) return 'Family decision';
+                                    // Price / Affordability
+                                    if (cleaned.includes('afford') || cleaned.includes('money') || cleaned.includes('price') || cleaned.includes('cost') || cleaned.includes('financially')) return 'Price / Affordability';
+                                    // Product related
+                                    if (cleaned.includes('taste') || cleaned.includes('flavour') || cleaned.includes('flavor')) return 'Taste / Product experience';
+                                    if (cleaned.includes('quality') || cleaned.includes('roasted') || cleaned.includes('grinded')) return 'Product quality issue';
+                                    // Still have stock
+                                    if (cleaned.includes('still') && (cleaned.includes('have') || cleaned.includes('not over') || cleaned.includes('balance'))) return 'Still have product';
+                                    if (cleaned.includes('bulk') || cleaned.includes('quantity')) return 'Purchased in bulk';
+                                    // Delivery issues
+                                    if (cleaned.includes('delay') || cleaned.includes('delivery')) return 'Delivery issue';
+                                    // No changes / results
+                                    if (cleaned.includes('no change') || cleaned.includes('no result') || cleaned.includes('nothing feel')) return 'No changes felt';
+                                    // Will order / planning
+                                    if (cleaned.includes('will order') || cleaned.includes('will purchase') || cleaned.includes('planning')) return 'Planning to order';
+                                    // Fallback: first 5 words for better grouping
                                     const words = cleaned.split(' ');
-                                    return words.slice(0, 3).join(' ');
+                                    return words.slice(0, 5).join(' ');
                                   };
                                   const grouped = new Map<string, { key: string; text: string; count: number }>();
-                                  for (const [text, count] of Array.from(bucket.q2.entries())) {
-                                    const key = buildKey(text);
+                                  for (const [text, count] of Array.from(customGroupedQ2.entries())) {
+                                    const key = buildKeyQ2(text);
                                     const existing = grouped.get(key);
                                     if (existing) {
                                       existing.count += count;
@@ -3207,6 +3287,174 @@ export default function RepeatDashboard() {
           })()}
         </div>
       )}
+
+      {/* Non-Repeated Grouping Modal */}
+      {nrGroupOpen.key && (() => {
+        const key = nrGroupOpen.key;
+        const gmap = nrGrouping[key] || {};
+        // Get all unique texts for this key from nrFiltered
+        const q1Keys = [
+          'How was your experience using our health mix so far?',
+          'experience_using_health_mix',
+          'Experience using our health mix so far',
+        ];
+        const q2Keys = [
+          'May I know what stopped you from buying again after your second purchase?',
+          'stopped_buying_reason',
+          'Reason for not buying again',
+        ];
+        const getText = (r: any, keys: string[]): string => {
+          for (const k of keys) {
+            if (k in r && r[k]) return String(r[k]);
+          }
+          return '';
+        };
+        const allTexts = new Set<string>();
+        for (const r of nrFiltered as any[]) {
+          const t = getText(r, key === 'q1' ? q1Keys : q2Keys).trim();
+          if (t) allTexts.add(t);
+        }
+        const allCats = Array.from(allTexts).sort();
+        const defsForKey = nrGroupDefs[key] || [];
+        const mappedGroups = Array.from(new Set(Object.values(gmap))).filter(Boolean);
+        const groups = Array.from(new Set([...defsForKey, ...mappedGroups]));
+        const q = nrGroupUngroupedQuery.trim().toLowerCase();
+        const persist = (nextMap: typeof nrGrouping, nextDefs: typeof nrGroupDefs) => {
+          try {
+            localStorage.setItem('nr_grouping_v1', JSON.stringify(nextMap));
+            localStorage.setItem('nr_groupdefs_v1', JSON.stringify(nextDefs));
+          } catch (e) { console.warn('Failed to save grouping to localStorage', e); }
+        };
+        const save = () => persist(nrGrouping, nrGroupDefs);
+        const addGroup = () => {
+          const name = nrGroupNewName.trim();
+          if (!name) return;
+          setNrGroupDefs(d => {
+            const next = { ...d, [key]: Array.from(new Set([...(d[key] || []), name])) };
+            persist(nrGrouping, next);
+            return next;
+          });
+          setNrGroupNewName('');
+        };
+        const assign = (cat: string, grp: string) => {
+          setNrGrouping(s => {
+            const m = { ...(s[key] || {}) };
+            m[cat] = grp;
+            const next = { ...s, [key]: m };
+            persist(next, nrGroupDefs);
+            return next;
+          });
+        };
+        const onDropTo = (grp: string) => (e: React.DragEvent<HTMLDivElement>) => {
+          const cat = e.dataTransfer.getData('text/plain');
+          if (cat) assign(cat, grp);
+        };
+        const addToGroup = (grp: string) => {
+          const input = (nrGroupAddInput[grp] || '').trim();
+          if (!input) return;
+          const cats = input.split(',').map(c => c.trim()).filter(Boolean);
+          cats.forEach(cat => assign(cat, grp));
+          setNrGroupAddInput(prev => ({ ...prev, [grp]: '' }));
+        };
+        return (
+          <div className="fixed inset-0 bg-black/30 z-50 flex items-center justify-center p-2 md:p-4" onClick={() => setNrGroupOpen({ key: null })}>
+            <div className="bg-white rounded-lg border shadow-lg w-full max-w-4xl md:max-w-5xl p-3 md:p-4 max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+              <div className="flex items-center justify-between mb-3">
+                <div className="text-sm font-medium">Group categories — {key === 'q1' ? 'Experience' : 'Stop Reason'}</div>
+                <div className="flex items-center gap-2">
+                  <IconButton onClick={() => { save(); setNrGroupOpen({ key: null }); }}>Done</IconButton>
+                </div>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <div className="border rounded p-2 h-[65vh] md:h-[60vh] flex flex-col overflow-hidden">
+                  <div className="text-xs font-medium mb-2">Ungrouped ({allCats.length} items)</div>
+                  <div className="sticky top-0 bg-white pb-2">
+                    <input
+                      className="border rounded px-2 py-1 text-xs w-full"
+                      placeholder="Search…"
+                      value={nrGroupUngroupedQuery}
+                      onChange={(e) => setNrGroupUngroupedQuery(e.target.value)}
+                    />
+                  </div>
+                  <div className="flex-1 overflow-y-auto flex flex-col gap-1 pr-1">
+                    {allCats.map(c => {
+                      const isGrouped = !!gmap[c];
+                      const isVisible = !q || c.toLowerCase().includes(q);
+                      if (!isVisible) return null;
+                      return (
+                        <div
+                          key={c}
+                          className={`px-2 py-1 rounded border ${isGrouped ? 'bg-indigo-50 border-indigo-300 text-indigo-900 font-medium' : 'bg-slate-50 border-slate-200'}`}
+                          draggable
+                          onDragStart={(e) => e.dataTransfer.setData('text/plain', c)}
+                          title={isGrouped ? `Grouped in: ${gmap[c]}` : c}
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-xs truncate">{c}</span>
+                            {isGrouped && (
+                              <span className="text-xs px-1.5 py-0.5 bg-indigo-200 text-indigo-700 rounded shrink-0">
+                                {gmap[c]}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                    {allCats.filter(c => !q || c.toLowerCase().includes(q)).length === 0 && (
+                      <div className="text-xs text-gray-500">No matches</div>
+                    )}
+                  </div>
+                </div>
+                <div className="col-span-1 md:col-span-2">
+                  <div className="flex items-end gap-2 mb-2">
+                    <div className="text-xs">Groups</div>
+                    <input className="border rounded px-2 py-1 text-sm" placeholder="New group name" value={nrGroupNewName} onChange={(e) => setNrGroupNewName(e.target.value)} />
+                    <IconButton onClick={addGroup}><Plus className="w-4 h-4" />Add</IconButton>
+                    <IconButton onClick={() => {
+                      setNrGrouping(s => { const copy = { ...s }; delete copy[key]; persist(copy, { ...nrGroupDefs, [key]: [] }); return copy; });
+                      setNrGroupDefs(d => ({ ...d, [key]: [] }));
+                    }}>Reset</IconButton>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                    {groups.map(g => (
+                      <div key={g} className="border-2 border-indigo-300 rounded p-2 min-h-[100px] md:min-h-[120px]" onDragOver={(e) => e.preventDefault()} onDrop={onDropTo(g)}>
+                        <div className="flex items-center gap-2 mb-1">
+                          <div className="text-xs font-semibold text-indigo-700">{g}</div>
+                          <span className="text-xs px-1.5 py-0.5 bg-indigo-100 text-indigo-600 rounded-full font-medium">
+                            {Object.entries(gmap).filter(([, grp]) => grp === g).length}
+                          </span>
+                        </div>
+                        <div className="flex flex-wrap gap-1 mb-2">
+                          {Object.entries(gmap).filter(([, grp]) => grp === g).map(([c]) => (
+                            <span key={c} className="px-2 py-1 bg-indigo-100 border-2 border-indigo-400 rounded text-xs font-medium text-indigo-900" draggable onDragStart={(e) => e.dataTransfer.setData('text/plain', c)} title={c}>{c.length > 30 ? c.slice(0, 30) + '…' : c}</span>
+                          ))}
+                        </div>
+                        <div className="flex gap-1 pt-1 border-t">
+                          <input
+                            className="flex-1 border rounded px-2 py-1 text-xs"
+                            placeholder="Add items (comma-separated)"
+                            value={nrGroupAddInput[g] || ''}
+                            onChange={(e) => setNrGroupAddInput(prev => ({ ...prev, [g]: e.target.value }))}
+                            onKeyPress={(e) => { if (e.key === 'Enter') addToGroup(g); }}
+                          />
+                          <button
+                            className="px-2 py-1 text-xs bg-indigo-600 text-white rounded hover:bg-indigo-700"
+                            onClick={() => addToGroup(g)}
+                            title="Add categories to this group"
+                          >
+                            +
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                    {groups.length === 0 && <div className="text-xs text-gray-500">No groups yet. Create one above.</div>}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Non-Repeated Drilldown Modal */}
       {nrDrillOpen && (
