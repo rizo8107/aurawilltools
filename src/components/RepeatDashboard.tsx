@@ -477,14 +477,24 @@ export default function RepeatDashboard() {
       }
       const data = (await res.json()) as RepeatRow[] | unknown;
       const arr: RepeatRow[] = Array.isArray(data) ? (data as RepeatRow[]) : [];
+      
+      // Auto-populate call_status based on assigned_at
+      const withStatus = arr.map(r => {
+        const hasAssignedAt = String(r.assigned_at || '').trim() !== '';
+        return {
+          ...r,
+          call_status: hasAssignedAt ? 'Called' : 'Not Called'
+        };
+      });
+      
       if (isAdmin) {
         // Admin sees all rows returned by RPC
-        setRows(arr);
+        setRows(withStatus);
       } else {
         // Hard agent filter on client to avoid showing others' leads even if RPC returns broader set
         const want = String(currentUser || '').trim().toLowerCase();
         const teamNum = Number(activeTeamId) || undefined;
-        const mine = arr.filter(r => {
+        const mine = withStatus.filter(r => {
           const a = String(r.assigned_to || '').trim().toLowerCase();
           const tOk = teamNum ? Number(r.team_id || 0) === teamNum : true;
           return a === want && tOk;
@@ -573,7 +583,7 @@ export default function RepeatDashboard() {
 
     const byStatus = filterStatus
       ? filterStatus === 'Not Called'
-        ? textFiltered.filter((r) => !r.call_status)
+        ? textFiltered.filter((r) => !r.call_status || r.call_status === 'Not Called')
         : textFiltered.filter((r) => (r.call_status || '') === filterStatus)
       : textFiltered;
 
