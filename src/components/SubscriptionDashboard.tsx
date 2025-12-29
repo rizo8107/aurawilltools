@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  RefreshCcw, Search, Loader2, ChevronLeft, ChevronRight, X, Calendar, Package, Users, IndianRupee, MapPin, Mail, Phone, CheckCircle2, Clock, AlertCircle, Save, Edit3
+  RefreshCcw, Search, Loader2, ChevronLeft, ChevronRight, X, Calendar, Package, Users, IndianRupee, MapPin, Mail, Phone, CheckCircle2, Clock, AlertCircle, Save, Edit3, Plus
 } from 'lucide-react';
 
 /** ---------------------------------------------------------
@@ -71,6 +71,20 @@ const statusColors: Record<string, string> = {
   empty: 'bg-gray-50 text-gray-400 border-gray-200',
 };
 
+const toLocalDayStartTs = (d: string) => {
+  const v = String(d || '').trim();
+  if (!v) return NaN;
+  const dt = new Date(`${v}T00:00:00`);
+  const ts = dt.getTime();
+  return Number.isFinite(ts) ? ts : NaN;
+};
+
+const toLocalDayEndTs = (d: string) => {
+  const start = toLocalDayStartTs(d);
+  if (!Number.isFinite(start)) return NaN;
+  return start + 24 * 60 * 60 * 1000 - 1;
+};
+
 const IconButton: React.FC<
   React.ButtonHTMLAttributes<HTMLButtonElement> & { tone?: 'primary' | 'default' | 'danger' }
 > = ({ className, tone = 'default', children, ...props }) => {
@@ -96,6 +110,14 @@ const IconButton: React.FC<
 export default function SubscriptionDashboard() {
   const nocoToken = 'CdD-fhN2ctMOe-rOGWY5g7ET5BisIDx5r32eJMn4';
 
+  const [currentUser] = useState<string>(() => {
+    try {
+      return localStorage.getItem('ndr_user') || '';
+    } catch {
+      return '';
+    }
+  });
+
   // Data state
   const [rows, setRows] = useState<SubscriptionRow[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
@@ -106,6 +128,8 @@ export default function SubscriptionDashboard() {
   const [filterAgent, setFilterAgent] = useState<string>('');
   const [filterPlan, setFilterPlan] = useState<string>('');
   const [filterCity, setFilterCity] = useState<string>('');
+  const [filterFrom, setFilterFrom] = useState<string>('');
+  const [filterTo, setFilterTo] = useState<string>('');
 
   // Pagination
   const [page, setPage] = useState<number>(1);
@@ -131,6 +155,33 @@ export default function SubscriptionDashboard() {
   const [monthPickerOrderId, setMonthPickerOrderId] = useState<string>('');
   const [monthPickerSaving, setMonthPickerSaving] = useState<boolean>(false);
   const [monthPickerError, setMonthPickerError] = useState<string>('');
+
+  const [newDialogOpen, setNewDialogOpen] = useState<boolean>(false);
+  const [newForm, setNewForm] = useState<Record<string, string>>({
+    Date: '',
+    Name: '',
+    'Contact Number': '',
+    City: '',
+    Agent: '',
+    'Selected subscription plan': '',
+    'Amount collected': '',
+    'No of 450 gram packs/Month': '',
+    'confirmed  date of Dispatch': '',
+    'Start Date and Month': '',
+    'End Date and Month': '',
+    'Dispatch address': '',
+    'Email Sent': '',
+  });
+  const [newSaving, setNewSaving] = useState<boolean>(false);
+  const [newError, setNewError] = useState<string>('');
+  const [newPlanMode, setNewPlanMode] = useState<'select' | 'custom'>('select');
+  const [newPacksMode, setNewPacksMode] = useState<'select' | 'custom'>('select');
+
+  const closeNewDialog = useCallback(() => {
+    setNewDialogOpen(false);
+    setNewSaving(false);
+    setNewError('');
+  }, []);
 
   const closeDetail = useCallback(() => {
     setDetailRow(null);
@@ -175,6 +226,55 @@ export default function SubscriptionDashboard() {
       setLoading(false);
     }
   }, [nocoToken]);
+
+  const createNewSubscription = useCallback(async () => {
+    try {
+      setNewSaving(true);
+      setNewError('');
+      const url = `https://app-nocodb.9krcxo.easypanel.host/api/v2/tables/mt68ug4tshyfwao/records`;
+      const payload: Record<string, string | null> = {
+        Date: newForm.Date || null,
+        Name: newForm.Name || null,
+        'Contact Number': newForm['Contact Number'] || null,
+        City: newForm.City || null,
+        Agent: newForm.Agent || null,
+        'Selected subscription plan': newForm['Selected subscription plan'] || null,
+        'Amount collected': newForm['Amount collected'] || null,
+        'No of 450 gram packs/Month': newForm['No of 450 gram packs/Month'] || null,
+        'confirmed  date of Dispatch': newForm['confirmed  date of Dispatch'] || null,
+        'Start Date and Month': newForm['Start Date and Month'] || null,
+        'End Date and Month': newForm['End Date and Month'] || null,
+        'Dispatch address': newForm['Dispatch address'] || null,
+        'Email Sent': newForm['Email Sent'] || null,
+      };
+
+      const attempt = async (body: unknown) => {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'xc-token': nocoToken,
+            'Content-Type': 'application/json',
+            'accept': 'application/json',
+          },
+          body: JSON.stringify(body),
+        });
+        if (!res.ok) throw new Error(await res.text());
+      };
+
+      try {
+        await attempt([payload]);
+      } catch {
+        await attempt(payload);
+      }
+
+      closeNewDialog();
+      await loadData();
+    } catch (e: unknown) {
+      setNewError((e as Error)?.message || 'Failed to create subscription');
+    } finally {
+      setNewSaving(false);
+    }
+  }, [closeNewDialog, loadData, nocoToken, newForm]);
 
   // Initialize edit state when opening a different record
   useEffect(() => {
@@ -336,10 +436,22 @@ export default function SubscriptionDashboard() {
   // Filtered rows
   const filtered = useMemo(() => {
     const qLower = q.trim().toLowerCase();
+    const fromTs = filterFrom ? toLocalDayStartTs(filterFrom) : NaN;
+    const toTs = filterTo ? toLocalDayEndTs(filterTo) : NaN;
     return rows.filter(r => {
       if (filterAgent && r.Agent !== filterAgent) return false;
       if (filterPlan && r['Selected subscription plan'] !== filterPlan) return false;
       if (filterCity && r.City !== filterCity) return false;
+
+      if (filterFrom || filterTo) {
+        const dRaw = String(r.Date || '').trim();
+        if (!dRaw) return false;
+        const rTs = new Date(dRaw).getTime();
+        if (!Number.isFinite(rTs)) return false;
+        if (Number.isFinite(fromTs) && rTs < fromTs) return false;
+        if (Number.isFinite(toTs) && rTs > toTs) return false;
+      }
+
       if (qLower) {
         const haystack = [
           r.Name, r['Contact Number'], r.City, r.Agent, r['Selected subscription plan'], r['Dispatch address']
@@ -348,7 +460,7 @@ export default function SubscriptionDashboard() {
       }
       return true;
     });
-  }, [rows, q, filterAgent, filterPlan, filterCity]);
+  }, [rows, q, filterAgent, filterPlan, filterCity, filterFrom, filterTo]);
 
   const planBreakdown = useMemo(() => {
     const m = new Map<string, number>();
@@ -385,6 +497,36 @@ export default function SubscriptionDashboard() {
   // Month columns
   const monthCols = Array.from({ length: 12 }, (_, i) => `Month ${i + 1}`);
 
+  const agentOptions = useMemo(() => {
+    const base = [...agents];
+    const me = String(currentUser || '').trim();
+    if (me && !base.some(a => String(a).trim().toLowerCase() === me.toLowerCase())) base.unshift(me);
+    return base;
+  }, [agents, currentUser]);
+
+  const planOptions = useMemo(() => {
+    const base = [...plans];
+    return base;
+  }, [plans]);
+
+  const packsOptions = useMemo(() => {
+    const raw = rows
+      .map(r => String(r['No of 450 gram packs/Month'] || '').trim())
+      .filter(Boolean);
+    const uniq = Array.from(new Set(raw));
+    uniq.sort((a, b) => {
+      const na = Number(a.replace(/[^0-9.-]/g, ''));
+      const nb = Number(b.replace(/[^0-9.-]/g, ''));
+      const aNum = Number.isFinite(na);
+      const bNum = Number.isFinite(nb);
+      if (aNum && bNum) return na - nb;
+      if (aNum && !bNum) return -1;
+      if (!aNum && bNum) return 1;
+      return a.localeCompare(b);
+    });
+    return uniq;
+  }, [rows]);
+
   return (
     <div className="p-4 space-y-4">
       {/* Header */}
@@ -393,10 +535,23 @@ export default function SubscriptionDashboard() {
           <h1 className="text-xl font-bold text-gray-800">Subscription Dashboard</h1>
           <p className="text-sm text-gray-500">Track and manage product subscriptions</p>
         </div>
-        <IconButton onClick={loadData} disabled={loading} title="Reload data">
-          {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCcw className="w-4 h-4" />}
-          Reload
-        </IconButton>
+        <div className="flex items-center gap-2">
+          <IconButton onClick={() => {
+            setNewDialogOpen(true);
+            setNewError('');
+            if (String(currentUser || '').trim()) {
+              setNewForm(p => ({ ...p, Agent: p.Agent || String(currentUser || '').trim() }));
+            }
+            setNewPlanMode('select');
+            setNewPacksMode('select');
+          }} disabled={loading} title="New subscription" tone="primary">
+            <Plus className="w-4 h-4" /> New
+          </IconButton>
+          <IconButton onClick={loadData} disabled={loading} title="Reload data">
+            {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCcw className="w-4 h-4" />}
+            Reload
+          </IconButton>
+        </div>
       </div>
 
       {error && (
@@ -541,9 +696,29 @@ export default function SubscriptionDashboard() {
               {cities.map(c => <option key={c} value={c}>{c}</option>)}
             </select>
           </div>
+          <div>
+            <label className="block text-xs text-gray-600 mb-1">From</label>
+            <input
+              type="date"
+              value={filterFrom}
+              onChange={(e) => { setFilterFrom(e.target.value); setPage(1); }}
+              className="border rounded-lg px-3 py-2 text-sm min-w-[150px]"
+              title="Filter from date"
+            />
+          </div>
+          <div>
+            <label className="block text-xs text-gray-600 mb-1">To</label>
+            <input
+              type="date"
+              value={filterTo}
+              onChange={(e) => { setFilterTo(e.target.value); setPage(1); }}
+              className="border rounded-lg px-3 py-2 text-sm min-w-[150px]"
+              title="Filter to date"
+            />
+          </div>
           {(filterAgent || filterPlan || filterCity || q) && (
             <button
-              onClick={() => { setFilterAgent(''); setFilterPlan(''); setFilterCity(''); setQ(''); setPage(1); }}
+              onClick={() => { setFilterAgent(''); setFilterPlan(''); setFilterCity(''); setFilterFrom(''); setFilterTo(''); setQ(''); setPage(1); }}
               className="text-xs text-indigo-600 hover:underline"
             >
               Clear filters
@@ -551,6 +726,255 @@ export default function SubscriptionDashboard() {
           )}
         </div>
       </div>
+
+      {newDialogOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={closeNewDialog}>
+          <div
+            className="bg-white rounded-xl shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-5 py-4 border-b bg-gradient-to-r from-indigo-50 to-white">
+              <div>
+                <h2 className="text-lg font-bold text-gray-800">New Subscription</h2>
+                <p className="text-sm text-gray-500">Create a new subscription record</p>
+              </div>
+              <button onClick={closeNewDialog} className="p-2 hover:bg-gray-100 rounded-full" title="Close" disabled={newSaving}>
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4">
+              {newError && (
+                <div className="bg-rose-50 border border-rose-200 text-rose-700 rounded-lg p-3 text-sm flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4" /> {newError}
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs text-gray-600 mb-1">Date</label>
+                  <input
+                    type="date"
+                    className="w-full px-3 py-2 border rounded-lg text-sm"
+                    title="Date"
+                    value={newForm.Date}
+                    onChange={(e) => setNewForm(p => ({ ...p, Date: e.target.value }))}
+                    disabled={newSaving}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-600 mb-1">Agent</label>
+                  <select
+                    className="w-full px-3 py-2 border rounded-lg text-sm"
+                    title="Agent"
+                    value={newForm.Agent}
+                    onChange={(e) => setNewForm(p => ({ ...p, Agent: e.target.value }))}
+                    disabled={newSaving}
+                  >
+                    <option value="">(Select)</option>
+                    {agentOptions.map(a => (
+                      <option key={a} value={a}>{a}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-600 mb-1">Customer Name</label>
+                  <input
+                    className="w-full px-3 py-2 border rounded-lg text-sm"
+                    title="Customer name"
+                    value={newForm.Name}
+                    onChange={(e) => setNewForm(p => ({ ...p, Name: e.target.value }))}
+                    disabled={newSaving}
+                    placeholder="Customer name"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-600 mb-1">Contact Number</label>
+                  <input
+                    className="w-full px-3 py-2 border rounded-lg text-sm"
+                    title="Contact number"
+                    value={newForm['Contact Number']}
+                    onChange={(e) => setNewForm(p => ({ ...p, 'Contact Number': e.target.value }))}
+                    disabled={newSaving}
+                    placeholder="Phone"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-600 mb-1">City</label>
+                  <input
+                    className="w-full px-3 py-2 border rounded-lg text-sm"
+                    title="City"
+                    value={newForm.City}
+                    onChange={(e) => setNewForm(p => ({ ...p, City: e.target.value }))}
+                    disabled={newSaving}
+                    placeholder="City"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-600 mb-1">Plan</label>
+                  {newPlanMode === 'custom' ? (
+                    <input
+                      className="w-full px-3 py-2 border rounded-lg text-sm"
+                      title="Plan"
+                      value={newForm['Selected subscription plan']}
+                      onChange={(e) => setNewForm(p => ({ ...p, 'Selected subscription plan': e.target.value }))}
+                      disabled={newSaving}
+                      placeholder="Enter custom plan"
+                    />
+                  ) : (
+                    <select
+                      className="w-full px-3 py-2 border rounded-lg text-sm"
+                      title="Plan"
+                      value={newForm['Selected subscription plan']}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        if (v === '__custom__') {
+                          setNewPlanMode('custom');
+                          setNewForm(p => ({ ...p, 'Selected subscription plan': '' }));
+                          return;
+                        }
+                        setNewForm(p => ({ ...p, 'Selected subscription plan': v }));
+                      }}
+                      disabled={newSaving}
+                    >
+                      <option value="">(Select)</option>
+                      {planOptions.map(p => (
+                        <option key={p} value={p}>{p}</option>
+                      ))}
+                      <option value="__custom__">Custom…</option>
+                    </select>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-600 mb-1">Amount Collected</label>
+                  <input
+                    className="w-full px-3 py-2 border rounded-lg text-sm"
+                    title="Amount collected"
+                    value={newForm['Amount collected']}
+                    onChange={(e) => setNewForm(p => ({ ...p, 'Amount collected': e.target.value }))}
+                    disabled={newSaving}
+                    placeholder="Amount"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-600 mb-1">Packs / Month</label>
+                  {newPacksMode === 'custom' ? (
+                    <input
+                      className="w-full px-3 py-2 border rounded-lg text-sm"
+                      title="Packs per month"
+                      value={newForm['No of 450 gram packs/Month']}
+                      onChange={(e) => setNewForm(p => ({ ...p, 'No of 450 gram packs/Month': e.target.value }))}
+                      disabled={newSaving}
+                      placeholder="Enter packs/month"
+                    />
+                  ) : (
+                    <select
+                      className="w-full px-3 py-2 border rounded-lg text-sm"
+                      title="Packs per month"
+                      value={newForm['No of 450 gram packs/Month']}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        if (v === '__custom__') {
+                          setNewPacksMode('custom');
+                          setNewForm(p => ({ ...p, 'No of 450 gram packs/Month': '' }));
+                          return;
+                        }
+                        setNewForm(p => ({ ...p, 'No of 450 gram packs/Month': v }));
+                      }}
+                      disabled={newSaving}
+                    >
+                      <option value="">(Select)</option>
+                      {packsOptions.map(v => (
+                        <option key={v} value={v}>{v}</option>
+                      ))}
+                      <option value="__custom__">Custom…</option>
+                    </select>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-600 mb-1">Dispatch Date</label>
+                  <input
+                    className="w-full px-3 py-2 border rounded-lg text-sm"
+                    title="Dispatch date"
+                    value={newForm['confirmed  date of Dispatch']}
+                    onChange={(e) => setNewForm(p => ({ ...p, 'confirmed  date of Dispatch': e.target.value }))}
+                    disabled={newSaving}
+                    placeholder="Dispatch"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-600 mb-1">Start Date and Month</label>
+                  <input
+                    className="w-full px-3 py-2 border rounded-lg text-sm"
+                    title="Start date"
+                    value={newForm['Start Date and Month']}
+                    onChange={(e) => setNewForm(p => ({ ...p, 'Start Date and Month': e.target.value }))}
+                    disabled={newSaving}
+                    placeholder="Start"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-600 mb-1">End Date and Month</label>
+                  <input
+                    className="w-full px-3 py-2 border rounded-lg text-sm"
+                    title="End date"
+                    value={newForm['End Date and Month']}
+                    onChange={(e) => setNewForm(p => ({ ...p, 'End Date and Month': e.target.value }))}
+                    disabled={newSaving}
+                    placeholder="End"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-600 mb-1">Email Sent</label>
+                  <select
+                    className="w-full px-3 py-2 border rounded-lg text-sm"
+                    title="Email sent"
+                    value={newForm['Email Sent']}
+                    onChange={(e) => setNewForm(p => ({ ...p, 'Email Sent': e.target.value }))}
+                    disabled={newSaving}
+                  >
+                    <option value="">(Empty)</option>
+                    <option value="Yes">Yes</option>
+                    <option value="No">No</option>
+                  </select>
+                </div>
+                <div className="md:col-span-2">
+                  <label className="block text-xs text-gray-600 mb-1">Dispatch Address</label>
+                  <textarea
+                    className="w-full px-3 py-2 border rounded-lg text-sm"
+                    title="Dispatch address"
+                    value={newForm['Dispatch address']}
+                    onChange={(e) => setNewForm(p => ({ ...p, 'Dispatch address': e.target.value }))}
+                    disabled={newSaving}
+                    rows={3}
+                    placeholder="Address"
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  className="px-3 py-2 text-sm border rounded-lg hover:bg-gray-50"
+                  onClick={closeNewDialog}
+                  disabled={newSaving}
+                  title="Cancel"
+                >
+                  Cancel
+                </button>
+                <button
+                  className="px-3 py-2 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 inline-flex items-center gap-2"
+                  onClick={createNewSubscription}
+                  disabled={newSaving}
+                  title="Create"
+                >
+                  {newSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                  {newSaving ? 'Creating…' : 'Create'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Subscriptions Table */}
       <div className="bg-white rounded-xl shadow border overflow-hidden">
