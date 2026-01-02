@@ -27,6 +27,11 @@ interface N8nOrderRecord {
   Tracking?: string | number | null;
 }
 
+ interface FailedOrder {
+  orderId: string;
+  reason: string;
+ }
+
 const formatDateDisplay = (raw: unknown): string => {
   if (!raw) return '-';
   const s = String(raw).trim();
@@ -54,7 +59,7 @@ export default function N8nPrintSlip() {
   const [records, setRecords] = useState<N8nOrderRecord[]>([]);
   const [output, setOutput] = useState('');
   const [error, setError] = useState('');
-  const [failedOrders, setFailedOrders] = useState<string[]>([]);
+  const [failedOrders, setFailedOrders] = useState<FailedOrder[]>([]);
   const [loading, setLoading] = useState(false);
 
   // Load JsBarcode script once
@@ -368,47 +373,55 @@ export default function N8nPrintSlip() {
     }
   };
 
-  const fetchFromN8n = async (orders: string[]): Promise<N8nOrderRecord[]> => {
+  const fetchFromN8n = async (orders: string[]): Promise<{ records: N8nOrderRecord[]; failures: Record<string, string> }> => {
     const all: N8nOrderRecord[] = [];
+    const failures: Record<string, string> = {};
+
     for (const raw of orders) {
       const trimmed = raw.trim();
       if (!trimmed) continue;
 
-      const resp = await fetch('https://auto-n8n.9krcxo.easypanel.host/webhook/tpc', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          Order: trimmed,
-          dispatch_date: dispatchDate || '',
-          courier_partner: courierPartner || '',
-          agent_name: agentName || '',
-        }),
-      });
-
-      if (!resp.ok) {
-        const txt = await resp.text();
-        throw new Error(`n8n webhook failed for ${trimmed}: ${resp.status} ${txt}`);
-      }
-
-      const text = await resp.text();
       try {
-        const data = JSON.parse(text);
-        if (Array.isArray(data)) {
-          all.push(...(data as N8nOrderRecord[]));
-        } else if (data && typeof data === 'object') {
-          all.push(data as N8nOrderRecord);
+        const resp = await fetch('https://auto-n8n.9krcxo.easypanel.host/webhook/tpc', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            Order: trimmed,
+            dispatch_date: dispatchDate || '',
+            courier_partner: courierPartner || '',
+            agent_name: agentName || '',
+          }),
+        });
+
+        if (!resp.ok) {
+          const txt = await resp.text();
+          failures[trimmed] = `Webhook failed (${resp.status}): ${txt || 'No response body'}`;
+          continue;
+        }
+
+        const text = await resp.text();
+        try {
+          const data = JSON.parse(text);
+          if (Array.isArray(data)) {
+            all.push(...(data as N8nOrderRecord[]));
+          } else if (data && typeof data === 'object') {
+            all.push(data as N8nOrderRecord);
+          } else {
+            failures[trimmed] = 'Unexpected response from n8n (not an object/array)';
+          }
+        } catch (e) {
+          failures[trimmed] = `Invalid JSON: ${e instanceof Error ? e.message : 'Unknown parse error'}`;
+          continue;
         }
       } catch (e) {
-        throw new Error(
-          `Invalid JSON from n8n for ${trimmed}: ${
-            e instanceof Error ? e.message : 'Unknown parse error'
-          }`,
-        );
+        failures[trimmed] = e instanceof Error ? e.message : 'Unknown fetch error';
+        continue;
       }
     }
-    return all;
+
+    return { records: all, failures };
   };
 
   const handleFetchAndGenerate = async () => {
@@ -429,7 +442,7 @@ export default function N8nPrintSlip() {
 
     try {
       setLoading(true);
-      const fetched = await fetchFromN8n(orders);
+      const { records: fetched, failures: initialFailures } = await fetchFromN8n(orders);
       
       // Filter out empty/invalid records (no Order ID or no Tracking)
       const validRecords = fetched.filter(
@@ -440,11 +453,17 @@ export default function N8nPrintSlip() {
       const validOrderIds = new Set(
         validRecords.map((r) => String(r["Order ID"]).trim())
       );
-      const failed = orders
-        .map((o) => o.trim())
-        .filter((o) => o && !validOrderIds.has(o));
-      
-      setFailedOrders(failed);
+
+      const mergedFailures: Record<string, string> = { ...initialFailures };
+      for (const o of orders.map((x) => x.trim()).filter(Boolean)) {
+        if (!validOrderIds.has(o) && !mergedFailures[o]) {
+          mergedFailures[o] = 'No valid Tracking returned';
+        }
+      }
+
+      setFailedOrders(
+        Object.entries(mergedFailures).map(([oid, reason]) => ({ orderId: oid, reason }))
+      );
 
       if (!validRecords.length) {
         setError('No valid records with Tracking found for any of the given Order ID(s).');
@@ -563,7 +582,9 @@ export default function N8nPrintSlip() {
             <p className="font-semibold mb-1">⚠️ The following Order ID(s) had no valid Tracking and were skipped:</p>
             <ul className="list-disc list-inside">
               {failedOrders.map((o) => (
-                <li key={o} className="font-mono">{o}</li>
+                <li key={o.orderId} className="font-mono">
+                  {o.orderId}{o.reason ? ` — ${o.reason}` : ''}
+                </li>
               ))}
             </ul>
           </div>
