@@ -1034,18 +1034,19 @@ export default function RepeatDashboard() {
   }, []);
 
   useEffect(() => {
-    if (!isAdmin) return;
-    // Load NocoDB rows for admin so Filled/Not Filled works in Leads view too
+    // Load NocoDB rows so Filled/Not Filled works for all users in Leads view
     if ((view === 'analytics' || view === 'leads') && !ncLoading && ncRows.length === 0) {
       loadNocoRepeat();
     }
-    // load grouping from localStorage once
-    try {
-      const raw = localStorage.getItem('nc_grouping_v1');
-      if (raw) setNcGrouping(JSON.parse(raw));
-      const defs = localStorage.getItem('nc_groupdefs_v1');
-      if (defs) setNcGroupDefs(JSON.parse(defs));
-    } catch (e) { console.warn('Failed to load grouping from localStorage', e); }
+    // load grouping from localStorage once (admin only)
+    if (isAdmin) {
+      try {
+        const raw = localStorage.getItem('nc_grouping_v1');
+        if (raw) setNcGrouping(JSON.parse(raw));
+        const defs = localStorage.getItem('nc_groupdefs_v1');
+        if (defs) setNcGroupDefs(JSON.parse(defs));
+      } catch (e) { console.warn('Failed to load grouping from localStorage', e); }
+    }
   }, [view, isAdmin, loadNocoRepeat, ncLoading, ncRows.length]);
 
   // Batch update: set monthly_subscriptions=true for pasted order_numbers
