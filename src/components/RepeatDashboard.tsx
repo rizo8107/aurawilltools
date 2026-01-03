@@ -664,6 +664,7 @@ export default function RepeatDashboard() {
     }).length;
     const filledPct = totalCustomers ? Math.round((filledMatchedCustomers / totalCustomers) * 100) : 0;
     const notFilledCustomers = totalCustomers - filledMatchedCustomers;
+    const notFilledPct = totalCustomers ? Math.round((notFilledCustomers / totalCustomers) * 100) : 0;
 
     return {
       totalCustomers,
@@ -675,6 +676,7 @@ export default function RepeatDashboard() {
       filledCustomers: filledMatchedCustomers,
       notFilledCustomers,
       filledPct,
+      notFilledPct,
       filledRecords: ncFilteredForStats.length,
     };
   }, [filtered, ncRows, ncFrom, ncTo]);
@@ -1592,7 +1594,7 @@ export default function RepeatDashboard() {
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-8 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-9 gap-3">
         <div className="bg-white rounded-xl shadow p-3 flex items-center justify-between">
           <div>
             <div className="text-xs text-gray-500">Total Customers</div>
@@ -1641,6 +1643,13 @@ export default function RepeatDashboard() {
             <div className="text-2xl font-semibold">{stats.notFilledCustomers}</div>
           </div>
           <div className="text-gray-600 text-xl">⬜</div>
+        </div>
+        <div className="bg-white rounded-xl shadow p-3 flex items-center justify-between">
+          <div>
+            <div className="text-xs text-gray-500">Not Filled %</div>
+            <div className="text-2xl font-semibold">{stats.notFilledPct}%</div>
+          </div>
+          <div className="text-gray-600 text-xl">📉</div>
         </div>
         <div className="bg-white rounded-xl shadow p-3 flex items-center justify-between">
           <div>
