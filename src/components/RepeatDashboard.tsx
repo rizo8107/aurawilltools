@@ -752,36 +752,24 @@ export default function RepeatDashboard() {
         return;
       }
 
-      // Prefer supabase-js to avoid REST quoting issues
-      const payload = { assigned_to: handle, assigned_at: nowIso, team_id: tid } as const;
-      // Try order_id (numeric list)
-      let okCount = 0;
-      let failCount = 0;
-      let lastErr = '';
-      {
-        const tryIdsNum = orderIds
-          .map((x) => Number(x))
-          .filter((n) => Number.isFinite(n)) as number[];
-        if (tryIdsNum.length) {
-          const { data, error } = await supabase
-            .from('orders_All')
-            .update(payload)
-            .in('order_id', tryIdsNum)
-            .select('order_id');
-          if (!error) okCount += data?.length || 0; else lastErr = error.message;
-        }
+      // Use RPC to bypass RLS restrictions
+      const { data, error } = await supabase.rpc('assign_orders_by_number', {
+        p_order_numbers: orderIds,
+        p_assigned_to: handle,
+        p_assigned_at: nowIso,
+        p_team_id: tid
+      });
+
+      if (error) {
+        throw new Error(`Assign RPC failed: ${error.message}`);
       }
-      // Fallback to or_order_id (text list)
+
+      const okCount = Array.isArray(data) ? data.length : 0;
+      const failCount = orderIds.length - okCount;
+
       if (okCount === 0) {
-        const { data, error } = await supabase
-          .from('orders_All')
-          .update(payload)
-          .in('or_order_id', orderIds)
-          .select('or_order_id');
-        if (!error) okCount += data?.length || 0; else { lastErr = error.message; failCount = orderIds.length; }
-      }
-      if (okCount === 0) {
-        throw new Error(`Assign failed for all orders. ${lastErr || ''}`);
+        const sample = orderIds.slice(0, 10).join(', ');
+        throw new Error(`Assign failed: no matching orders found in orders_All for order numbers. Sample: ${sample}`);
       }
 
       // Reload to reflect changes
