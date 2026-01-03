@@ -180,6 +180,8 @@ export default function RepeatDashboard() {
   // Manual assignment
   const [assignMember, setAssignMember] = useState<string>('');
   const [assigning, setAssigning] = useState<boolean>(false);
+  const [allocationType, setAllocationType] = useState<'manual' | 'percentage' | 'equally'>('manual');
+  const [allocationPercent, setAllocationPercent] = useState<string>('50');
   // Misc UI state
   const [showFilters, setShowFilters] = useState<boolean>(false);
   const [lastRunAt, setLastRunAt] = useState<string>('');
@@ -733,53 +735,139 @@ export default function RepeatDashboard() {
 
   /** Manual assignment of selected leads */
   const assignSelected = useCallback(async () => {
-    const handle = String(assignMember || '').trim();
-    if (!handle) return;
-    const selectedRows = filtered.filter(r => isSelected(r));
-    if (selectedRows.length === 0) return;
+    // For Equally mode, we don't need a single agent selection
+    if (allocationType !== 'equally') {
+      const handle = String(assignMember || '').trim();
+      if (!handle) return;
+    }
+    
+    // Determine which rows to assign based on allocation type
+    let rowsToAssign: RepeatRow[] = [];
+    
+    if (allocationType === 'manual') {
+      // Manual: only selected rows
+      rowsToAssign = filtered.filter(r => isSelected(r));
+    } else if (allocationType === 'percentage') {
+      // Percentage: take X% of filtered rows
+      const pct = Math.max(0, Math.min(100, Number(allocationPercent) || 0));
+      const count = Math.floor((filtered.length * pct) / 100);
+      rowsToAssign = filtered.slice(0, count);
+    } else if (allocationType === 'equally') {
+      // Equally: distribute all filtered rows evenly across all team members
+      rowsToAssign = filtered;
+    }
+    
+    if (rowsToAssign.length === 0) {
+      setCallMsg('No leads to assign. Please select leads or adjust allocation settings.');
+      setCallTone('error');
+      return;
+    }
+    
     try {
       setAssigning(true);
       const tid = Number(activeTeamId) || null;
       const nowIso = new Date().toISOString();
-      // Collect all order_numbers from the selected rows
-      const orderIds = Array.from(new Set(
-        selectedRows.flatMap(r => (r.order_numbers || []).map(n => String(n).trim()).filter(Boolean))
-      ));
+      
+      if (allocationType === 'equally') {
+        // Distribute leads evenly across all team members (excluding admin)
+        const eligibleAgents = teamMembers.filter(m => String(m).toLowerCase() !== 'admin');
+        
+        if (eligibleAgents.length === 0) {
+          setCallMsg('No team members available for equal distribution (admin excluded).');
+          setCallTone('error');
+          return;
+        }
+        
+        let totalAssigned = 0;
+        let totalFailed = 0;
+        const results: string[] = [];
+        
+        // Distribute rows round-robin across eligible agents
+        for (let i = 0; i < eligibleAgents.length; i++) {
+          const memberRows = rowsToAssign.filter((_, idx) => idx % eligibleAgents.length === i);
+          if (memberRows.length === 0) continue;
+          
+          const orderIds = Array.from(new Set(
+            memberRows.flatMap(r => (r.order_numbers || []).map(n => String(n).trim()).filter(Boolean))
+          ));
+          
+          // Debug: log sample order IDs
+          if (i === 0) {
+            console.log('Sample order IDs being assigned:', orderIds.slice(0, 10));
+            console.log('Total order IDs for this agent:', orderIds.length);
+          }
+          
+          const { data, error } = await supabase.rpc('assign_orders_by_number', {
+            p_order_numbers: orderIds,
+            p_assigned_to: eligibleAgents[i],
+            p_assigned_at: nowIso,
+            p_team_id: tid
+          });
+          
+          // Debug: log response
+          if (i === 0) {
+            console.log('RPC response:', { data, error, dataLength: Array.isArray(data) ? data.length : 0 });
+          }
+          
+          if (!error) {
+            const count = Array.isArray(data) ? data.length : 0;
+            totalAssigned += count;
+            results.push(`${eligibleAgents[i]}: ${count}`);
+          } else {
+            console.error(`Assignment error for ${eligibleAgents[i]}:`, {
+              message: error.message,
+              code: error.code,
+              details: error.details,
+              hint: error.hint,
+              fullError: error
+            });
+            totalFailed += orderIds.length;
+          }
+        }
+        
+        await loadAssigned();
+        setSelected({});
+        setCallMsg(`Equally distributed ${totalAssigned} orders across ${eligibleAgents.length} agents. ${results.join(', ')}${totalFailed ? ` (${totalFailed} failed)` : ''}`);
+        setCallTone('success');
+      } else {
+        // Manual or Percentage: assign to single selected agent
+        const handle = String(assignMember || '').trim();
+        const orderIds = Array.from(new Set(
+          rowsToAssign.flatMap(r => (r.order_numbers || []).map(n => String(n).trim()).filter(Boolean))
+        ));
 
-      if (orderIds.length === 0) {
-        setCallMsg('No order IDs found in the selected rows.');
-        setCallTone('error');
-        return;
+        if (orderIds.length === 0) {
+          setCallMsg('No order IDs found in the selected rows.');
+          setCallTone('error');
+          return;
+        }
+
+        const { data, error } = await supabase.rpc('assign_orders_by_number', {
+          p_order_numbers: orderIds,
+          p_assigned_to: handle,
+          p_assigned_at: nowIso,
+          p_team_id: tid
+        });
+
+        if (error) {
+          throw new Error(`Assign RPC failed: ${error.message}`);
+        }
+
+        const okCount = Array.isArray(data) ? data.length : 0;
+        const failCount = orderIds.length - okCount;
+
+        if (okCount === 0) {
+          const sample = orderIds.slice(0, 10).join(', ');
+          throw new Error(`Assign failed: no matching orders found in orders_All for order numbers. Sample: ${sample}`);
+        }
+
+        await loadAssigned();
+        setSelected({});
+        setAssignMember('');
+        const totalOrders = rowsToAssign.reduce((s, r) => s + ((r.order_numbers || []).length || 0), 0);
+        setCallMsg(`Assigned ${okCount} / ${totalOrders} order(s) to ${handle}${failCount ? ` (${failCount} failed)` : ''}`);
+        setCallTone('success');
       }
-
-      // Use RPC to bypass RLS restrictions
-      const { data, error } = await supabase.rpc('assign_orders_by_number', {
-        p_order_numbers: orderIds,
-        p_assigned_to: handle,
-        p_assigned_at: nowIso,
-        p_team_id: tid
-      });
-
-      if (error) {
-        throw new Error(`Assign RPC failed: ${error.message}`);
-      }
-
-      const okCount = Array.isArray(data) ? data.length : 0;
-      const failCount = orderIds.length - okCount;
-
-      if (okCount === 0) {
-        const sample = orderIds.slice(0, 10).join(', ');
-        throw new Error(`Assign failed: no matching orders found in orders_All for order numbers. Sample: ${sample}`);
-      }
-
-      // Reload to reflect changes
-      await loadAssigned();
-      // Clear selection after assignment
-      setSelected({});
-      setAssignMember('');
-      const totalOrders = selectedRows.reduce((s, r) => s + ((r.order_numbers || []).length || 0), 0);
-      setCallMsg(`Assigned ${okCount} / ${totalOrders} order(s) to ${handle}${failCount ? ` (${failCount} failed)` : ''}`);
-      setCallTone('success');
     } catch (e: any) {
       console.error('Failed to assign leads:', e);
       setCallMsg('Failed to assign selected leads. Please try again.');
@@ -787,7 +875,7 @@ export default function RepeatDashboard() {
     } finally {
       setAssigning(false);
     }
-  }, [assignMember, filtered, isSelected, activeTeamId, SUPABASE_URL, sbHeaders, loadAssigned, setCallMsg, setCallTone]);
+  }, [assignMember, filtered, isSelected, activeTeamId, loadAssigned, setCallMsg, setCallTone, allocationType, allocationPercent, teamMembers]);
 
   /** Actions */
   const handleCall = useCallback(async (custNumber: string) => {
@@ -1665,7 +1753,7 @@ export default function RepeatDashboard() {
           </div>
 
           {/* Filters */}
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-8 gap-2 w-full lg:w-auto">
+          <div className="flex flex-wrap gap-2 w-full lg:w-auto">
             <button className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border" onClick={() => setShowFilters((prev) => !prev)}>
               <Filter className="w-4 h-4" /> Filters
             </button>
@@ -1742,27 +1830,86 @@ export default function RepeatDashboard() {
 
             {/* Manual assignment controls */}
             {isAdmin && (
-              <div className="flex items-center gap-2 ring-1 ring-gray-200 rounded-lg px-2 py-1 bg-white">
-                <select
-                  className="bg-transparent text-sm outline-none"
-                  aria-label="Assign selected to team member"
-                  title="Assign selected to team member"
-                  value={assignMember}
-                  onChange={(e) => setAssignMember(e.target.value)}
-                >
-                  <option value="">Assign to…</option>
-                  {teamMembers.map((m) => (
-                    <option key={m} value={m}>{m}</option>
-                  ))}
-                </select>
-                <button
-                  className="px-3 py-1.5 rounded-lg ring-1 ring-gray-200 text-sm hover:bg-gray-50 disabled:opacity-50"
-                  onClick={assignSelected}
-                  disabled={!assignMember || Object.values(selected).filter(Boolean).length === 0 || assigning}
-                  title={Object.values(selected).filter(Boolean).length === 0 ? 'Select rows first' : 'Assign selected rows'}
-                >
-                  {assigning ? 'Assigning…' : 'Assign'}
-                </button>
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center gap-2 ring-1 ring-gray-200 rounded-lg px-2 py-1 bg-white">
+                  <select
+                    className="bg-transparent text-sm outline-none"
+                    aria-label="Allocation type"
+                    title="Allocation type"
+                    value={allocationType}
+                    onChange={(e) => setAllocationType(e.target.value as 'manual' | 'percentage' | 'equally')}
+                  >
+                    <option value="manual">Manual (Selected)</option>
+                    <option value="percentage">Percentage</option>
+                    <option value="equally">Equally (All Agents)</option>
+                  </select>
+                  {allocationType === 'percentage' && (
+                    <input
+                      type="number"
+                      className="w-16 px-2 py-1 text-sm border rounded"
+                      placeholder="%"
+                      min="0"
+                      max="100"
+                      value={allocationPercent}
+                      onChange={(e) => setAllocationPercent(e.target.value)}
+                      title="Percentage of filtered leads to assign"
+                    />
+                  )}
+                  {allocationType !== 'equally' && (
+                    <select
+                      className="bg-transparent text-sm outline-none"
+                      aria-label="Assign to team member"
+                      title="Assign to team member"
+                      value={assignMember}
+                      onChange={(e) => setAssignMember(e.target.value)}
+                    >
+                      <option value="">Assign to…</option>
+                      {teamMembers.map((m) => (
+                        <option key={m} value={m}>{m}</option>
+                      ))}
+                    </select>
+                  )}
+                  <button
+                    className="px-3 py-1.5 rounded-lg ring-1 ring-gray-200 text-sm hover:bg-gray-50 disabled:opacity-50"
+                    onClick={assignSelected}
+                    disabled={
+                      (allocationType !== 'equally' && !assignMember) ||
+                      (allocationType === 'manual' && Object.values(selected).filter(Boolean).length === 0) ||
+                      (allocationType === 'equally' && teamMembers.length === 0) ||
+                      assigning
+                    }
+                    title={
+                      allocationType === 'manual' && Object.values(selected).filter(Boolean).length === 0
+                        ? 'Select rows first'
+                        : allocationType === 'equally' && teamMembers.length === 0
+                        ? 'No team members available'
+                        : 'Assign leads'
+                    }
+                  >
+                    {assigning ? 'Assigning…' : 'Assign'}
+                  </button>
+                </div>
+                <div className="text-xs text-gray-600 px-2">
+                  {allocationType === 'manual' && (
+                    <span>Will assign <strong>{Object.values(selected).filter(Boolean).length}</strong> selected lead(s)</span>
+                  )}
+                  {allocationType === 'percentage' && (
+                    <span>Will assign <strong>{Math.floor((filtered.length * Math.max(0, Math.min(100, Number(allocationPercent) || 0))) / 100)}</strong> of {filtered.length} filtered lead(s) ({allocationPercent}%)</span>
+                  )}
+                  {allocationType === 'equally' && (
+                    <span>
+                      {(() => {
+                        const eligibleAgents = teamMembers.filter(m => String(m).toLowerCase() !== 'admin');
+                        return (
+                          <>
+                            Will distribute <strong>{filtered.length}</strong> filtered lead(s) equally across <strong>{eligibleAgents.length}</strong> agent(s)
+                            {eligibleAgents.length > 0 && ` (~${Math.ceil(filtered.length / eligibleAgents.length)} each)`}
+                          </>
+                        );
+                      })()}
+                    </span>
+                  )}
+                </div>
               </div>
             )}
           </div>

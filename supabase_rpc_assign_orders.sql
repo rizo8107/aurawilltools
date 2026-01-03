@@ -16,9 +16,9 @@ BEGIN
   UPDATE "orders_All"
   SET 
     assigned_to = p_assigned_to,
-    assigned_at = p_assigned_at,
-    team_id = p_team_id
+    assigned_at = p_assigned_at
   WHERE "orders_All".order_number = ANY(p_order_numbers)
+    AND ("orders_All".team_id = p_team_id OR "orders_All".team_id IS NULL)
   RETURNING "orders_All".order_number, true;
 END;
 $$;
