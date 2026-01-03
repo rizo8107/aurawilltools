@@ -173,6 +173,7 @@ export default function RepeatDashboard() {
   const [filterTo, setFilterTo] = useState<string>('');
   const [minOrders, setMinOrders] = useState<string>('');
   const [maxOrders, setMaxOrders] = useState<string>('');
+  const [filterFilled, setFilterFilled] = useState<string>(''); // '' | 'filled' | 'not_filled'
   // Admin-only: member filter by assigned_to
   const [memberFilter, setMemberFilter] = useState<string>('');
   const [teamMembers, setTeamMembers] = useState<string[]>([]);
@@ -562,6 +563,18 @@ export default function RepeatDashboard() {
     }
   }, [SUPABASE_URL, sbHeaders, activeTeamId, loadAssigned]);
 
+  const filledOrderNumbersSet = useMemo(() => {
+    const out = new Set<string>();
+    for (const r of ncRows) {
+      const d = (r.Date || '').slice(0, 10);
+      if (ncFrom && d < ncFrom) continue;
+      if (ncTo && d > ncTo) continue;
+      const n = String((r as any).order_number ?? '').trim();
+      if (n) out.add(n);
+    }
+    return out;
+  }, [ncRows, ncFrom, ncTo]);
+
   /** Filtering */
   const filtered = useMemo(() => {
     // Admin: see all rows. Non-admin: only their own assigned leads.
@@ -609,19 +622,62 @@ export default function RepeatDashboard() {
       return true;
     });
 
-    return byCount;
-  }, [rows, isAdmin, memberFilter, currentUser, debouncedQuery, filterStatus, filterFrom, filterTo, minOrders, maxOrders]);
+    const byFilled = filterFilled
+      ? byCount.filter((r) => {
+          const nums = (r.order_numbers || []).map((x) => String(x).trim()).filter(Boolean);
+          const isFilled = nums.some((n) => filledOrderNumbersSet.has(n));
+          return filterFilled === 'filled' ? isFilled : !isFilled;
+        })
+      : byCount;
+
+    return byFilled;
+  }, [rows, isAdmin, memberFilter, currentUser, debouncedQuery, filterStatus, filterFrom, filterTo, minOrders, maxOrders, filterFilled, filledOrderNumbersSet]);
 
   /** Analytics */
   const stats = useMemo(() => {
+    // Local NocoDB filter by date (avoid referencing ncFiltered before it's declared)
+    const ncFilteredForStats = ncRows.filter(r => {
+      const d = (r.Date || '').slice(0,10);
+      if (ncFrom && d < ncFrom) return false;
+      if (ncTo && d > ncTo) return false;
+      return true;
+    });
+    const filledOrders = new Set(
+      ncFilteredForStats
+        .map(r => String((r as any).order_number ?? '').trim())
+        .filter(Boolean)
+    );
+
     const totalCustomers = filtered.length;
     const totalOrders = filtered.reduce((s, r) => s + (r.order_count || 0), 0);
     const avgPerCust = totalCustomers ? totalOrders / totalCustomers : 0;
-    const called = filtered.filter((r) => (r.call_status || '') === 'Called').length;
-    const notCalled = totalCustomers - called;
-    const calledPct = totalCustomers ? Math.round((called / totalCustomers) * 100) : 0;
-    return { totalCustomers, totalOrders, avgPerCust, called, notCalled, calledPct };
-  }, [filtered]);
+
+    // Assigned = has assigned_at (currently represented by call_status === 'Called')
+    const assigned = filtered.filter((r) => (r.call_status || '') === 'Called').length;
+    const notAssigned = totalCustomers - assigned;
+    const assignedPct = totalCustomers ? Math.round((assigned / totalCustomers) * 100) : 0;
+
+    // Form filled (NocoDB) metrics - order-number based
+    const filledMatchedCustomers = filtered.filter(r => {
+      const nums = (r.order_numbers || []).map((x) => String(x).trim()).filter(Boolean);
+      return nums.some((n) => filledOrders.has(n));
+    }).length;
+    const filledPct = totalCustomers ? Math.round((filledMatchedCustomers / totalCustomers) * 100) : 0;
+    const notFilledCustomers = totalCustomers - filledMatchedCustomers;
+
+    return {
+      totalCustomers,
+      totalOrders,
+      avgPerCust,
+      assigned,
+      notAssigned,
+      assignedPct,
+      filledCustomers: filledMatchedCustomers,
+      notFilledCustomers,
+      filledPct,
+      filledRecords: ncFilteredForStats.length,
+    };
+  }, [filtered, ncRows, ncFrom, ncTo]);
 
   /** Pagination slice */
   const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
@@ -900,7 +956,11 @@ export default function RepeatDashboard() {
   }, []);
 
   useEffect(() => {
-    if (view === 'analytics' && isAdmin) loadNocoRepeat();
+    if (!isAdmin) return;
+    // Load NocoDB rows for admin so Filled/Not Filled works in Leads view too
+    if ((view === 'analytics' || view === 'leads') && !ncLoading && ncRows.length === 0) {
+      loadNocoRepeat();
+    }
     // load grouping from localStorage once
     try {
       const raw = localStorage.getItem('nc_grouping_v1');
@@ -908,7 +968,7 @@ export default function RepeatDashboard() {
       const defs = localStorage.getItem('nc_groupdefs_v1');
       if (defs) setNcGroupDefs(JSON.parse(defs));
     } catch (e) { console.warn('Failed to load grouping from localStorage', e); }
-  }, [view, isAdmin, loadNocoRepeat]);
+  }, [view, isAdmin, loadNocoRepeat, ncLoading, ncRows.length]);
 
   // Batch update: set monthly_subscriptions=true for pasted order_numbers
   const runNcBatchUpdate = useCallback(async () => {
@@ -1208,6 +1268,14 @@ export default function RepeatDashboard() {
   }, [ncFiltered, getCatalogEarly]);
 
   const getStableLabel = useCallback((key: keyof NocoRepeatRow, raw: string): string => {
+    if (key === 'call_status') {
+      const s = String(raw || '').trim();
+      if (!s) return 'Not Called';
+      // keep canonical casing for common values
+      if (s.toLowerCase() === 'not called') return 'Not Called';
+      if (s.toLowerCase() === 'called') return 'Called';
+      return s;
+    }
     const map = (ncLabelMapByKey as any)[key] as Map<string,string> | undefined;
     const lbl = map?.get(raw);
     if (lbl && lbl.length) return lbl;
@@ -1524,7 +1592,7 @@ export default function RepeatDashboard() {
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-8 gap-3">
         <div className="bg-white rounded-xl shadow p-3 flex items-center justify-between">
           <div>
             <div className="text-xs text-gray-500">Total Customers</div>
@@ -1548,17 +1616,38 @@ export default function RepeatDashboard() {
         </div>
         <div className="bg-white rounded-xl shadow p-3 flex items-center justify-between">
           <div>
-            <div className="text-xs text-gray-500">Called</div>
-            <div className="text-2xl font-semibold">{stats.called}</div>
+            <div className="text-xs text-gray-500">Assigned</div>
+            <div className="text-2xl font-semibold">{stats.assigned}</div>
           </div>
           <div className="text-emerald-500 text-xl">📞</div>
         </div>
         <div className="bg-white rounded-xl shadow p-3 flex items-center justify-between">
           <div>
-            <div className="text-xs text-gray-500">Contacted %</div>
-            <div className="text-2xl font-semibold">{stats.calledPct}%</div>
+            <div className="text-xs text-gray-500">Assigned %</div>
+            <div className="text-2xl font-semibold">{stats.assignedPct}%</div>
           </div>
           <div className="text-indigo-500 text-xl">ℹ️</div>
+        </div>
+        <div className="bg-white rounded-xl shadow p-3 flex items-center justify-between">
+          <div>
+            <div className="text-xs text-gray-500">Filled Customers</div>
+            <div className="text-2xl font-semibold">{stats.filledCustomers}</div>
+          </div>
+          <div className="text-sky-600 text-xl">📝</div>
+        </div>
+        <div className="bg-white rounded-xl shadow p-3 flex items-center justify-between">
+          <div>
+            <div className="text-xs text-gray-500">Not Filled</div>
+            <div className="text-2xl font-semibold">{stats.notFilledCustomers}</div>
+          </div>
+          <div className="text-gray-600 text-xl">⬜</div>
+        </div>
+        <div className="bg-white rounded-xl shadow p-3 flex items-center justify-between">
+          <div>
+            <div className="text-xs text-gray-500">Filled %</div>
+            <div className="text-2xl font-semibold">{stats.filledPct}%</div>
+          </div>
+          <div className="text-fuchsia-600 text-xl">✅</div>
         </div>
       </div>
 
@@ -1826,6 +1915,7 @@ export default function RepeatDashboard() {
               <th className="text-left px-4 py-2">Orders</th>
               <th className="text-left px-4 py-2">Range</th>
               <th className="text-left px-4 py-2">Assigned</th>
+              <th className="text-left px-4 py-2">Form</th>
               <th className="text-left px-4 py-2">Status</th>
               <th className="text-left px-4 py-2">Actions</th>
             </tr>
@@ -1892,6 +1982,19 @@ export default function RepeatDashboard() {
                   ))}
                 </select>
               </th>
+              {/* Form Filled filter */}
+              <th className="px-4 py-2">
+                <select
+                  className="w-full border rounded px-2 py-1"
+                  value={filterFilled}
+                  onChange={(e)=>{ setFilterFilled(e.target.value); setPage(1); }}
+                  title="Form filled filter"
+                >
+                  <option value="">All</option>
+                  <option value="filled">Filled</option>
+                  <option value="not_filled">Not Filled</option>
+                </select>
+              </th>
               {/* Status filter */}
               <th className="px-4 py-2">
                 <select
@@ -1943,6 +2046,9 @@ export default function RepeatDashboard() {
                     <div className="h-3 w-36 bg-gray-100 rounded mt-2 animate-pulse" />
                   </td>
                   <td className="px-4 py-3">
+                    <div className="h-5 w-20 bg-gray-100 rounded-full border animate-pulse" />
+                  </td>
+                  <td className="px-4 py-3">
                     <div className="h-5 w-24 bg-gray-100 rounded-full border animate-pulse" />
                   </td>
                   <td className="px-4 py-3">
@@ -1952,7 +2058,7 @@ export default function RepeatDashboard() {
               ))
             ) : pageSlice.length === 0 ? (
               <tr>
-                <td colSpan={6} className="px-4 py-8 text-center text-gray-600">
+                <td colSpan={7} className="px-4 py-8 text-center text-gray-600">
                   <div className="flex flex-col items-center gap-2">
                     <Info className="w-5 h-5 text-gray-400" />
                     <div className="font-medium">No assigned repeat customers</div>
@@ -1990,6 +2096,24 @@ export default function RepeatDashboard() {
                     <div className="text-xs text-gray-500">
                       {r.assigned_at ? formatDateTime(r.assigned_at) : '—'}
                     </div>
+                  </td>
+                  <td className="px-4 py-2 align-top">
+                    {(() => {
+                      const nums = (r.order_numbers || []).map((x) => String(x).trim()).filter(Boolean);
+                      const isFilled = nums.some((n) => filledOrderNumbersSet.has(n));
+                      return (
+                        <span
+                          className={clsx(
+                            'px-2 py-0.5 rounded-full text-xs border',
+                            isFilled
+                              ? 'text-sky-700 bg-sky-50 border-sky-200'
+                              : 'text-gray-700 bg-gray-50 border-gray-200'
+                          )}
+                        >
+                          {isFilled ? 'Filled' : 'Not Filled'}
+                        </span>
+                      );
+                    })()}
                   </td>
                   <td className="px-4 py-2 align-top">
                     <span className={clsx('px-2 py-0.5 rounded-full text-xs border', statusColor(r.call_status))}>
@@ -2134,6 +2258,7 @@ export default function RepeatDashboard() {
               const rr = makeCountTable('reorder_reason');
               const lf = makeCountTable('liked_features');
               const ur = makeCountTable('usage_recipe');
+              const cs = makeCountTable('call_status');
               const ms = makeCountTable('monthly_subscriptions');
               const renderTable = (title: string, data: { total: number; rows: Array<{ name: string; count: number; pct: number }>; }, key: keyof NocoRepeatRow) => {
                 // apply grouping if exists for this key
@@ -2312,6 +2437,7 @@ export default function RepeatDashboard() {
                 <>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                     {renderTable('Filled by agent (NocoDB)', agentT, 'agent')}
+                    {renderTable('Status', cs, 'call_status')}
                   </div>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                     {renderTable('First Time Purchase Reason', ft, 'first_time_reason')}
