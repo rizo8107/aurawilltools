@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Search, User, ShoppingCart, BarChart2, Phone, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, ShieldCheck } from 'lucide-react';
 import OrderDetailsDialog from './OrderDetailsDialog';
 
@@ -11,7 +11,7 @@ interface RepeatOrder {
   order_numbers: string[];
   first_order: string;
   last_order: string;
-  call_status?: 'Called' | 'Busy' | 'Cancelled' | 'No Response' | 'Wrong Number' | 'Invalid Number' | '';
+  call_status?: string;
   assigned_to?: string | null;
   assigned_at?: string | null;
   team_id?: number | null;
@@ -23,11 +23,11 @@ export default function RepeatOrdersTable() {
   // Supabase REST base and headers (anon for client-side; consider proxy for production)
   const SUPABASE_URL = 'https://app-supabase.9krcxo.easypanel.host';
   const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNzUwMDEyMjAwLCJleHAiOjE5MDc3Nzg2MDB9.eJ81pv114W4ZLvg0E-AbNtNZExPoLYbxGdeWTY5PVVs';
-  const sbHeaders = {
+  const sbHeaders = useMemo(() => ({
     apikey: SUPABASE_ANON_KEY,
     Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
     'Content-Type': 'application/json',
-  };
+  }), [SUPABASE_ANON_KEY]);
 
   // Data and loading states
   const [orders, setOrders] = useState<RepeatOrder[]>([]);
@@ -46,6 +46,11 @@ export default function RepeatOrdersTable() {
   const [activeTeamId] = useState<string>(() => {
     try { return localStorage.getItem('ndr_active_team_id') || ''; } catch { return ''; }
   });
+
+  const cacheKey = useMemo(
+    () => `repeat_orders_cache_v1:${activeTeamId}:${currentUser}`,
+    [activeTeamId, currentUser]
+  );
   
   // Dialog state
   const [isDialogOpen, setIsDialogOpen] = useState(false);
@@ -179,6 +184,19 @@ export default function RepeatOrdersTable() {
 
   const paginatedOrders = filteredOrders.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
 
+  // Handle call status change from dialog
+  const handleCallStatusChange = useCallback((identifier: string, newStatus: string) => {
+    setOrders(prevOrders => 
+      prevOrders.map(order => {
+        // Match by email or phone
+        if (order.email === identifier || order.phone === identifier) {
+          return { ...order, call_status: newStatus };
+        }
+        return order;
+      })
+    );
+  }, []);
+
   const fetchRepeatOrders = useCallback(async () => {
     setLoading(true);
     setError('');
@@ -210,7 +228,7 @@ export default function RepeatOrdersTable() {
       // Process the data and calculate analytics
       const processedData = data.map((order: RepeatOrder) => ({
         ...order,
-        call_status: (order.call_status || '') as RepeatOrder['call_status'] // Ensure call_status exists and is correctly typed
+        call_status: (order.call_status || '') as RepeatOrder['call_status'] // Ensure call_status exists
       }));
       
       // Set the orders
@@ -251,6 +269,10 @@ export default function RepeatOrdersTable() {
         averageOrdersPerCustomer,
         callStatusBreakdown: callStatusCounts
       });
+
+      try {
+        localStorage.setItem(cacheKey, JSON.stringify({ ts: Date.now(), data: processedData }));
+      } catch (e) { void e; }
       
     } catch (err) {
       setError('Failed to fetch repeat orders. Please try again.');
@@ -258,11 +280,23 @@ export default function RepeatOrdersTable() {
     } finally {
       setLoading(false);
     }
-  }, [itemsPerPage]); // Dependency on itemsPerPage to recalculate pagination if it changes
+  }, [session, currentUser, activeTeamId, sbHeaders, itemsPerPage, cacheKey]);
 
   useEffect(() => {
+    try {
+      const raw = localStorage.getItem(cacheKey);
+      if (raw) {
+        const parsed = JSON.parse(raw) as { ts?: number; data?: RepeatOrder[] };
+        if (Array.isArray(parsed?.data) && parsed.data.length) {
+          setOrders(parsed.data);
+          setFilteredOrders(parsed.data);
+          setTotalPages(Math.ceil(parsed.data.length / itemsPerPage));
+          updateAnalytics(parsed.data);
+        }
+      }
+    } catch (e) { void e; }
     fetchRepeatOrders();
-  }, [fetchRepeatOrders]);
+  }, [fetchRepeatOrders, cacheKey, itemsPerPage, updateAnalytics]);
 
   const handleCall = async (custNumber: string) => {
     setCallStatus('Initiating call...');
@@ -332,7 +366,10 @@ export default function RepeatOrdersTable() {
         setCallStatus('Call initiated successfully.');
         setCallStatusType('success');
       } else {
-        const txt = (typeof payload === 'object' && payload && 'message' in payload) ? (payload as any).message : (await mcubeRes.text());
+        const msg = (typeof payload === 'object' && payload && 'message' in payload)
+          ? String((payload as Record<string, unknown>).message || '')
+          : (await mcubeRes.text());
+        const txt = msg;
         setCallStatus(`Failed to initiate call: ${txt || mcubeRes.status}`);
         setCallStatusType('error');
       }
@@ -642,6 +679,7 @@ export default function RepeatOrdersTable() {
         isOpen={isDialogOpen}
         onClose={() => setIsDialogOpen(false)}
         orderNumber={selectedOrderNumber}
+        onCallStatusChange={handleCallStatusChange}
       />
     </div>
   );

@@ -448,8 +448,11 @@ export default function RepeatCampaign({ initialOrderNumber = '', hideFeedback =
         throw new Error(`Error: ${response.status}`);
       }
 
+      // Update local state immediately to reflect the change in UI
       setSelectedCallStatus(newStatus);
+      setCustomerData(prev => prev ? { ...prev, call_status: newStatus } : null);
       setMessage('Call status updated successfully!');
+      
       // Notify parent of the change (use email or phone)
       if (onCallStatusChange) {
         const identifier = customerData?.customer_email || customerData?.customer_phone || '';
