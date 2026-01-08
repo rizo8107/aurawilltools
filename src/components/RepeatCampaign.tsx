@@ -127,7 +127,8 @@ export default function RepeatCampaign({ initialOrderNumber = '', hideFeedback =
     orderType: '',
   });
   
-  const orderInputRef = useRef<HTMLInputElement>(null);
+  const orderInputRef = useRef<HTMLInputElement | null>(null);
+  const prevFetchKeyRef = useRef<string>('');
   
   useEffect(() => {
     // Check if user is authenticated
@@ -178,6 +179,11 @@ export default function RepeatCampaign({ initialOrderNumber = '', hideFeedback =
       const phone = (customerData?.customer_phone || '').trim();
       const onum = (feedbackForm.orderId || orderId || '').trim();
       if (!phone && !onum) { setPrevFeedback(null); setReadOnlyFeedback(false); return; }
+
+      const key = `${phone || ''}|${onum || ''}`;
+      if (prevFetchKeyRef.current === key) return;
+      prevFetchKeyRef.current = key;
+
       try {
         // Prefer fetching by customer_phone, fallback to order_number
         let url = '';
@@ -239,7 +245,7 @@ export default function RepeatCampaign({ initialOrderNumber = '', hideFeedback =
       }
     };
     loadPrev();
-  }, [customerData, feedbackForm.orderId, orderId, onCallStatusChange]);
+  }, [customerData?.customer_phone, feedbackForm.orderId, orderId, onCallStatusChange]);
   
   // Caller selection removed
   
@@ -445,13 +451,23 @@ export default function RepeatCampaign({ initialOrderNumber = '', hideFeedback =
       });
 
       if (!response.ok) {
-        throw new Error(`Error: ${response.status}`);
+        const errText = await response.text();
+        throw new Error(`RPC failed (${response.status}): ${errText}`);
+      }
+
+      const result = await response.json();
+      const updatedCount = Array.isArray(result) && result[0]?.updated_count !== undefined 
+        ? result[0].updated_count 
+        : 0;
+
+      if (updatedCount === 0) {
+        throw new Error('No records updated. Status may not be allowed by database constraint or customer not found.');
       }
 
       // Update local state immediately to reflect the change in UI
       setSelectedCallStatus(newStatus);
       setCustomerData(prev => prev ? { ...prev, call_status: newStatus } : null);
-      setMessage('Call status updated successfully!');
+      setMessage(`Call status updated successfully! (${updatedCount} order${updatedCount > 1 ? 's' : ''} updated)`);
       
       // Notify parent of the change (use email or phone)
       if (onCallStatusChange) {
@@ -464,7 +480,8 @@ export default function RepeatCampaign({ initialOrderNumber = '', hideFeedback =
 
     } catch (err) {
       console.error('Error updating call status:', err);
-      setMessage('Failed to update call status.');
+      const errMsg = err instanceof Error ? err.message : String(err);
+      setMessage(`Failed to update call status: ${errMsg}`);
       setMessageType('error');
     } finally {
       setLoading(false);
