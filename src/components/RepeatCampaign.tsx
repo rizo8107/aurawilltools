@@ -173,7 +173,7 @@ export default function RepeatCampaign({ initialOrderNumber = '', hideFeedback =
     }
   }, [initialOrderNumber, hideFeedback]); // eslint-disable-line react-hooks/exhaustive-deps
   
-  // Load previous feedback from call_feedback by customer (phone) so any order shows the filled form
+  // Load previous feedback from call_feedback - check current order first, then customer's other orders
   useEffect(() => {
     const loadPrev = async () => {
       const phone = (customerData?.customer_phone || '').trim();
@@ -185,25 +185,68 @@ export default function RepeatCampaign({ initialOrderNumber = '', hideFeedback =
       prevFetchKeyRef.current = key;
 
       try {
-        // Prefer fetching by customer_phone, fallback to order_number
-        let url = '';
-        if (phone) {
-          url = `https://app-supabase.9krcxo.easypanel.host/rest/v1/call_feedback?customer_phone=eq.${encodeURIComponent(phone)}&select=*&order=created_at.desc&limit=1`;
-        } else {
-          url = `https://app-supabase.9krcxo.easypanel.host/rest/v1/call_feedback?order_number=eq.${encodeURIComponent(onum)}&select=*&order=created_at.desc&limit=1`;
-        }
-        const res = await fetch(url, {
-          headers: {
-            'apikey': 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNzUwMDEyMjAwLCJleHAiOjE5MDc3Nzg2MDB9.eJ81pv114W4ZLvg0E-AbNtNZExPoLYbxGdeWTY5PVVs',
-            'Authorization': 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNzUwMDEyMjAwLCJleHAiOjE5MDc3Nzg2MDB9.eJ81pv114W4ZLvg0E-AbNtNZExPoLYbxGdeWTY5PVVs'
+        // FIRST: Check if feedback exists for THIS specific order_number
+        let prev = null;
+        let isCurrentOrder = false;
+        
+        if (onum) {
+          const urlByOrder = `https://app-supabase.9krcxo.easypanel.host/rest/v1/call_feedback?order_number=eq.${encodeURIComponent(onum)}&select=*&order=created_at.desc&limit=1`;
+          const resByOrder = await fetch(urlByOrder, {
+            headers: {
+              'apikey': 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNzUwMDEyMjAwLCJleHAiOjE5MDc3Nzg2MDB9.eJ81pv114W4ZLvg0E-AbNtNZExPoLYbxGdeWTY5PVVs',
+              'Authorization': 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNzUwMDEyMjAwLCJleHAiOjE5MDc3Nzg2MDB9.eJ81pv114W4ZLvg0E-AbNtNZExPoLYbxGdeWTY5PVVs'
+            }
+          });
+          if (resByOrder.ok) {
+            const arrByOrder = await resByOrder.json();
+            if (Array.isArray(arrByOrder) && arrByOrder.length) {
+              prev = arrByOrder[0];
+              isCurrentOrder = true;
+            }
           }
-        });
-        if (!res.ok) { setPrevFeedback(null); setReadOnlyFeedback(false); return; }
-        const arr = await res.json();
-        const prev = (Array.isArray(arr) && arr.length ? arr[0] : null);
+        }
+        
+        // SECOND: If no feedback for current order, check customer's other orders (for reference only)
+        if (!prev && phone) {
+          const urlByPhone = `https://app-supabase.9krcxo.easypanel.host/rest/v1/call_feedback?customer_phone=eq.${encodeURIComponent(phone)}&select=*&order=created_at.desc&limit=1`;
+          const resByPhone = await fetch(urlByPhone, {
+            headers: {
+              'apikey': 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNzUwMDEyMjAwLCJleHAiOjE5MDc3Nzg2MDB9.eJ81pv114W4ZLvg0E-AbNtNZExPoLYbxGdeWTY5PVVs',
+              'Authorization': 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNzUwMDEyMjAwLCJleHAiOjE5MDc3Nzg2MDB9.eJ81pv114W4ZLvg0E-AbNtNZExPoLYbxGdeWTY5PVVs'
+            }
+          });
+          if (resByPhone.ok) {
+            const arrByPhone = await resByPhone.json();
+            if (Array.isArray(arrByPhone) && arrByPhone.length) {
+              prev = arrByPhone[0];
+              isCurrentOrder = false; // This is from a different order
+            }
+          }
+        }
+        
         setPrevFeedback(prev);
         if (prev) {
-          setReadOnlyFeedback(true);
+          // Check if the feedback record has actual data (not just empty placeholder)
+          const hasActualData = !!(
+            prev.heard_from || 
+            prev.first_time_reason || 
+            prev.reorder_reason || 
+            prev.liked_features || 
+            prev.usage_recipe || 
+            prev.usage_time || 
+            prev.family_user || 
+            prev.gender || 
+            prev.age || 
+            prev.new_product_expectation ||
+            prev.marital_status ||
+            prev.profession_text ||
+            prev.city_text
+          );
+          
+          // Only mark as "already filled" (read-only) if:
+          // 1. Feedback is for THIS order (not another order), AND
+          // 2. The record has actual feedback data (not just empty placeholder)
+          setReadOnlyFeedback(isCurrentOrder && hasActualData);
           // Prefill the form fields from previous feedback
           setFeedbackForm(prevState => ({
             ...prevState,
