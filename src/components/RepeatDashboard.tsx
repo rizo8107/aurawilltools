@@ -3196,7 +3196,22 @@ export default function RepeatDashboard() {
                   
                   {hasMore && (
                     <div className="mt-3 pt-3 border-t text-center">
-                      <button className="text-xs text-blue-600 hover:underline">
+                      <button 
+                        onClick={() => {
+                          // Get all records for this field
+                          const drillData = nrFiltered.map(r => ({
+                            answer: String((r as any)[field] ?? '').trim(),
+                            timestamp: (r as any)['Timestamp'] || '',
+                            agent: (r as any)['Agent Name'] || '',
+                            rawData: r
+                          })).filter(d => d.answer && d.answer !== 'null' && d.answer !== 'undefined');
+                          
+                          setNrDrillRows(drillData);
+                          setNrDrillTitle(`${q.question} - All Responses (${drillData.length})`);
+                          setNrDrillOpen(true);
+                        }}
+                        className="text-xs text-blue-600 hover:underline"
+                      >
                         View all {answers.length} responses
                       </button>
                     </div>
@@ -3246,18 +3261,45 @@ export default function RepeatDashboard() {
       {/* Drill-down dialog for Non-Repeated data */}
       {nrDrillOpen && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl shadow-2xl max-w-6xl w-full max-h-[90vh] overflow-auto">
+          <div className="bg-white rounded-xl shadow-2xl max-w-6xl w-full max-h-[90vh] overflow-hidden flex flex-col">
             <div className="sticky top-0 bg-white border-b p-4 flex items-center justify-between">
               <h3 className="text-lg font-semibold">{nrDrillTitle}</h3>
-              <button onClick={() => setNrDrillOpen(false)} className="text-gray-500 hover:text-gray-700">
+              <button onClick={() => setNrDrillOpen(false)} className="text-gray-500 hover:text-gray-700" title="Close">
                 <X className="w-5 h-5" />
               </button>
             </div>
-            <div className="p-4">
-              {/* Drill content would go here - simplified for now */}
-              <div className="text-sm text-gray-600">
-                Showing {nrDrillRows.length} records
-              </div>
+            <div className="flex-1 overflow-auto">
+              {nrDrillRows.length === 0 ? (
+                <div className="p-8 text-center text-gray-500">
+                  No data to display
+                </div>
+              ) : (
+                <table className="w-full text-sm">
+                  <thead className="bg-gray-50 sticky top-0">
+                    <tr>
+                      <th className="px-4 py-3 text-left font-semibold text-gray-700 border-b">#</th>
+                      <th className="px-4 py-3 text-left font-semibold text-gray-700 border-b">Answer</th>
+                      <th className="px-4 py-3 text-left font-semibold text-gray-700 border-b">Agent</th>
+                      <th className="px-4 py-3 text-left font-semibold text-gray-700 border-b">Timestamp</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {nrDrillRows.map((row: any, idx: number) => (
+                      <tr key={idx} className="hover:bg-gray-50 border-b">
+                        <td className="px-4 py-3 text-gray-600">{idx + 1}</td>
+                        <td className="px-4 py-3 text-gray-900">{row.answer || '-'}</td>
+                        <td className="px-4 py-3 text-gray-700">{row.agent || '-'}</td>
+                        <td className="px-4 py-3 text-gray-600 text-xs">
+                          {row.timestamp ? new Date(row.timestamp).toLocaleString() : '-'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+            <div className="border-t p-4 bg-gray-50 text-sm text-gray-600">
+              Showing {nrDrillRows.length} record{nrDrillRows.length !== 1 ? 's' : ''}
             </div>
           </div>
         </div>
