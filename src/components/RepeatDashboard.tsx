@@ -3006,871 +3006,566 @@ export default function RepeatDashboard() {
             </div>
           </div>
 
-          {/* Pivot Reports */}
+          {/* Question-Based Feedback Report */}
           {(() => {
-            // helpers
-            const dk = nrFiltered.length ? (['Date','date'].find(k=>k in nrFiltered[0]) || Object.keys(nrFiltered[0]).find(k => /date|created/i.test(k))) : undefined;
-            if (!dk && nrFiltered.length > 0) return <div className="bg-white rounded-lg shadow p-4 text-slate-500 text-sm">No date field detected for pivot</div>;
+            if (nrFiltered.length === 0) return <div className="bg-white rounded-lg shadow p-4 text-slate-500 text-sm">No data to display. Adjust date range or reload.</div>;
             
-            const toDay = (v: any) => {
-              if (!v) return '';
-              const s = String(v).trim();
-              // Handle dd/mm/yyyy or dd-mm-yyyy
-              const m = s.match(/^([0-3]?\d)[/-]([0-1]?\d)[/-](\d{4})$/);
-              if (m) {
-                const dd = m[1].padStart(2, '0');
-                const mm = m[2].padStart(2, '0');
-                const yyyy = m[3];
-                return `${yyyy}-${mm}-${dd}`;
-              }
-              const d = new Date(s);
-              return isNaN(d.getTime()) ? '' : d.toISOString().slice(0,10);
-            };
-            const uniqueSorted = (arr: string[]) => Array.from(new Set(arr)).sort();
-
-            // generic pivot builder
-            const buildPivot = (colKeyCandidates: string[]) => {
-              const ck = nrFiltered.length ? colKeyCandidates.find(k => k in nrFiltered[0]) : undefined;
-              const rowsByDay = new Map<string, any[]>();
-              for (const r of nrFiltered) {
-                const day = dk ? toDay(r[dk]) : '';
-                if (!day) continue;
-                const list = rowsByDay.get(day) || [];
-                list.push(r);
-                rowsByDay.set(day, list);
-              }
-              const days = Array.from(rowsByDay.keys()).sort();
-              const cols = ck ? uniqueSorted(days.flatMap(day => rowsByDay.get(day)!.map((r: any) => String(r[ck] ?? '').trim() || '(Empty)'))) : [];
-              // compute matrix counts
-              const matrix = days.map(day => {
-                const counts = new Map<string, number>();
-                for (const r of rowsByDay.get(day)!) {
-                  const val = ck ? (String(r[ck] ?? '').trim() || '(Empty)') : '';
-                  counts.set(val, (counts.get(val) || 0) + 1);
+            const total = nrFiltered.length;
+            
+            // Debug: log available fields
+            if (nrFiltered.length > 0) {
+              console.log('Available fields in NocoDB data:', Object.keys(nrFiltered[0]));
+            }
+            
+            // Helper: group and count responses for a question
+            const groupAnswers = (fieldCandidates: string[], applyGrouping = true) => {
+              // Find the first field that exists in the data
+              let field: string | null = null;
+              
+              for (const candidate of fieldCandidates) {
+                if (nrFiltered.length > 0 && candidate in nrFiltered[0]) {
+                  field = candidate;
+                  break;
                 }
-                const row = cols.map(c => counts.get(c) || 0);
-                const total = row.reduce((a,b)=>a+b,0);
-                return { day, row, total };
-              });
-              const grandTotals = cols.map((_, ci) => matrix.reduce((a,m)=>a + m.row[ci], 0));
-              const grandTotalAll = matrix.reduce((a,m)=>a + m.total, 0);
-              return { ck, days, cols, matrix, grandTotals, grandTotalAll } as const;
+              }
+              
+              if (!field) {
+                console.log('Field not found, tried:', fieldCandidates);
+                return { field: null, answers: [], rawAnswers: [] };
+              }
+              
+              const counts = new Map<string, number>();
+              let hasData = false;
+              
+              for (const r of nrFiltered) {
+                const raw = (r as any)[field];
+                const answer = String(raw ?? '').trim();
+                
+                // Skip empty responses
+                if (!answer || answer === 'null' || answer === 'undefined') continue;
+                
+                hasData = true;
+                counts.set(answer, (counts.get(answer) || 0) + 1);
+              }
+              
+              // If no data, return empty
+              if (!hasData) {
+                console.log(`Field "${field}" found but has no data`);
+                return { field: null, answers: [], rawAnswers: [] };
+              }
+              
+              let answers = Array.from(counts.entries())
+                .map(([answer, count]) => ({ 
+                  answer, 
+                  count, 
+                  percentage: ((count / total) * 100).toFixed(1) 
+                }))
+                .sort((a, b) => b.count - a.count);
+              
+              const rawAnswers = [...answers];
+              
+              // Apply grouping if enabled and definitions exist
+              if (applyGrouping && nrGrouping[field]) {
+                const groupDef = nrGrouping[field];
+                const groupedCounts = new Map<string, number>();
+                
+                for (const item of answers) {
+                  const category = groupDef[item.answer] || item.answer;
+                  groupedCounts.set(category, (groupedCounts.get(category) || 0) + item.count);
+                }
+                
+                answers = Array.from(groupedCounts.entries())
+                  .map(([answer, count]) => ({ 
+                    answer, 
+                    count, 
+                    percentage: ((count / total) * 100).toFixed(1) 
+                  }))
+                  .sort((a, b) => b.count - a.count);
+              }
+              
+              console.log(`Field "${field}" has ${answers.length} unique answers`);
+              return { field, answers, rawAnswers };
             };
 
-            // Build pivots
-            const p1 = buildPivot(['Call Status','Status','Call status','call_status']);
-            const p2 = buildPivot(['Agent','agent']);
-            const p3 = buildPivot(['Call reason','Reason','call_reason','Call Reason']);
-
-            const renderPivot = (title: string, p: ReturnType<typeof buildPivot>, kind: 'status'|'agent'|'reason') => {
-              // derive displayed columns with filter/sort controls
-              const q = (kind==='status'?nrPivotFilterStatus:kind==='agent'?nrPivotFilterAgent:nrPivotFilterReason).toLowerCase();
-              const sortKey = (kind==='status'?nrPivotSortStatus:kind==='agent'?nrPivotSortAgent:nrPivotSortReason);
-              const dir = (kind==='status'?nrPivotDirStatus:kind==='agent'?nrPivotDirAgent:nrPivotDirReason);
-              const sel = (kind==='status'?nrPivotColsStatus:kind==='agent'?nrPivotColsAgent:nrPivotColsReason);
-              const setSel = (v: string[] | null) => {
-                if (kind==='status') setNrPivotColsStatus(v); else if (kind==='agent') setNrPivotColsAgent(v); else setNrPivotColsReason(v);
-              };
-              const shown = (kind==='status'?nrShowStatusTable:kind==='agent'?nrShowAgentTable:nrShowReasonTable);
-              const toggleShown = () => {
-                if (kind==='status') setNrShowStatusTable(v=>!v);
-                else if (kind==='agent') setNrShowAgentTable(v=>!v);
-                else setNrShowReasonTable(v=>!v);
-              };
-              const baseCols = p.cols.map((name, idx) => ({ name, total: p.grandTotals[idx], idx }));
-              let colsView = baseCols;
-              if (q) colsView = colsView.filter(c => c.name.toLowerCase().includes(q));
-              if (sel !== null) {
-                const allowed = new Set(sel);
-                colsView = colsView.filter(c => allowed.has(c.name));
+            // Define feedback questions matching NocoDB structure
+            const questions = [
+              {
+                question: 'Filled by Agent',
+                fields: ['Agent Name'],
+                icon: '👤'
+              },
+              {
+                question: 'How was your experience using our health mix so far?',
+                fields: ['How was your experience using our health mix so far?'],
+                icon: '⭐'
+              },
+              {
+                question: 'How was your experience using our health mix so far? (Categorized)',
+                fields: ['How was your experience using our health mix so far? c'],
+                icon: '📊'
+              },
+              {
+                question: 'What stopped you from buying again after your second purchase?',
+                fields: ['May I know what stopped you from buying again after your second purchase?'],
+                icon: '🔄'
+              },
+              {
+                question: 'What stopped you from buying again? (Categorized)',
+                fields: ['May I know what stopped you from buying again after your second purchase? c'],
+                icon: '📊'
+              },
+              {
+                question: 'Did you face any issues with taste, results, or daily usage?',
+                fields: ['Did you face any issues with the taste, results, or using the product daily?'],
+                icon: '🍲'
+              },
+              {
+                question: 'Did you face any delivery or packaging issues?',
+                fields: ['Did you face any delivery or packaging issues in your earlier orders?'],
+                icon: '📦'
+              },
+              {
+                question: 'Is there anything we should improve in the product?',
+                fields: ['Is there anything you feel we should improve in the product?'],
+                icon: '💡'
+              },
+              {
+                question: 'Are you interested in monthly subscription?',
+                fields: ['We have introduced a subscription option for our repeat customers. Are you interested in this?'],
+                icon: '📅'
+              },
+              {
+                question: 'Last Order Date',
+                fields: ['Last order date'],
+                icon: '📆'
               }
-              colsView = colsView.sort((a,b)=>{
-                const sign = dir==='asc'?1:-1;
-                return sortKey==='name' ? sign * a.name.localeCompare(b.name) : sign * (a.total - b.total);
-              });
-              const openDrill = (value: string) => {
-                if (!p.ck) return;
-                const norm = (v: any) => {
-                  const s = String(v ?? '').trim();
-                  return s || '(Empty)';
-                };
-                const rowsMatch = nrFiltered.filter((r: any) => norm(r[p.ck!]) === value);
-                setNrDrillRows(rowsMatch);
-                setNrDrillTitle(`${title} — ${value}`);
-                setNrDrillPage(1);
-                setNrDrillOpen(true);
-              };
+            ];
+
+            // Render question card
+            const renderQuestion = (q: typeof questions[0]) => {
+              const { field, answers, rawAnswers } = groupAnswers(q.fields);
+              
+              // Debug: log which fields are not found
+              if (!field) {
+                console.log(`Field not found for question: ${q.question}, tried:`, q.fields);
+                return null;
+              }
+              
+              if (answers.length === 0) {
+                console.log(`No answers for question: ${q.question}, field: ${field}`);
+                return null;
+              }
+              
+              const displayAnswers = answers.slice(0, 10);
+              const hasMore = answers.length > 10;
+              const hasGrouping = nrGrouping[field] && Object.keys(nrGrouping[field]).length > 0;
+              
               return (
-              <div className="bg-white rounded-lg shadow p-3 overflow-auto border">
-                <div className="text-sm font-semibold mb-2">{title}</div>
-                {!p.ck ? (
-                  <div className="text-slate-500 text-sm">Field not found</div>
-                ) : (
-                  <>
-                  {/* Column controls */}
-                  <div className="flex items-end gap-2 mb-2 text-xs">
-                    <div>
-                      <label className="block text-[11px] text-gray-600 mb-1">Filter columns</label>
-                      <input value={kind==='status'?nrPivotFilterStatus:kind==='agent'?nrPivotFilterAgent:nrPivotFilterReason}
-                        onChange={(e)=>{ const v=e.target.value; if(kind==='status') setNrPivotFilterStatus(v); else if(kind==='agent') setNrPivotFilterAgent(v); else setNrPivotFilterReason(v); }}
-                        placeholder="type to filter"
-                        className="ring-1 ring-slate-200 rounded px-2 py-1" />
+                <div key={q.question} className="bg-white rounded-lg shadow border p-4">
+                  <div className="flex items-start gap-2 mb-3">
+                    <span className="text-xl">{q.icon}</span>
+                    <div className="flex-1">
+                      <div className="text-sm font-semibold text-gray-800">{q.question}</div>
+                      <div className="text-xs text-gray-500 mt-1">
+                        {answers.length} response{answers.length !== 1 ? 's' : ''} 
+                        {hasGrouping && <span className="ml-1 text-green-600">• Grouped</span>}
+                      </div>
                     </div>
-                    <div>
-                      <label className="block text-[11px] text-gray-600 mb-1">Sort by</label>
-                      <select value={sortKey} onChange={(e)=>{ const v=e.target.value as 'name'|'total'; if(kind==='status') setNrPivotSortStatus(v); else if(kind==='agent') setNrPivotSortAgent(v); else setNrPivotSortReason(v);} } className="ring-1 ring-slate-200 rounded px-2 py-1" title="Sort by">
-                        <option value="total">Total</option>
-                        <option value="name">Name</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block text-[11px] text-gray-600 mb-1">Direction</label>
-                      <select value={dir} onChange={(e)=>{ const v=e.target.value as 'asc'|'desc'; if(kind==='status') setNrPivotDirStatus(v); else if(kind==='agent') setNrPivotDirAgent(v); else setNrPivotDirReason(v);} } className="ring-1 ring-slate-200 rounded px-2 py-1" title="Direction">
-                        <option value="desc">Desc</option>
-                        <option value="asc">Asc</option>
-                      </select>
-                    </div>
-                    <div>
-                      <details>
-                        <summary className="cursor-pointer select-none px-2 py-1 border rounded bg-white">Columns</summary>
-                        <div className="mt-2 p-2 border rounded bg-white shadow-sm max-h-64 overflow-auto min-w-[220px]">
-                          <div className="flex items-center justify-between mb-2">
-                            <button className="px-2 py-1 border rounded text-xs" onClick={(e)=>{e.preventDefault(); setSel([...p.cols]);}}>Select All</button>
-                            <button className="px-2 py-1 border rounded text-xs" onClick={(e)=>{e.preventDefault(); setSel([]);}}>Clear</button>
-                            <button className="px-2 py-1 border rounded text-xs" onClick={(e)=>{e.preventDefault(); setSel(null);}}>Reset</button>
-                          </div>
-                          <div className="space-y-1">
-                            {p.cols.map(name=>{
-                              const checked = sel===null ? true : sel.includes(name);
-                              return (
-                                <label key={name} className="flex items-center gap-2 text-xs">
-                                  <input type="checkbox" checked={checked} onChange={(e)=>{
-                                    if (sel===null) {
-                                      const next = p.cols.slice();
-                                      if (!e.target.checked) {
-                                        const i = next.indexOf(name); if (i>=0) next.splice(i,1);
-                                      }
-                                      setSel(next);
-                                    } else {
-                                      const set = new Set(sel);
-                                      if (e.target.checked) set.add(name); else set.delete(name);
-                                      setSel(Array.from(set));
-                                    }
-                                  }} />
-                                  <span className="truncate" title={name}>{name}</span>
-                                </label>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      </details>
-                    </div>
-                  </div>
-                  <div className="mb-3">
-                    <button onClick={()=>{ if(p.ck){ setNrDrillRows(nrFiltered); setNrDrillTitle(`${title} — All (${p.grandTotalAll})`); setNrDrillPage(1); setNrDrillOpen(true);} }} className="inline-flex items-baseline bg-slate-50 border border-slate-200 rounded px-3 py-2 hover:bg-slate-100">
-                      <div className="text-xs text-gray-500 mr-2">Grand Total</div>
-                      <div className="text-xl font-semibold">{p.grandTotalAll}</div>
+                    <button
+                      onClick={() => setNrGroupOpen({ key: field })}
+                      className="text-xs px-2 py-1 border rounded hover:bg-gray-50 flex-shrink-0"
+                      title="Group similar answers"
+                    >
+                      Group
                     </button>
                   </div>
-                  <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-2 mb-3">
-                    {colsView.map((c) => (
-                      <button key={c.name} onClick={()=>openDrill(c.name)} className="text-left bg-white border border-slate-200 rounded p-2 hover:bg-slate-50 cursor-pointer">
-                        <div className="text-[11px] text-gray-500 truncate" title={c.name}>{c.name}</div>
-                        <div className="text-lg font-semibold">{c.total}</div>
-                      </button>
+                  
+                  <div className="space-y-2">
+                    {displayAnswers.map((item, idx) => (
+                      <div key={idx} className="flex items-start gap-3 p-2 rounded hover:bg-gray-50">
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm text-gray-700 break-words">{item.answer}</div>
+                        </div>
+                        <div className="flex items-center gap-2 flex-shrink-0">
+                          <span className="text-sm font-medium text-gray-900">{item.count}</span>
+                          <span className="text-xs text-gray-500">({item.percentage}%)</span>
+                        </div>
+                      </div>
                     ))}
                   </div>
-                  <div className="flex items-center justify-end mb-2 text-xs">
-                    <button onClick={toggleShown} className="px-2 py-1 rounded border hover:bg-slate-50">{shown?'Hide Table':'Show Table'}</button>
-                  </div>
-                  {shown && (() => {
-                    const totalPages = Math.max(1, Math.ceil(p.matrix.length / nrPivotPageSize));
-                    const start = (nrPivotPage - 1) * nrPivotPageSize;
-                    const slice = p.matrix.slice(start, start + nrPivotPageSize);
-                    return (
-                      <>
-                        <div className="flex items-center justify-between mb-2 text-xs">
-                          <div className="text-slate-600">Rows Page {nrPivotPage} / {totalPages}</div>
-                          <div className="flex items-center gap-2">
-                            <button disabled={nrPivotPage<=1} onClick={() => setNrPivotPage(pv=>Math.max(1,pv-1))} className={`px-2 py-1 rounded border ${nrPivotPage<=1?'opacity-50':'hover:bg-slate-50'}`}>Prev</button>
-                            <button disabled={nrPivotPage>=totalPages} onClick={() => setNrPivotPage(pv=>Math.min(totalPages,pv+1))} className={`px-2 py-1 rounded border ${nrPivotPage>=totalPages?'opacity-50':'hover:bg-slate-50'}`}>Next</button>
-                            <select title="Rows per page" value={nrPivotPageSize} onChange={(e)=>{ setNrPivotPageSize(Number(e.target.value)); setNrPivotPage(1); }} className="ring-1 ring-slate-200 rounded px-2 py-1">
-                              {[10,15,25,50].map(n=> <option key={n} value={n}>{n}/page</option>)}
-                            </select>
-                          </div>
-                        </div>
-                        <table className="min-w-full text-xs">
-                          <thead className="bg-slate-50">
-                            <tr className="*:px-2 *:py-1 *:whitespace-nowrap text-left">
-                              <th>Date</th>
-                              {colsView.map(c => <th key={c.name}>{c.name}</th>)}
-                              <th>Grand Total</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y">
-                            {slice.map(m => (
-                              <tr key={m.day} className="*:px-2 *:py-1">
-                                <td className="font-medium">{m.day}</td>
-                                {colsView.map(c => {
-                                  const originalIdx = c.idx;
-                                  const val = m.row[originalIdx] || 0;
-                                  return <td key={c.name}>{val || ''}</td>;
-                                })}
-                                <td className="font-semibold">{m.total}</td>
-                              </tr>
-                            ))}
-                          </tbody>
-                          <tfoot className="bg-slate-50">
-                            <tr className="*:px-2 *:py-1">
-                              <td className="font-semibold">Grand Total</td>
-                              {colsView.map(c => (<td key={c.name} className="font-semibold">{c.total}</td>))}
-                              <td className="font-bold">{p.grandTotalAll}</td>
-                            </tr>
-                          </tfoot>
-                        </table>
-                      </>
-                    );
-                  })()}
-                  </>
-                )}
-              </div>
-            ); } 
+                  
+                  {hasMore && (
+                    <div className="mt-3 pt-3 border-t text-center">
+                      <button className="text-xs text-blue-600 hover:underline">
+                        View all {answers.length} responses
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            };
 
             return (
               <div className="space-y-4">
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                  <div className="bg-white rounded-lg shadow p-4 border">
-                    <div className="text-xs text-gray-500">By Call Status  Grand Total</div>
-                    <div className="text-2xl font-semibold">{p1.grandTotalAll}</div>
-                  </div>
-                  <div className="bg-white rounded-lg shadow p-4 border">
-                    <div className="text-xs text-gray-500">By Agent  Grand Total</div>
-                    <div className="text-2xl font-semibold">{p2.grandTotalAll}</div>
-                  </div>
-                  <div className="bg-white rounded-lg shadow p-4 border">
-                    <div className="text-xs text-gray-500">By Call Reason  Grand Total</div>
-                    <div className="text-2xl font-semibold">{p3.grandTotalAll}</div>
-                  </div>
+                <div className="flex items-center justify-between">
+                  <div className="text-base font-semibold">📊 Feedback Report (Question-Based)</div>
+                  <div className="text-xs text-gray-500">Showing {total} total responses</div>
                 </div>
-                <div className="bg-white rounded-lg shadow p-4 border">
-                  {(() => {
-                    if (!nrFiltered.length) {
-                      return <div className="text-sm text-gray-500">No data for agent text report.</div>;
-                    }
-
-                    const q1Keys = [
-                      'How was your experience using our health mix so far?',
-                      'experience_using_health_mix',
-                      'Experience using our health mix so far',
-                    ];
-                    const q2Keys = [
-                      'May I know what stopped you from buying again after your second purchase?',
-                      'stopped_buying_reason',
-                      'Reason for not buying again',
-                    ];
-
-                    const getText = (r: any, keys: string[]): string => {
-                      for (const k of keys) {
-                        if (k in r && r[k]) return String(r[k]);
-                      }
-                      return '';
-                    };
-
-                    const categorizeExperience = (raw: string): string => {
-                      const s = String(raw || '').toLowerCase();
-                      if (!s.trim()) return '(Empty)';
-                      if (s.includes('no change') || s.includes("didn't notice") || s.includes('didnt notice')) return 'No noticeable change';
-                      if (s.includes('not good') || s.includes('bad') || s.includes('issue') || s.includes('problem') || s.includes('not properly')) return 'Negative / Issue';
-                      if (s.includes('energetic') || s.includes('felt good') || s.includes('overall experience was good') || s.includes('overall experience is good')) return 'Positive / Good';
-                      if (s.includes('good') || s.includes('tasty') || s.includes('taste') || s.includes('like the product') || s.includes('liked the product')) return 'Positive / Good';
-                      return 'Other / Mixed';
-                    };
-
-                    const categorizeStopReason = (raw: string): string => {
-                      const s = String(raw || '').toLowerCase();
-                      if (!s.trim()) return '(Empty)';
-                      if (s.includes('personal reason') || s.includes('personal')) return 'Personal reason';
-                      if (s.includes('busy') || s.includes('work') || s.includes('no time') || s.includes('time') || s.includes('convenient')) return 'Time / Busy';
-                      if (s.includes('health') || s.includes('doctor') || s.includes('pregnan') || s.includes('bp') || s.includes('sugar')) return 'Health reasons';
-                      if (s.includes('taste') || s.includes('flavour') || s.includes('flavor')) return 'Taste / Product experience';
-                      if (s.includes('not properly roasted') || s.includes('grinded') || s.includes('quality') || s.includes('result')) return 'Product quality / result';
-                      if (s.includes('parent') || s.includes('family') || s.includes('wife')) return 'Family decision';
-                      if (s.includes('afford') || s.includes('money') || s.includes('price') || s.includes('cost') || s.includes('rate is also bit high')) return 'Price / Affordability';
-                      if (s.includes('no specific reason') || s === 'no' || s.includes('nothing')) return 'No specific reason';
-                      return 'Other';
-                    };
-
-                    type AgentBucket = {
-                      total: number;
-                      q1: Map<string, number>;
-                      q2: Map<string, number>;
-                    };
-
-                    const byAgent = new Map<string, AgentBucket>();
-                    for (const r of nrFiltered as any[]) {
-                      const rawAgent = r['Agent Name'] ?? r['Agent'] ?? r['agent'];
-                      const agent = String(rawAgent ?? '').trim() || '(Unassigned)';
-                      const bucket = byAgent.get(agent) || { total: 0, q1: new Map(), q2: new Map() };
-                      bucket.total += 1;
-
-                      const t1 = getText(r, q1Keys).trim();
-                      if (t1) bucket.q1.set(t1, (bucket.q1.get(t1) || 0) + 1);
-
-                      const t2 = getText(r, q2Keys).trim();
-                      if (t2) bucket.q2.set(t2, (bucket.q2.get(t2) || 0) + 1);
-
-                      byAgent.set(agent, bucket);
-                    }
-
-                    const agents = Array.from(byAgent.entries()).sort((a, b) => b[1].total - a[1].total);
-
-                    // Get all unique Q1 and Q2 texts across all agents for grouping modal
-                    const allQ1Texts = new Set<string>();
-                    const allQ2Texts = new Set<string>();
-                    for (const [, bucket] of agents) {
-                      for (const [text] of Array.from(bucket.q1.entries())) allQ1Texts.add(text);
-                      for (const [text] of Array.from(bucket.q2.entries())) allQ2Texts.add(text);
-                    }
-
-                    return (
-                      <div className="space-y-3">
-                        <div className="flex items-center justify-between mb-1">
-                          <div className="text-sm font-semibold">Agent Text Report</div>
-                          <div className="flex items-center gap-3">
-                            <button className="text-[11px] text-indigo-700 hover:underline" onClick={() => setNrGroupOpen({ key: 'q1' })} title="Group Q1 answers">Group Experience</button>
-                            <button className="text-[11px] text-indigo-700 hover:underline" onClick={() => setNrGroupOpen({ key: 'q2' })} title="Group Q2 answers">Group Stop Reason</button>
-                            <div className="text-[11px] text-gray-500">Layout inspired by your spreadsheet</div>
-                          </div>
-                        </div>
-                        {agents.map(([agent, bucket]) => (
-                          <div key={agent} className="border rounded-lg p-3">
-                            <div className="flex items-center justify-between mb-2">
-                              <div className="font-semibold text-sm">{agent}</div>
-                              <div className="text-xs text-gray-600">Total forms: {bucket.total}</div>
-                            </div>
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
-                              <div>
-                                <div className="flex items-center justify-between mb-1">
-                                  <div className="text-xs font-semibold text-gray-700">How was your experience using our health mix so far?</div>
-                                  <button className="text-[10px] text-indigo-600 hover:underline" onClick={() => setNrGroupOpen({ key: 'q1' })} title="Group similar answers">Group</button>
-                                </div>
-                                {(() => {
-                                  if (bucket.q1.size === 0) {
-                                    return <div className="text-xs text-gray-500">No answers</div>;
-                                  }
-                                  const catCounts = new Map<string, number>();
-                                  for (const [text, count] of Array.from(bucket.q1.entries())) {
-                                    const cat = categorizeExperience(text);
-                                    catCounts.set(cat, (catCounts.get(cat) || 0) + count);
-                                  }
-                                  const rows = Array.from(catCounts.entries()).sort((a, b) => b[1] - a[1]);
-
-                                  // Apply custom groupings - merge items assigned to same group
-                                  const gmap = nrGrouping['q1'] || {};
-                                  const grouped = new Map<string, { key: string; text: string; count: number; isCustomGroup: boolean }>();
-                                  for (const [text, count] of Array.from(bucket.q1.entries())) {
-                                    // If this text is assigned to a custom group, use the group name as key
-                                    const customGroup = gmap[text];
-                                    if (customGroup) {
-                                      const existing = grouped.get(customGroup);
-                                      if (existing) {
-                                        existing.count += count;
-                                      } else {
-                                        grouped.set(customGroup, { key: customGroup, text: customGroup, count, isCustomGroup: true });
-                                      }
-                                    } else {
-                                      // No custom group - use original text as key
-                                      const existing = grouped.get(text);
-                                      if (existing) {
-                                        existing.count += count;
-                                      } else {
-                                        grouped.set(text, { key: text, text, count, isCustomGroup: false });
-                                      }
-                                    }
-                                  }
-                                  const answerRows = Array.from(grouped.values()).sort((a, b) => b.count - a.count);
-                                  return (
-                                    <>
-                                      <div className="overflow-x-auto mb-1">
-                                        <table className="w-full text-[11px] border border-slate-200 rounded">
-                                          <thead className="bg-slate-50">
-                                            <tr>
-                                              <th className="text-left px-2 py-1">Category</th>
-                                              <th className="text-right px-2 py-1">Count</th>
-                                            </tr>
-                                          </thead>
-                                          <tbody>
-                                            {rows.map(([catName, catCount]) => (
-                                              <tr 
-                                                key={catName} 
-                                                className="border-t border-slate-100 cursor-pointer hover:bg-indigo-50"
-                                                onClick={() => {
-                                                  const matchRows = (nrFiltered as any[]).filter((r) => {
-                                                    const rawAgent = r['Agent Name'] ?? r['Agent'] ?? r['agent'];
-                                                    const agentName = String(rawAgent ?? '').trim() || '(Unassigned)';
-                                                    if (agentName !== agent) return false;
-                                                    const t = getText(r, q1Keys);
-                                                    return categorizeExperience(t) === catName;
-                                                  });
-                                                  setNrDrillRows(matchRows);
-                                                  setNrDrillTitle(`${agent} — Experience — ${catName}`);
-                                                  setNrDrillPage(1);
-                                                  setNrDrillOpen(true);
-                                                }}
-                                              >
-                                                <td className="px-2 py-1 whitespace-nowrap text-xs">{catName}</td>
-                                                <td className="px-2 py-1 text-right text-xs text-indigo-600 font-medium">{catCount}</td>
-                                              </tr>
-                                            ))}
-                                          </tbody>
-                                        </table>
-                                      </div>
-                                      <div className="space-y-1 max-h-60 overflow-y-auto">
-                                        {answerRows.map(({ key, text, count, isCustomGroup }) => (
-                                          <div
-                                            key={key}
-                                            className={`grid grid-cols-[1fr_auto] gap-2 items-start cursor-pointer hover:bg-slate-50 rounded px-1 ${isCustomGroup ? 'bg-indigo-50 border-l-2 border-indigo-400' : ''}`}
-                                            onClick={() => {
-                                              const matchRows = (nrFiltered as any[]).filter((r) => {
-                                                const rawAgent = r['Agent Name'] ?? r['Agent'] ?? r['agent'];
-                                                const agentName = String(rawAgent ?? '').trim() || '(Unassigned)';
-                                                if (agentName !== agent) return false;
-                                                const t = getText(r, q1Keys);
-                                                // For custom groups, match all texts assigned to this group
-                                                if (isCustomGroup) {
-                                                  return gmap[t] === key;
-                                                }
-                                                // For non-grouped items, match exact text
-                                                return t === key && !gmap[t];
-                                              });
-                                              setNrDrillRows(matchRows);
-                                              setNrDrillTitle(`${agent} — Experience — ${text}`);
-                                              setNrDrillPage(1);
-                                              setNrDrillOpen(true);
-                                            }}
-                                          >
-                                            <div className="text-xs whitespace-pre-wrap">{text}{isCustomGroup && <span className="ml-1 text-[10px] text-indigo-600">(grouped)</span>}</div>
-                                            <div className="text-xs font-semibold text-right">{count}</div>
-                                          </div>
-                                        ))}
-                                      </div>
-                                    </>
-                                  );
-                                })()}
-                              </div>
-                              <div>
-                                <div className="flex items-center justify-between mb-1">
-                                  <div className="text-xs font-semibold text-gray-700">May I know what stopped you from buying again after your second purchase?</div>
-                                  <button className="text-[10px] text-indigo-600 hover:underline" onClick={() => setNrGroupOpen({ key: 'q2' })} title="Group similar answers">Group</button>
-                                </div>
-                                {(() => {
-                                  if (bucket.q2.size === 0) {
-                                    return <div className="text-xs text-gray-500">No answers</div>;
-                                  }
-                                  const catCounts = new Map<string, number>();
-                                  for (const [text, count] of Array.from(bucket.q2.entries())) {
-                                    const cat = categorizeStopReason(text);
-                                    catCounts.set(cat, (catCounts.get(cat) || 0) + count);
-                                  }
-                                  const rows = Array.from(catCounts.entries()).sort((a, b) => b[1] - a[1]);
-
-                                  // Apply custom groupings - merge items assigned to same group
-                                  const gmapQ2 = nrGrouping['q2'] || {};
-                                  const grouped = new Map<string, { key: string; text: string; count: number; isCustomGroup: boolean }>();
-                                  for (const [text, count] of Array.from(bucket.q2.entries())) {
-                                    // If this text is assigned to a custom group, use the group name as key
-                                    const customGroup = gmapQ2[text];
-                                    if (customGroup) {
-                                      const existing = grouped.get(customGroup);
-                                      if (existing) {
-                                        existing.count += count;
-                                      } else {
-                                        grouped.set(customGroup, { key: customGroup, text: customGroup, count, isCustomGroup: true });
-                                      }
-                                    } else {
-                                      // No custom group - use original text as key
-                                      const existing = grouped.get(text);
-                                      if (existing) {
-                                        existing.count += count;
-                                      } else {
-                                        grouped.set(text, { key: text, text, count, isCustomGroup: false });
-                                      }
-                                    }
-                                  }
-                                  const answerRows = Array.from(grouped.values()).sort((a, b) => b.count - a.count);
-                                  return (
-                                    <>
-                                      <div className="overflow-x-auto mb-1">
-                                        <table className="w-full text-[11px] border border-slate-200 rounded">
-                                          <thead className="bg-slate-50">
-                                            <tr>
-                                              <th className="text-left px-2 py-1">Category</th>
-                                              <th className="text-right px-2 py-1">Count</th>
-                                            </tr>
-                                          </thead>
-                                          <tbody>
-                                            {rows.map(([catName, catCount]) => (
-                                              <tr 
-                                                key={catName} 
-                                                className="border-t border-slate-100 cursor-pointer hover:bg-indigo-50"
-                                                onClick={() => {
-                                                  const matchRows = (nrFiltered as any[]).filter((r) => {
-                                                    const rawAgent = r['Agent Name'] ?? r['Agent'] ?? r['agent'];
-                                                    const agentName = String(rawAgent ?? '').trim() || '(Unassigned)';
-                                                    if (agentName !== agent) return false;
-                                                    const t = getText(r, q2Keys);
-                                                    return categorizeStopReason(t) === catName;
-                                                  });
-                                                  setNrDrillRows(matchRows);
-                                                  setNrDrillTitle(`${agent} — Stop Reason — ${catName}`);
-                                                  setNrDrillPage(1);
-                                                  setNrDrillOpen(true);
-                                                }}
-                                              >
-                                                <td className="px-2 py-1 whitespace-nowrap text-xs">{catName}</td>
-                                                <td className="px-2 py-1 text-right text-xs text-indigo-600 font-medium">{catCount}</td>
-                                              </tr>
-                                            ))}
-                                          </tbody>
-                                        </table>
-                                      </div>
-                                      <div className="space-y-1 max-h-60 overflow-y-auto">
-                                        {answerRows.map(({ key, text, count, isCustomGroup }) => (
-                                          <div 
-                                            key={key} 
-                                            className={`grid grid-cols-[1fr_auto] gap-2 items-start cursor-pointer hover:bg-slate-50 rounded px-1 ${isCustomGroup ? 'bg-indigo-50 border-l-2 border-indigo-400' : ''}`}
-                                            onClick={() => {
-                                              const matchRows = (nrFiltered as any[]).filter((r) => {
-                                                const rawAgent = r['Agent Name'] ?? r['Agent'] ?? r['agent'];
-                                                const agentName = String(rawAgent ?? '').trim() || '(Unassigned)';
-                                                if (agentName !== agent) return false;
-                                                const t = getText(r, q2Keys);
-                                                // For custom groups, match all texts assigned to this group
-                                                if (isCustomGroup) {
-                                                  return gmapQ2[t] === key;
-                                                }
-                                                // For non-grouped items, match exact text
-                                                return t === key && !gmapQ2[t];
-                                              });
-                                              setNrDrillRows(matchRows);
-                                              setNrDrillTitle(`${agent} — Stop Reason — ${text}`);
-                                              setNrDrillPage(1);
-                                              setNrDrillOpen(true);
-                                            }}
-                                          >
-                                            <div className="text-xs whitespace-pre-wrap">{text}{isCustomGroup && <span className="ml-1 text-[10px] text-indigo-600">(grouped)</span>}</div>
-                                            <div className="text-xs font-semibold text-right">{count}</div>
-                                          </div>
-                                        ))}
-                                      </div>
-                                    </>
-                                  );
-                                })()}
-                              </div>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    );
-                  })()}
+                
+                {/* DEBUG: Show available fields */}
+                {nrFiltered.length > 0 && (
+                  <div className="bg-yellow-50 border border-yellow-200 rounded p-3 text-xs">
+                    <div className="font-semibold mb-1">🔍 Debug: Available fields in data:</div>
+                    <div className="text-gray-700 break-all">
+                      {Object.keys(nrFiltered[0]).join(', ')}
+                    </div>
+                  </div>
+                )}
+                
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                  {questions.map(q => renderQuestion(q))}
                 </div>
+                
+                {/* Show message if no cards rendered */}
+                {questions.every(q => {
+                  const { field, answers } = groupAnswers(q.fields);
+                  return !field || answers.length === 0;
+                }) && (
+                  <div className="bg-gray-50 border rounded p-4 text-center text-sm text-gray-600">
+                    No question cards could be rendered. Check the debug info above to see available fields.
+                  </div>
+                )}
               </div>
             );
+
+            // OLD PIVOT CODE REMOVED - Replaced with Customer Insights style above
           })()}
         </div>
       )}
 
-      {/* Non-Repeated Grouping Modal */}
-      {nrGroupOpen.key && (() => {
-        const key = nrGroupOpen.key;
-        const gmap = nrGrouping[key] || {};
-        // Get all unique texts for this key from nrFiltered
-        const q1Keys = [
-          'How was your experience using our health mix so far?',
-          'experience_using_health_mix',
-          'Experience using our health mix so far',
-        ];
-        const q2Keys = [
-          'May I know what stopped you from buying again after your second purchase?',
-          'stopped_buying_reason',
-          'Reason for not buying again',
-        ];
-        const getText = (r: any, keys: string[]): string => {
-          for (const k of keys) {
-            if (k in r && r[k]) return String(r[k]);
-          }
-          return '';
-        };
-        const allTexts = new Set<string>();
-        for (const r of nrFiltered as any[]) {
-          const t = getText(r, key === 'q1' ? q1Keys : q2Keys).trim();
-          if (t) allTexts.add(t);
+      {/* Drill-down dialog for Non-Repeated data */}
+      {nrDrillOpen && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-2xl max-w-6xl w-full max-h-[90vh] overflow-auto">
+            <div className="sticky top-0 bg-white border-b p-4 flex items-center justify-between">
+              <h3 className="text-lg font-semibold">{nrDrillTitle}</h3>
+              <button onClick={() => setNrDrillOpen(false)} className="text-gray-500 hover:text-gray-700">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-4">
+              {/* Drill content would go here - simplified for now */}
+              <div className="text-sm text-gray-600">
+                Showing {nrDrillRows.length} records
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Grouping modal for Non-Repeated questions - Drag & Drop */}
+      {nrGroupOpen && (() => {
+        const fieldKey = nrGroupOpen.key;
+        const currentDefs = nrGrouping[fieldKey] || {};
+        
+        // Get all unique answers for this field
+        const allAnswers = new Set<string>();
+        for (const r of nrRows) {
+          const val = String((r as any)[fieldKey] ?? '').trim();
+          if (val && val !== 'null' && val !== 'undefined') allAnswers.add(val);
         }
-        const allCats = Array.from(allTexts).sort();
-        const defsForKey = nrGroupDefs[key] || [];
-        const mappedGroups = Array.from(new Set(Object.values(gmap))).filter(Boolean);
-        const groups = Array.from(new Set([...defsForKey, ...mappedGroups]));
-        const q = nrGroupUngroupedQuery.trim().toLowerCase();
-        const persist = (nextMap: typeof nrGrouping, nextDefs: typeof nrGroupDefs) => {
-          try {
-            localStorage.setItem('nr_grouping_v1', JSON.stringify(nextMap));
-            localStorage.setItem('nr_groupdefs_v1', JSON.stringify(nextDefs));
-          } catch (e) { console.warn('Failed to save grouping to localStorage', e); }
+        
+        // Group answers by category
+        const categorized = new Map<string, string[]>();
+        const ungrouped: string[] = [];
+        
+        // First, initialize categories from placeholders
+        for (const [answer, category] of Object.entries(currentDefs)) {
+          if (answer.startsWith('__category_placeholder_')) {
+            if (!categorized.has(category)) {
+              categorized.set(category, []);
+            }
+          }
+        }
+        
+        // Then, group actual answers by category
+        for (const answer of Array.from(allAnswers)) {
+          const category = currentDefs[answer];
+          if (category) {
+            if (!categorized.has(category)) categorized.set(category, []);
+            categorized.get(category)!.push(answer);
+          } else {
+            ungrouped.push(answer);
+          }
+        }
+        
+        const filteredUngrouped = nrGroupUngroupedQuery 
+          ? ungrouped.filter(a => a.toLowerCase().includes(nrGroupUngroupedQuery.toLowerCase()))
+          : ungrouped;
+        
+        // Drag handlers
+        const handleDragStart = (e: React.DragEvent, answer: string) => {
+          e.dataTransfer.setData('answer', answer);
+          e.dataTransfer.effectAllowed = 'move';
         };
-        const save = () => persist(nrGrouping, nrGroupDefs);
-        const addGroup = () => {
-          const name = nrGroupNewName.trim();
-          if (!name) return;
-          setNrGroupDefs(d => {
-            const next = { ...d, [key]: Array.from(new Set([...(d[key] || []), name])) };
-            persist(nrGrouping, next);
-            return next;
-          });
-          setNrGroupNewName('');
+        
+        const handleDragOver = (e: React.DragEvent) => {
+          e.preventDefault();
+          e.dataTransfer.dropEffect = 'move';
         };
-        const assign = (cat: string, grp: string) => {
-          setNrGrouping(s => {
-            const m = { ...(s[key] || {}) };
-            m[cat] = grp;
-            const next = { ...s, [key]: m };
-            persist(next, nrGroupDefs);
-            return next;
-          });
+        
+        const handleDropToCategory = (e: React.DragEvent, category: string) => {
+          e.preventDefault();
+          const answer = e.dataTransfer.getData('answer');
+          if (answer && !answer.startsWith('__category_placeholder_')) {
+            const newDefs = { ...currentDefs };
+            // Remove from previous category if it was in one
+            if (currentDefs[answer]) {
+              delete newDefs[answer];
+            }
+            // Add to new category
+            newDefs[answer] = category;
+            
+            setNrGrouping((prev: any) => {
+              const updated = {
+                ...prev,
+                [fieldKey]: newDefs
+              };
+              localStorage.setItem('nr_grouping_v1', JSON.stringify(updated));
+              return updated;
+            });
+          }
         };
-        const onDropTo = (grp: string) => (e: React.DragEvent<HTMLDivElement>) => {
-          const cat = e.dataTransfer.getData('text/plain');
-          if (cat) assign(cat, grp);
+        
+        const handleDropToUngrouped = (e: React.DragEvent) => {
+          e.preventDefault();
+          const answer = e.dataTransfer.getData('answer');
+          if (answer && !answer.startsWith('__category_placeholder_')) {
+            const newDefs = { ...currentDefs };
+            // Remove from any category
+            delete newDefs[answer];
+            
+            setNrGrouping((prev: any) => {
+              const updated = {
+                ...prev,
+                [fieldKey]: newDefs
+              };
+              localStorage.setItem('nr_grouping_v1', JSON.stringify(updated));
+              return updated;
+            });
+          }
         };
-        const addToGroup = (grp: string) => {
-          const input = (nrGroupAddInput[grp] || '').trim();
-          if (!input) return;
-          const cats = input.split(',').map(c => c.trim()).filter(Boolean);
-          cats.forEach(cat => assign(cat, grp));
-          setNrGroupAddInput(prev => ({ ...prev, [grp]: '' }));
-        };
+        
         return (
-          <div className="fixed inset-0 bg-black/30 z-50 flex items-center justify-center p-2 md:p-4" onClick={() => setNrGroupOpen({ key: null })}>
-            <div className="bg-white rounded-lg border shadow-lg w-full max-w-4xl md:max-w-5xl p-3 md:p-4 max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
-              <div className="flex items-center justify-between mb-3">
-                <div className="text-sm font-medium">Group categories — {key === 'q1' ? 'Experience' : 'Stop Reason'}</div>
-                <div className="flex items-center gap-2">
-                  <IconButton onClick={() => { save(); setNrGroupOpen({ key: null }); }}>Done</IconButton>
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-xl shadow-2xl max-w-7xl w-full max-h-[90vh] overflow-hidden flex flex-col">
+              <div className="sticky top-0 bg-white border-b p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-lg font-semibold">Group Answers: {fieldKey}</h3>
+                  <button onClick={() => setNrGroupOpen(null)} className="text-gray-500 hover:text-gray-700" title="Close">
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+                
+                {/* Create new category */}
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={nrGroupNewName}
+                    onChange={(e) => setNrGroupNewName(e.target.value)}
+                    placeholder="New category name (e.g., 'Positive Experience')"
+                    className="flex-1 px-3 py-2 border rounded text-sm"
+                    onKeyPress={(e) => {
+                      if (e.key === 'Enter') {
+                        const categoryName = nrGroupNewName.trim();
+                        if (categoryName) {
+                          setNrGrouping((prev: any) => {
+                            const updated = {
+                              ...prev,
+                              [fieldKey]: { 
+                                ...prev[fieldKey],
+                                [`__category_placeholder_${categoryName}`]: categoryName
+                              }
+                            };
+                            localStorage.setItem('nr_grouping_v1', JSON.stringify(updated));
+                            return updated;
+                          });
+                          setNrGroupNewName('');
+                        }
+                      }
+                    }}
+                  />
+                  <button
+                    onClick={() => {
+                      const categoryName = nrGroupNewName.trim();
+                      if (categoryName) {
+                        setNrGrouping((prev: any) => {
+                          const updated = {
+                            ...prev,
+                            [fieldKey]: { 
+                              ...prev[fieldKey],
+                              [`__category_placeholder_${categoryName}`]: categoryName
+                            }
+                          };
+                          localStorage.setItem('nr_grouping_v1', JSON.stringify(updated));
+                          return updated;
+                        });
+                        setNrGroupNewName('');
+                      }
+                    }}
+                    className="px-4 py-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700"
+                  >
+                    + Create Category
+                  </button>
                 </div>
               </div>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                <div className="border rounded p-2 h-[65vh] md:h-[60vh] flex flex-col overflow-hidden">
-                  <div className="text-xs font-medium mb-2">Ungrouped ({allCats.length} items)</div>
-                  <div className="sticky top-0 bg-white pb-2">
+              
+              {/* Side-by-side drag & drop layout */}
+              <div className="flex-1 overflow-hidden flex gap-4 p-4">
+                {/* LEFT: Ungrouped answers */}
+                <div className="w-1/3 flex flex-col border rounded-lg bg-gray-50">
+                  <div className="p-3 border-b bg-white">
+                    <div className="font-semibold text-sm mb-2">📋 Ungrouped Answers ({filteredUngrouped.length})</div>
                     <input
-                      className="border rounded px-2 py-1 text-xs w-full"
-                      placeholder="Search…"
+                      type="text"
                       value={nrGroupUngroupedQuery}
                       onChange={(e) => setNrGroupUngroupedQuery(e.target.value)}
+                      placeholder="Search answers..."
+                      className="w-full px-2 py-1 border rounded text-xs"
                     />
                   </div>
-                  <div className="flex-1 overflow-y-auto flex flex-col gap-1 pr-1">
-                    {allCats.map(c => {
-                      const isGrouped = !!gmap[c];
-                      const isVisible = !q || c.toLowerCase().includes(q);
-                      if (!isVisible) return null;
-                      return (
+                  <div 
+                    className="flex-1 overflow-auto p-3 space-y-2"
+                    onDragOver={handleDragOver}
+                    onDrop={handleDropToUngrouped}
+                  >
+                    {filteredUngrouped.length === 0 ? (
+                      <div className="text-center text-gray-400 text-sm py-8">
+                        {nrGroupUngroupedQuery ? 'No matches found' : 'All answers are grouped! 🎉'}
+                      </div>
+                    ) : (
+                      filteredUngrouped.map(answer => (
                         <div
-                          key={c}
-                          className={`px-2 py-1 rounded border ${isGrouped ? 'bg-indigo-50 border-indigo-300 text-indigo-900 font-medium' : 'bg-slate-50 border-slate-200'}`}
+                          key={answer}
                           draggable
-                          onDragStart={(e) => e.dataTransfer.setData('text/plain', c)}
-                          title={isGrouped ? `Grouped in: ${gmap[c]}` : c}
+                          onDragStart={(e) => handleDragStart(e, answer)}
+                          className="bg-white border rounded p-2 text-xs cursor-move hover:shadow-md hover:border-blue-400 transition-all"
                         >
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="text-xs truncate">{c}</span>
-                            {isGrouped && (
-                              <span className="text-xs px-1.5 py-0.5 bg-indigo-200 text-indigo-700 rounded shrink-0">
-                                {gmap[c]}
-                              </span>
-                            )}
+                          <div className="flex items-start gap-2">
+                            <span className="text-gray-400">⋮⋮</span>
+                            <span className="flex-1">{answer}</span>
                           </div>
                         </div>
-                      );
-                    })}
-                    {allCats.filter(c => !q || c.toLowerCase().includes(q)).length === 0 && (
-                      <div className="text-xs text-gray-500">No matches</div>
+                      ))
                     )}
                   </div>
                 </div>
-                <div className="col-span-1 md:col-span-2">
-                  <div className="flex items-end gap-2 mb-2">
-                    <div className="text-xs">Groups</div>
-                    <input className="border rounded px-2 py-1 text-sm" placeholder="New group name" value={nrGroupNewName} onChange={(e) => setNrGroupNewName(e.target.value)} />
-                    <IconButton onClick={addGroup}><Plus className="w-4 h-4" />Add</IconButton>
-                    <IconButton onClick={() => {
-                      setNrGrouping(s => { const copy = { ...s }; delete copy[key]; persist(copy, { ...nrGroupDefs, [key]: [] }); return copy; });
-                      setNrGroupDefs(d => ({ ...d, [key]: [] }));
-                    }}>Reset</IconButton>
+                
+                {/* RIGHT: Categories */}
+                <div className="flex-1 flex flex-col border rounded-lg bg-gray-50">
+                  <div className="p-3 border-b bg-white">
+                    <div className="font-semibold text-sm">📁 Categories ({categorized.size})</div>
+                    <div className="text-xs text-gray-500 mt-1">Drag answers from left to categorize them</div>
                   </div>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                    {groups.map(g => (
-                      <div key={g} className="border-2 border-indigo-300 rounded p-2 min-h-[100px] md:min-h-[120px]" onDragOver={(e) => e.preventDefault()} onDrop={onDropTo(g)}>
-                        <div className="flex items-center gap-2 mb-1">
-                          <div className="text-xs font-semibold text-indigo-700">{g}</div>
-                          <span className="text-xs px-1.5 py-0.5 bg-indigo-100 text-indigo-600 rounded-full font-medium">
-                            {Object.entries(gmap).filter(([, grp]) => grp === g).length}
-                          </span>
-                        </div>
-                        <div className="flex flex-wrap gap-1 mb-2">
-                          {Object.entries(gmap).filter(([, grp]) => grp === g).map(([c]) => (
-                            <span key={c} className="px-2 py-1 bg-indigo-100 border-2 border-indigo-400 rounded text-xs font-medium text-indigo-900" draggable onDragStart={(e) => e.dataTransfer.setData('text/plain', c)} title={c}>{c.length > 30 ? c.slice(0, 30) + '…' : c}</span>
-                          ))}
-                        </div>
-                        <div className="flex gap-1 pt-1 border-t">
-                          <input
-                            className="flex-1 border rounded px-2 py-1 text-xs"
-                            placeholder="Add items (comma-separated)"
-                            value={nrGroupAddInput[g] || ''}
-                            onChange={(e) => setNrGroupAddInput(prev => ({ ...prev, [g]: e.target.value }))}
-                            onKeyPress={(e) => { if (e.key === 'Enter') addToGroup(g); }}
-                          />
-                          <button
-                            className="px-2 py-1 text-xs bg-indigo-600 text-white rounded hover:bg-indigo-700"
-                            onClick={() => addToGroup(g)}
-                            title="Add categories to this group"
-                          >
-                            +
-                          </button>
-                        </div>
+                  <div className="flex-1 overflow-auto p-3 space-y-3">
+                    {categorized.size === 0 ? (
+                      <div className="text-center text-gray-400 text-sm py-8">
+                        Create a category above to start grouping answers
                       </div>
-                    ))}
-                    {groups.length === 0 && <div className="text-xs text-gray-500">No groups yet. Create one above.</div>}
+                    ) : (
+                      Array.from(categorized.entries()).map(([category, answers]) => (
+                        <div 
+                          key={category}
+                          className="border rounded-lg bg-white"
+                          onDragOver={handleDragOver}
+                          onDrop={(e) => handleDropToCategory(e, category)}
+                        >
+                          <div className="flex items-center justify-between p-3 border-b bg-gray-50">
+                            <div className="font-semibold text-sm">{category}</div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs text-gray-500 bg-white px-2 py-1 rounded">{answers.length} items</span>
+                              <button
+                                onClick={() => {
+                                  if (confirm(`Delete category "${category}" and ungroup all ${answers.length} answers?`)) {
+                                    const newDefs = { ...currentDefs };
+                                    // Remove all answers from this category
+                                    answers.forEach(a => delete newDefs[a]);
+                                    // Remove placeholder entry for this category
+                                    const placeholderKey = `__category_placeholder_${category}`;
+                                    delete newDefs[placeholderKey];
+                                    
+                                    setNrGrouping((prev: any) => {
+                                      const updated = {
+                                        ...prev,
+                                        [fieldKey]: newDefs
+                                      };
+                                      localStorage.setItem('nr_grouping_v1', JSON.stringify(updated));
+                                      return updated;
+                                    });
+                                  }
+                                }}
+                                className="text-xs text-red-600 hover:bg-red-50 px-2 py-1 rounded"
+                                title="Delete category"
+                              >
+                                🗑️
+                              </button>
+                            </div>
+                          </div>
+                          <div className="p-3 space-y-2 min-h-[60px] bg-blue-50/30">
+                            {answers.map(answer => (
+                              <div
+                                key={answer}
+                                draggable
+                                onDragStart={(e) => handleDragStart(e, answer)}
+                                className="bg-white border rounded p-2 text-xs hover:shadow-md hover:border-blue-400 transition-all group"
+                              >
+                                <div className="flex items-start gap-2">
+                                  <span className="text-gray-400 cursor-move">⋮⋮</span>
+                                  <span className="flex-1">{answer}</span>
+                                  <button
+                                    onClick={() => {
+                                      const newDefs = { ...currentDefs };
+                                      delete newDefs[answer];
+                                      setNrGrouping((prev: any) => {
+                                        const updated = {
+                                          ...prev,
+                                          [fieldKey]: newDefs
+                                        };
+                                        localStorage.setItem('nr_grouping_v1', JSON.stringify(updated));
+                                        return updated;
+                                      });
+                                    }}
+                                    className="text-red-600 hover:bg-red-50 px-1 rounded opacity-0 group-hover:opacity-100 transition-opacity"
+                                    title="Remove from category"
+                                  >
+                                    ✕
+                                  </button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ))
+                    )}
                   </div>
                 </div>
+              </div>
+              
+              <div className="border-t p-4 bg-gray-50 flex items-center justify-between">
+                <div className="text-xs text-gray-600">
+                  💡 Tip: Drag answers from left to right to categorize them. Drag back to left to ungroup.
+                </div>
+                <button
+                  onClick={() => setNrGroupOpen(null)}
+                  className="px-6 py-2 bg-green-600 text-white rounded hover:bg-green-700 font-medium"
+                >
+                  Done
+                </button>
               </div>
             </div>
           </div>
         );
       })()}
-
-      {/* Non-Repeated Drilldown Modal */}
-      {nrDrillOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="bg-white rounded-lg shadow-lg w-[95vw] max-w-5xl max-h-[85vh] flex flex-col">
-            <div className="flex items-center justify-between px-4 py-3 border-b">
-              <div className="font-semibold text-sm truncate pr-3">{nrDrillTitle}</div>
-              <button onClick={()=>setNrDrillOpen(false)} className="px-2 py-1 rounded border hover:bg-slate-50">Close</button>
-            </div>
-            <div className="px-4 py-3 overflow-auto">
-              {(() => {
-                const totalPages = Math.max(1, Math.ceil(nrDrillRows.length / nrDrillPageSize));
-                const start = (nrDrillPage - 1) * nrDrillPageSize;
-                const slice = nrDrillRows.slice(start, start + nrDrillPageSize);
-                return (
-                  <>
-                    <div className="flex items-center justify-between mb-2 text-xs">
-                      <div className="text-slate-600">Rows {start+1}-{Math.min(start+nrDrillPageSize, nrDrillRows.length)} of {nrDrillRows.length} • Page {nrDrillPage}/{totalPages}</div>
-                      <div className="flex items-center gap-2">
-                        <button disabled={nrDrillPage<=1} onClick={()=>setNrDrillPage(p=>Math.max(1,p-1))} className={`px-2 py-1 rounded border ${nrDrillPage<=1?'opacity-50':'hover:bg-slate-50'}`}>Prev</button>
-                        <button disabled={nrDrillPage>=totalPages} onClick={()=>setNrDrillPage(p=>Math.min(totalPages,p+1))} className={`px-2 py-1 rounded border ${nrDrillPage>=totalPages?'opacity-50':'hover:bg-slate-50'}`}>Next</button>
-                        <select title="Rows per page" value={nrDrillPageSize} onChange={(e)=>{ setNrDrillPageSize(Number(e.target.value)); setNrDrillPage(1); }} className="ring-1 ring-slate-200 rounded px-2 py-1">
-                          {[10,20,50,100].map(n=> <option key={n} value={n}>{n}/page</option>)}
-                        </select>
-                      </div>
-                    </div>
-                    <div className="overflow-auto">
-                      <table className="min-w-full text-xs">
-                        <thead className="bg-slate-50">
-                          <tr className="*:px-2 *:py-1 *:whitespace-nowrap text-left">
-                            <th>Id</th>
-                            <th>Date</th>
-                            <th>Customer Number</th>
-                            <th>Agent</th>
-                            <th>Call Status</th>
-                            <th>Experience Answer</th>
-                            <th>Stop Reason Answer</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y">
-                          {slice.map((r: any, i: number)=>{
-                            const dtKey = ['Date','date','created_at','Created At','CreatedAt'].find(k => k in r);
-                            const dt = dtKey ? r[dtKey] : '';
-                            const custNum = r['Customer Number'] ?? r['customer_number'] ?? r['Phone'] ?? r['phone'] ?? r['Mobile'] ?? r['mobile'] ?? '';
-                            const agentName = r['Agent Name'] ?? r['Agent'] ?? r['agent'] ?? r['agent_name'] ?? '';
-                            const callStatus = r['Call Status'] ?? r['Call status'] ?? r['call_status'] ?? r['Status'] ?? r['status'] ?? '';
-                            const q1Keys = ['How was your experience using our health mix so far?', 'experience_using_health_mix', 'Experience using our health mix so far'];
-                            const q2Keys = ['May I know what stopped you from buying again after your second purchase?', 'stopped_buying_reason', 'Reason for not buying again'];
-                            const getVal = (keys: string[]) => { for (const k of keys) if (k in r && r[k]) return String(r[k]); return ''; };
-                            const q1Val = getVal(q1Keys);
-                            const q2Val = getVal(q2Keys);
-                            return (
-                              <tr key={String(r.id ?? r.Id ?? r.Id ?? i)} className="*:px-2 *:py-1">
-                                <td>{String(r.id ?? r.Id ?? '')}</td>
-                                <td>{dt ? String(dt).slice(0,10) : ''}</td>
-                                <td>{String(custNum)}</td>
-                                <td>{String(agentName)}</td>
-                                <td>{String(callStatus)}</td>
-                                <td className="max-w-[280px] truncate" title={q1Val}>{q1Val || '—'}</td>
-                                <td className="max-w-[280px] truncate" title={q2Val}>{q2Val || '—'}</td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
-                  </>
-                );
-              })()}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Details dialog */}
-      <OrderDetailsDialog
-        isOpen={isDialogOpen}
-        onClose={() => setIsDialogOpen(false)}
-        orderNumber={selectedOrderNumber}
-        onCallStatusChange={(emailOrPhone, newStatus) => {
-          // Update the local rows state to sync call_status in the table
-          // Match by email (case-insensitive) or phone
-          const needle = (emailOrPhone || '').trim().toLowerCase();
-          setRows((prev) =>
-            prev.map((r) => {
-              const rowEmail = (r.email || '').trim().toLowerCase();
-              const rowPhone = (r.phone || '').replace(/\D/g, '');
-              const needlePhone = needle.replace(/\D/g, '');
-              if (rowEmail === needle || (needlePhone && rowPhone.endsWith(needlePhone))) {
-                return { ...r, call_status: newStatus };
-              }
-              return r;
-            })
-          );
-        }}
-      />
-
-      {/* Feedback details dialog */}
-      {fbDetail && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => setFbDetail(null)}>
-          <div className="bg-white rounded-xl shadow-xl max-w-3xl w-full max-h-[80vh] overflow-auto" onClick={(e)=>e.stopPropagation()}>
-            <div className="p-4 border-b flex items-center justify-between">
-              <div className="font-semibold">Filled Lead Details</div>
-              <button className="text-sm px-3 py-1 border rounded-lg" onClick={() => setFbDetail(null)}>Close</button>
-            </div>
-            <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
-              <div><div className="text-gray-500">Created</div><div className="font-medium">{formatDateTime(fbDetail.created_at)}</div></div>
-              <div><div className="text-gray-500">Agent</div><div className="font-medium">{fbDetail.agent || '—'}</div></div>
-              <div><div className="text-gray-500">Order Number</div><div className="font-medium">{String(fbDetail.order_number ?? '—')}</div></div>
-              <div><div className="text-gray-500">Customer Phone</div><div className="font-medium">{fbDetail.customer_phone || '—'}</div></div>
-              <div><div className="text-gray-500">Call Status</div><div className="font-medium">{fbDetail.call_status || '—'}</div></div>
-              <div className="md:col-span-2"><div className="text-gray-500">Heard From</div><div className="font-medium break-words">{fbDetail.heard_from || '—'}</div></div>
-              <div className="md:col-span-2"><div className="text-gray-500">First-time Reason</div><div className="font-medium break-words">{(fbDetail as any).first_time_reason || (fbDetail as any).firstTimeReason || '—'}</div></div>
-              <div className="md:col-span-2"><div className="text-gray-500">Reorder Reason</div><div className="font-medium break-words">{(fbDetail as any).reorder_reason || (fbDetail as any).reorderReason || '—'}</div></div>
-              <div className="md:col-span-2"><div className="text-gray-500">Liked Features</div><div className="font-medium break-words">{(fbDetail as any).liked_features || (fbDetail as any).likedFeatures || '—'}</div></div>
-              <div><div className="text-gray-500">Usage Recipe</div><div className="font-medium break-words">{(fbDetail as any).usage_recipe || '—'}</div></div>
-              <div><div className="text-gray-500">Usage Time</div><div className="font-medium break-words">{(fbDetail as any).usage_time || '—'}</div></div>
-              <div><div className="text-gray-500">Family User</div><div className="font-medium break-words">{(fbDetail as any).family_user || '—'}</div></div>
-              <div><div className="text-gray-500">Gender</div><div className="font-medium">{fbDetail.gender || (fbDetail as any).gender_text || '—'}</div></div>
-              <div><div className="text-gray-500">Age</div><div className="font-medium">{fbDetail.age || '—'}</div></div>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
