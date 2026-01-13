@@ -1,7 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  RefreshCcw, Search, Loader2, ChevronLeft, ChevronRight, X, Calendar, Package, Users, IndianRupee, MapPin, Mail, Phone, CheckCircle2, Clock, AlertCircle, Save, Edit3, Plus
+  RefreshCcw, Search, Loader2, ChevronLeft, ChevronRight, X, Calendar, Package, Users, IndianRupee, MapPin, Mail, Phone, CheckCircle2, Clock, AlertCircle, Save, Edit3, Plus, BarChart3, TrendingUp, ChevronDown, ChevronUp
 } from 'lucide-react';
+import { SUPABASE_URL, sbHeadersObj as sbHeaders } from '../lib/supabaseClient';
 
 /** ---------------------------------------------------------
  * Types
@@ -176,6 +177,16 @@ export default function SubscriptionDashboard() {
   const [newError, setNewError] = useState<string>('');
   const [newPlanMode, setNewPlanMode] = useState<'select' | 'custom'>('select');
   const [newPacksMode, setNewPacksMode] = useState<'select' | 'custom'>('select');
+
+  // Agent Analytics state
+  const [orderHistory, setOrderHistory] = useState<Map<string, number>>(new Map()); // phone -> order_count
+  const [orderHistoryLoading, setOrderHistoryLoading] = useState<boolean>(false);
+  const [showAgentAnalytics, setShowAgentAnalytics] = useState<boolean>(true);
+
+  // Drill-down modal state
+  const [drillAgent, setDrillAgent] = useState<string>('');
+  const [drillTier, setDrillTier] = useState<string>('');
+  const [drillRows, setDrillRows] = useState<SubscriptionRow[]>([]);
 
   const closeNewDialog = useCallback(() => {
     setNewDialogOpen(false);
@@ -428,6 +439,42 @@ export default function SubscriptionDashboard() {
     loadData();
   }, [loadData]);
 
+  // Load order history from Supabase to determine purchase counts
+  const loadOrderHistory = useCallback(async () => {
+    try {
+      setOrderHistoryLoading(true);
+      const rpcUrl = `${SUPABASE_URL}/rest/v1/rpc/get_repeat_orders_with_assignments`;
+      const res = await fetch(rpcUrl, {
+        method: 'POST',
+        headers: sbHeaders,
+        body: JSON.stringify({}),
+      });
+      if (!res.ok) {
+        console.warn('Failed to load order history:', await res.text());
+        return;
+      }
+      const data = await res.json();
+      const phoneMap = new Map<string, number>();
+      if (Array.isArray(data)) {
+        for (const row of data) {
+          const phone = String(row.phone || '').replace(/\D/g, '').slice(-10);
+          if (phone.length >= 10) {
+            phoneMap.set(phone, row.order_count || 1);
+          }
+        }
+      }
+      setOrderHistory(phoneMap);
+    } catch (e) {
+      console.warn('Failed to load order history:', e);
+    } finally {
+      setOrderHistoryLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadOrderHistory();
+  }, [loadOrderHistory]);
+
   // Derived: unique agents, plans, cities
   const agents = useMemo(() => Array.from(new Set(rows.map(r => r.Agent || '').filter(Boolean))).sort(), [rows]);
   const plans = useMemo(() => Array.from(new Set(rows.map(r => r['Selected subscription plan'] || '').filter(Boolean))).sort(), [rows]);
@@ -482,6 +529,135 @@ export default function SubscriptionDashboard() {
     const uniqueCities = new Set(filtered.map(r => r.City || '').filter(Boolean)).size;
     return { totalSubs, totalRevenue, uniqueAgents, uniqueCities };
   }, [filtered]);
+
+  // Agent-wise analytics: subscription conversions by customer purchase history
+  const agentAnalytics = useMemo(() => {
+    type AgentStats = {
+      agent: string;
+      total: number;
+      t1: number;   // 1 order
+      t2: number;   // 2 orders
+      t3: number;   // 3 orders
+      t4: number;   // 4 orders
+      t5: number;   // 5 orders
+      t6: number;   // 6 orders
+      t7: number;   // 7 orders
+      t8: number;   // 8 orders
+      t9: number;   // 9 orders
+      t10: number;  // 10 orders
+      t11: number;  // 11 orders
+      t12plus: number; // 12+ orders
+      unknown: number; // not found in order history
+    };
+    const statsMap = new Map<string, AgentStats>();
+
+    for (const sub of filtered) {
+      const agent = String(sub.Agent || '').trim() || '(Unknown)';
+      const phone = String(sub['Contact Number'] || '').replace(/\D/g, '').slice(-10);
+
+      if (!statsMap.has(agent)) {
+        statsMap.set(agent, {
+          agent,
+          total: 0,
+          t1: 0, t2: 0, t3: 0, t4: 0, t5: 0, t6: 0,
+          t7: 0, t8: 0, t9: 0, t10: 0, t11: 0, t12plus: 0,
+          unknown: 0,
+        });
+      }
+      const stats = statsMap.get(agent)!;
+      stats.total++;
+
+      if (phone.length < 10) {
+        stats.unknown++;
+        continue;
+      }
+
+      const orderCount = orderHistory.get(phone);
+      if (orderCount === undefined) {
+        stats.unknown++;
+      } else if (orderCount === 1) {
+        stats.t1++;
+      } else if (orderCount === 2) {
+        stats.t2++;
+      } else if (orderCount === 3) {
+        stats.t3++;
+      } else if (orderCount === 4) {
+        stats.t4++;
+      } else if (orderCount === 5) {
+        stats.t5++;
+      } else if (orderCount === 6) {
+        stats.t6++;
+      } else if (orderCount === 7) {
+        stats.t7++;
+      } else if (orderCount === 8) {
+        stats.t8++;
+      } else if (orderCount === 9) {
+        stats.t9++;
+      } else if (orderCount === 10) {
+        stats.t10++;
+      } else if (orderCount === 11) {
+        stats.t11++;
+      } else {
+        stats.t12plus++;
+      }
+    }
+
+    return Array.from(statsMap.values()).sort((a, b) => b.total - a.total);
+  }, [filtered, orderHistory]);
+
+  // Drill-down: open modal with filtered subscriptions
+  const openDrill = useCallback((agent: string, tier: string) => {
+    const matchingRows = filtered.filter(sub => {
+      const subAgent = String(sub.Agent || '').trim() || '(Unknown)';
+      if (agent !== 'all' && subAgent !== agent) return false;
+
+      const phone = String(sub['Contact Number'] || '').replace(/\D/g, '').slice(-10);
+      const orderCount = phone.length >= 10 ? orderHistory.get(phone) : undefined;
+
+      if (tier === 'total') return true;
+      if (tier === 'unknown') return orderCount === undefined || phone.length < 10;
+      if (tier === 't1') return orderCount === 1;
+      if (tier === 't2') return orderCount === 2;
+      if (tier === 't3') return orderCount === 3;
+      if (tier === 't4') return orderCount === 4;
+      if (tier === 't5') return orderCount === 5;
+      if (tier === 't6') return orderCount === 6;
+      if (tier === 't7') return orderCount === 7;
+      if (tier === 't8') return orderCount === 8;
+      if (tier === 't9') return orderCount === 9;
+      if (tier === 't10') return orderCount === 10;
+      if (tier === 't11') return orderCount === 11;
+      if (tier === 't12plus') return orderCount !== undefined && orderCount >= 12;
+      return false;
+    });
+
+    setDrillAgent(agent);
+    setDrillTier(tier);
+    setDrillRows(matchingRows);
+  }, [filtered, orderHistory]);
+
+  const closeDrill = useCallback(() => {
+    setDrillAgent('');
+    setDrillTier('');
+    setDrillRows([]);
+  }, []);
+
+  const tierLabels: Record<string, string> = {
+    total: 'Total Subscriptions',
+    t1: '1st Time Buyers (1 order)',
+    t2: '2nd Time Buyers (2 orders)',
+    t3: '3rd Time Buyers (3 orders)',
+    t4: '4th Time Buyers (4 orders)',
+    t5: '5th Time Buyers (5 orders)',
+    t6: '6th Time Buyers (6 orders)',
+    t7: '7th Time Buyers (7 orders)',
+    t8: '8th Time Buyers (8 orders)',
+    t9: '9th Time Buyers (9 orders)',
+    t10: '10th Time Buyers (10 orders)',
+    t11: '11th Time Buyers (11 orders)',
+    t12plus: '12+ Time Buyers (loyal customers)',
+    unknown: 'New Customers (no order history)',
+  };
 
   // Pagination
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
@@ -641,6 +817,148 @@ export default function SubscriptionDashboard() {
               <div className="text-gray-400 text-sm">—</div>
             )}
           </div>
+        </div>
+
+        {/* Agent Analytics - Conversion by Customer Purchase History */}
+        <div className="bg-white rounded-2xl border shadow-sm overflow-hidden">
+          <button
+            onClick={() => setShowAgentAnalytics(!showAgentAnalytics)}
+            className="w-full px-4 py-3 flex items-center justify-between hover:bg-slate-50 transition-colors"
+          >
+            <div className="flex items-center gap-2">
+              <div className="h-9 w-9 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center border border-emerald-100">
+                <BarChart3 className="w-5 h-5" />
+              </div>
+              <div className="text-left">
+                <div className="text-sm font-semibold text-gray-900">Agent Conversion Analytics</div>
+                <div className="text-xs text-gray-500">Subscription conversions by customer purchase history</div>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              {orderHistoryLoading && (
+                <span className="text-xs text-gray-400 flex items-center gap-1">
+                  <Loader2 className="w-3 h-3 animate-spin" /> Loading history...
+                </span>
+              )}
+              {showAgentAnalytics ? <ChevronUp className="w-4 h-4 text-gray-400" /> : <ChevronDown className="w-4 h-4 text-gray-400" />}
+            </div>
+          </button>
+
+          {showAgentAnalytics && (
+            <div className="border-t">
+              {agentAnalytics.length === 0 ? (
+                <div className="p-6 text-center text-gray-400 text-sm">No subscription data available</div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="bg-slate-50 text-gray-600 sticky top-0">
+                      <tr>
+                        <th className="text-left px-4 py-2 font-semibold sticky left-0 bg-slate-50 z-10">Agent</th>
+                        <th className="text-center px-2 py-2 font-semibold">Total</th>
+                        <th className="text-center px-2 py-2 font-semibold"><div className="text-[10px]">1st</div></th>
+                        <th className="text-center px-2 py-2 font-semibold"><div className="text-[10px]">2nd</div></th>
+                        <th className="text-center px-2 py-2 font-semibold"><div className="text-[10px]">3rd</div></th>
+                        <th className="text-center px-2 py-2 font-semibold"><div className="text-[10px]">4th</div></th>
+                        <th className="text-center px-2 py-2 font-semibold"><div className="text-[10px]">5th</div></th>
+                        <th className="text-center px-2 py-2 font-semibold"><div className="text-[10px]">6th</div></th>
+                        <th className="text-center px-2 py-2 font-semibold"><div className="text-[10px]">7th</div></th>
+                        <th className="text-center px-2 py-2 font-semibold"><div className="text-[10px]">8th</div></th>
+                        <th className="text-center px-2 py-2 font-semibold"><div className="text-[10px]">9th</div></th>
+                        <th className="text-center px-2 py-2 font-semibold"><div className="text-[10px]">10th</div></th>
+                        <th className="text-center px-2 py-2 font-semibold"><div className="text-[10px]">11th</div></th>
+                        <th className="text-center px-2 py-2 font-semibold"><div className="text-[10px]">12+</div></th>
+                        <th className="text-center px-2 py-2 font-semibold"><div className="text-[10px]">New</div></th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {agentAnalytics.map((stats) => (
+                        <tr key={stats.agent} className="hover:bg-slate-50 transition-colors">
+                          <td className="px-4 py-2 sticky left-0 bg-white z-10">
+                            <div className="flex items-center gap-2">
+                              <div className="w-7 h-7 rounded-full bg-gradient-to-br from-indigo-100 to-indigo-200 flex items-center justify-center text-indigo-700 font-bold text-[10px]">
+                                {stats.agent.charAt(0).toUpperCase()}
+                              </div>
+                              <span className="font-medium text-gray-900 text-xs">{stats.agent}</span>
+                            </div>
+                          </td>
+                          <td className="text-center px-2 py-2">
+                            <button onClick={() => stats.total > 0 && openDrill(stats.agent, 'total')} disabled={stats.total === 0} className={clsx('inline-flex items-center justify-center min-w-[24px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-800 font-bold text-[10px]', stats.total > 0 && 'hover:ring-2 hover:ring-gray-300 cursor-pointer')}>{stats.total}</button>
+                          </td>
+                          <td className="text-center px-2 py-2">
+                            <button onClick={() => stats.t1 > 0 && openDrill(stats.agent, 't1')} disabled={stats.t1 === 0} className={clsx('inline-flex items-center justify-center min-w-[24px] px-1.5 py-0.5 rounded-full text-[10px] font-semibold', stats.t1 > 0 ? 'bg-blue-100 text-blue-700 hover:ring-2 hover:ring-blue-300 cursor-pointer' : 'bg-gray-50 text-gray-400')}>{stats.t1}</button>
+                          </td>
+                          <td className="text-center px-2 py-2">
+                            <button onClick={() => stats.t2 > 0 && openDrill(stats.agent, 't2')} disabled={stats.t2 === 0} className={clsx('inline-flex items-center justify-center min-w-[24px] px-1.5 py-0.5 rounded-full text-[10px] font-semibold', stats.t2 > 0 ? 'bg-emerald-100 text-emerald-700 hover:ring-2 hover:ring-emerald-300 cursor-pointer' : 'bg-gray-50 text-gray-400')}>{stats.t2}</button>
+                          </td>
+                          <td className="text-center px-2 py-2">
+                            <button onClick={() => stats.t3 > 0 && openDrill(stats.agent, 't3')} disabled={stats.t3 === 0} className={clsx('inline-flex items-center justify-center min-w-[24px] px-1.5 py-0.5 rounded-full text-[10px] font-semibold', stats.t3 > 0 ? 'bg-amber-100 text-amber-700 hover:ring-2 hover:ring-amber-300 cursor-pointer' : 'bg-gray-50 text-gray-400')}>{stats.t3}</button>
+                          </td>
+                          <td className="text-center px-2 py-2">
+                            <button onClick={() => stats.t4 > 0 && openDrill(stats.agent, 't4')} disabled={stats.t4 === 0} className={clsx('inline-flex items-center justify-center min-w-[24px] px-1.5 py-0.5 rounded-full text-[10px] font-semibold', stats.t4 > 0 ? 'bg-purple-100 text-purple-700 hover:ring-2 hover:ring-purple-300 cursor-pointer' : 'bg-gray-50 text-gray-400')}>{stats.t4}</button>
+                          </td>
+                          <td className="text-center px-2 py-2">
+                            <button onClick={() => stats.t5 > 0 && openDrill(stats.agent, 't5')} disabled={stats.t5 === 0} className={clsx('inline-flex items-center justify-center min-w-[24px] px-1.5 py-0.5 rounded-full text-[10px] font-semibold', stats.t5 > 0 ? 'bg-pink-100 text-pink-700 hover:ring-2 hover:ring-pink-300 cursor-pointer' : 'bg-gray-50 text-gray-400')}>{stats.t5}</button>
+                          </td>
+                          <td className="text-center px-2 py-2">
+                            <button onClick={() => stats.t6 > 0 && openDrill(stats.agent, 't6')} disabled={stats.t6 === 0} className={clsx('inline-flex items-center justify-center min-w-[24px] px-1.5 py-0.5 rounded-full text-[10px] font-semibold', stats.t6 > 0 ? 'bg-cyan-100 text-cyan-700 hover:ring-2 hover:ring-cyan-300 cursor-pointer' : 'bg-gray-50 text-gray-400')}>{stats.t6}</button>
+                          </td>
+                          <td className="text-center px-2 py-2">
+                            <button onClick={() => stats.t7 > 0 && openDrill(stats.agent, 't7')} disabled={stats.t7 === 0} className={clsx('inline-flex items-center justify-center min-w-[24px] px-1.5 py-0.5 rounded-full text-[10px] font-semibold', stats.t7 > 0 ? 'bg-orange-100 text-orange-700 hover:ring-2 hover:ring-orange-300 cursor-pointer' : 'bg-gray-50 text-gray-400')}>{stats.t7}</button>
+                          </td>
+                          <td className="text-center px-2 py-2">
+                            <button onClick={() => stats.t8 > 0 && openDrill(stats.agent, 't8')} disabled={stats.t8 === 0} className={clsx('inline-flex items-center justify-center min-w-[24px] px-1.5 py-0.5 rounded-full text-[10px] font-semibold', stats.t8 > 0 ? 'bg-teal-100 text-teal-700 hover:ring-2 hover:ring-teal-300 cursor-pointer' : 'bg-gray-50 text-gray-400')}>{stats.t8}</button>
+                          </td>
+                          <td className="text-center px-2 py-2">
+                            <button onClick={() => stats.t9 > 0 && openDrill(stats.agent, 't9')} disabled={stats.t9 === 0} className={clsx('inline-flex items-center justify-center min-w-[24px] px-1.5 py-0.5 rounded-full text-[10px] font-semibold', stats.t9 > 0 ? 'bg-rose-100 text-rose-700 hover:ring-2 hover:ring-rose-300 cursor-pointer' : 'bg-gray-50 text-gray-400')}>{stats.t9}</button>
+                          </td>
+                          <td className="text-center px-2 py-2">
+                            <button onClick={() => stats.t10 > 0 && openDrill(stats.agent, 't10')} disabled={stats.t10 === 0} className={clsx('inline-flex items-center justify-center min-w-[24px] px-1.5 py-0.5 rounded-full text-[10px] font-semibold', stats.t10 > 0 ? 'bg-lime-100 text-lime-700 hover:ring-2 hover:ring-lime-300 cursor-pointer' : 'bg-gray-50 text-gray-400')}>{stats.t10}</button>
+                          </td>
+                          <td className="text-center px-2 py-2">
+                            <button onClick={() => stats.t11 > 0 && openDrill(stats.agent, 't11')} disabled={stats.t11 === 0} className={clsx('inline-flex items-center justify-center min-w-[24px] px-1.5 py-0.5 rounded-full text-[10px] font-semibold', stats.t11 > 0 ? 'bg-violet-100 text-violet-700 hover:ring-2 hover:ring-violet-300 cursor-pointer' : 'bg-gray-50 text-gray-400')}>{stats.t11}</button>
+                          </td>
+                          <td className="text-center px-2 py-2">
+                            <button onClick={() => stats.t12plus > 0 && openDrill(stats.agent, 't12plus')} disabled={stats.t12plus === 0} className={clsx('inline-flex items-center justify-center min-w-[24px] px-1.5 py-0.5 rounded-full text-[10px] font-semibold', stats.t12plus > 0 ? 'bg-indigo-100 text-indigo-700 hover:ring-2 hover:ring-indigo-300 cursor-pointer' : 'bg-gray-50 text-gray-400')}>{stats.t12plus}</button>
+                          </td>
+                          <td className="text-center px-2 py-2">
+                            <button onClick={() => stats.unknown > 0 && openDrill(stats.agent, 'unknown')} disabled={stats.unknown === 0} className={clsx('inline-flex items-center justify-center min-w-[24px] px-1.5 py-0.5 rounded-full text-[10px] font-semibold', stats.unknown > 0 ? 'bg-slate-100 text-slate-600 hover:ring-2 hover:ring-slate-300 cursor-pointer' : 'bg-gray-50 text-gray-400')}>{stats.unknown}</button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot className="bg-slate-50 border-t-2 border-slate-200">
+                      <tr>
+                        <td className="px-4 py-2 font-bold text-gray-900 text-xs sticky left-0 bg-slate-50 z-10">Total</td>
+                        <td className="text-center px-2 py-2"><span className="inline-flex items-center justify-center min-w-[24px] px-1.5 py-0.5 rounded-full bg-gray-200 text-gray-900 font-bold text-[10px]">{agentAnalytics.reduce((s, a) => s + a.total, 0)}</span></td>
+                        <td className="text-center px-2 py-2"><span className="inline-flex items-center justify-center min-w-[24px] px-1.5 py-0.5 rounded-full bg-blue-200 text-blue-800 font-bold text-[10px]">{agentAnalytics.reduce((s, a) => s + a.t1, 0)}</span></td>
+                        <td className="text-center px-2 py-2"><span className="inline-flex items-center justify-center min-w-[24px] px-1.5 py-0.5 rounded-full bg-emerald-200 text-emerald-800 font-bold text-[10px]">{agentAnalytics.reduce((s, a) => s + a.t2, 0)}</span></td>
+                        <td className="text-center px-2 py-2"><span className="inline-flex items-center justify-center min-w-[24px] px-1.5 py-0.5 rounded-full bg-amber-200 text-amber-800 font-bold text-[10px]">{agentAnalytics.reduce((s, a) => s + a.t3, 0)}</span></td>
+                        <td className="text-center px-2 py-2"><span className="inline-flex items-center justify-center min-w-[24px] px-1.5 py-0.5 rounded-full bg-purple-200 text-purple-800 font-bold text-[10px]">{agentAnalytics.reduce((s, a) => s + a.t4, 0)}</span></td>
+                        <td className="text-center px-2 py-2"><span className="inline-flex items-center justify-center min-w-[24px] px-1.5 py-0.5 rounded-full bg-pink-200 text-pink-800 font-bold text-[10px]">{agentAnalytics.reduce((s, a) => s + a.t5, 0)}</span></td>
+                        <td className="text-center px-2 py-2"><span className="inline-flex items-center justify-center min-w-[24px] px-1.5 py-0.5 rounded-full bg-cyan-200 text-cyan-800 font-bold text-[10px]">{agentAnalytics.reduce((s, a) => s + a.t6, 0)}</span></td>
+                        <td className="text-center px-2 py-2"><span className="inline-flex items-center justify-center min-w-[24px] px-1.5 py-0.5 rounded-full bg-orange-200 text-orange-800 font-bold text-[10px]">{agentAnalytics.reduce((s, a) => s + a.t7, 0)}</span></td>
+                        <td className="text-center px-2 py-2"><span className="inline-flex items-center justify-center min-w-[24px] px-1.5 py-0.5 rounded-full bg-teal-200 text-teal-800 font-bold text-[10px]">{agentAnalytics.reduce((s, a) => s + a.t8, 0)}</span></td>
+                        <td className="text-center px-2 py-2"><span className="inline-flex items-center justify-center min-w-[24px] px-1.5 py-0.5 rounded-full bg-rose-200 text-rose-800 font-bold text-[10px]">{agentAnalytics.reduce((s, a) => s + a.t9, 0)}</span></td>
+                        <td className="text-center px-2 py-2"><span className="inline-flex items-center justify-center min-w-[24px] px-1.5 py-0.5 rounded-full bg-lime-200 text-lime-800 font-bold text-[10px]">{agentAnalytics.reduce((s, a) => s + a.t10, 0)}</span></td>
+                        <td className="text-center px-2 py-2"><span className="inline-flex items-center justify-center min-w-[24px] px-1.5 py-0.5 rounded-full bg-violet-200 text-violet-800 font-bold text-[10px]">{agentAnalytics.reduce((s, a) => s + a.t11, 0)}</span></td>
+                        <td className="text-center px-2 py-2"><span className="inline-flex items-center justify-center min-w-[24px] px-1.5 py-0.5 rounded-full bg-indigo-200 text-indigo-800 font-bold text-[10px]">{agentAnalytics.reduce((s, a) => s + a.t12plus, 0)}</span></td>
+                        <td className="text-center px-2 py-2"><span className="inline-flex items-center justify-center min-w-[24px] px-1.5 py-0.5 rounded-full bg-slate-200 text-slate-700 font-bold text-[10px]">{agentAnalytics.reduce((s, a) => s + a.unknown, 0)}</span></td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              )}
+
+              <div className="px-4 py-2 bg-slate-50 border-t flex items-center gap-2 text-[10px] text-slate-500">
+                <TrendingUp className="w-3 h-3" />
+                <span>
+                  <strong>1st-11th:</strong> Number of previous orders before subscription | 
+                  <strong> 12+:</strong> Super loyal customers | 
+                  <strong> New:</strong> No order history (new customer)
+                </span>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
@@ -1501,6 +1819,83 @@ export default function SubscriptionDashboard() {
                   </div>
                 </div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Drill-down Modal */}
+      {drillRows.length > 0 && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={closeDrill}>
+          <div
+            className="bg-white rounded-2xl shadow-2xl w-full max-w-5xl max-h-[85vh] overflow-hidden flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-5 py-4 border-b bg-gradient-to-r from-emerald-50 to-white">
+              <div>
+                <h2 className="text-lg font-bold text-gray-800">
+                  {drillAgent === 'all' ? 'All Agents' : drillAgent} — {tierLabels[drillTier] || drillTier}
+                </h2>
+                <p className="text-sm text-gray-500">{drillRows.length} subscription{drillRows.length !== 1 ? 's' : ''}</p>
+              </div>
+              <button onClick={closeDrill} className="p-2 hover:bg-gray-100 rounded-full" title="Close">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-slate-50 text-gray-600 sticky top-0">
+                  <tr>
+                    <th className="text-left px-4 py-3 font-semibold">Name</th>
+                    <th className="text-left px-3 py-3 font-semibold">Phone</th>
+                    <th className="text-left px-3 py-3 font-semibold">City</th>
+                    <th className="text-left px-3 py-3 font-semibold">Plan</th>
+                    <th className="text-right px-3 py-3 font-semibold">Amount</th>
+                    <th className="text-center px-3 py-3 font-semibold">Orders</th>
+                    <th className="text-left px-3 py-3 font-semibold">Date</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {drillRows.map((row) => {
+                    const phone = String(row['Contact Number'] || '').replace(/\D/g, '').slice(-10);
+                    const orderCount = phone.length >= 10 ? orderHistory.get(phone) : undefined;
+                    return (
+                      <tr key={row.Id} className="hover:bg-slate-50 transition-colors cursor-pointer" onClick={() => { setDetailRow(row); closeDrill(); }}>
+                        <td className="px-4 py-3">
+                          <div className="font-medium text-gray-900">{row.Name || '—'}</div>
+                          <div className="text-xs text-gray-500">{row.Agent || '—'}</div>
+                        </td>
+                        <td className="px-3 py-3 text-gray-700">{row['Contact Number'] || '—'}</td>
+                        <td className="px-3 py-3 text-gray-700">{row.City || '—'}</td>
+                        <td className="px-3 py-3">
+                          <span className="inline-block max-w-[150px] truncate text-gray-700" title={row['Selected subscription plan'] || ''}>
+                            {row['Selected subscription plan'] || '—'}
+                          </span>
+                        </td>
+                        <td className="px-3 py-3 text-right font-medium text-gray-900">{formatCurrency(row['Amount collected'])}</td>
+                        <td className="px-3 py-3 text-center">
+                          <span className={clsx(
+                            'inline-flex items-center justify-center min-w-[28px] px-2 py-1 rounded-full text-xs font-bold',
+                            orderCount === undefined ? 'bg-slate-100 text-slate-600' :
+                            orderCount === 1 ? 'bg-blue-100 text-blue-700' :
+                            orderCount === 2 ? 'bg-emerald-100 text-emerald-700' :
+                            orderCount === 3 ? 'bg-amber-100 text-amber-700' :
+                            'bg-purple-100 text-purple-700'
+                          )}>
+                            {orderCount === undefined ? 'New' : orderCount}
+                          </span>
+                        </td>
+                        <td className="px-3 py-3 text-gray-700 whitespace-nowrap">{row.Date || '—'}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="px-5 py-3 border-t bg-slate-50 text-xs text-gray-500">
+              Click on a row to view full subscription details
             </div>
           </div>
         </div>
