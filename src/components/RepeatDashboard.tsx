@@ -3306,7 +3306,7 @@ export default function RepeatDashboard() {
       )}
 
       {/* Grouping modal for Non-Repeated questions - Drag & Drop */}
-      {nrGroupOpen && (() => {
+      {nrGroupOpen.key && (() => {
         const fieldKey = nrGroupOpen.key;
         const currentDefs = nrGrouping[fieldKey] || {};
         
@@ -3404,7 +3404,7 @@ export default function RepeatDashboard() {
               <div className="sticky top-0 bg-white border-b p-4">
                 <div className="flex items-center justify-between mb-3">
                   <h3 className="text-lg font-semibold">Group Answers: {fieldKey}</h3>
-                  <button onClick={() => setNrGroupOpen(null)} className="text-gray-500 hover:text-gray-700" title="Close">
+                  <button onClick={() => setNrGroupOpen({ key: null })} className="text-gray-500 hover:text-gray-700" title="Close">
                     <X className="w-5 h-5" />
                   </button>
                 </div>
@@ -3598,7 +3598,7 @@ export default function RepeatDashboard() {
                   💡 Tip: Drag answers from left to right to categorize them. Drag back to left to ungroup.
                 </div>
                 <button
-                  onClick={() => setNrGroupOpen(null)}
+                  onClick={() => setNrGroupOpen({ key: null })}
                   className="px-6 py-2 bg-green-600 text-white rounded hover:bg-green-700 font-medium"
                 >
                   Done
@@ -3608,6 +3608,13 @@ export default function RepeatDashboard() {
           </div>
         );
       })()}
+
+      {/* Order Details Dialog */}
+      <OrderDetailsDialog
+        isOpen={isDialogOpen}
+        onClose={() => setIsDialogOpen(false)}
+        orderNumber={selectedOrderNumber}
+      />
     </div>
   );
 }
