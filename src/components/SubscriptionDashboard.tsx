@@ -12,6 +12,7 @@ interface SubscriptionRow {
   Agent: string | null;
   Name: string | null;
   'Contact Number': string | null;
+  Email: string | null;
   City: string | null;
   'Selected subscription plan': string | null;
   'Amount collected': string | null;
@@ -180,8 +181,22 @@ export default function SubscriptionDashboard() {
 
   // Agent Analytics state
   const [orderHistory, setOrderHistory] = useState<Map<string, number>>(new Map()); // phone -> order_count
+  const [emailHistory, setEmailHistory] = useState<Map<string, number>>(new Map()); // email -> order_count
   const [orderHistoryLoading, setOrderHistoryLoading] = useState<boolean>(false);
   const [showAgentAnalytics, setShowAgentAnalytics] = useState<boolean>(true);
+  // Manual tier overrides: phone/email -> tier number (1-12+)
+  const [manualTierOverrides, setManualTierOverrides] = useState<Map<string, number>>(() => {
+    try {
+      const stored = localStorage.getItem('subscription_tier_overrides');
+      if (stored) {
+        const obj = JSON.parse(stored);
+        return new Map(Object.entries(obj).map(([k, v]) => [k, Number(v)]));
+      }
+    } catch (e) {
+      console.warn('Failed to load tier overrides:', e);
+    }
+    return new Map();
+  });
 
   // Drill-down modal state
   const [drillAgent, setDrillAgent] = useState<string>('');
@@ -455,15 +470,22 @@ export default function SubscriptionDashboard() {
       }
       const data = await res.json();
       const phoneMap = new Map<string, number>();
+      const emailMap = new Map<string, number>();
       if (Array.isArray(data)) {
         for (const row of data) {
           const phone = String(row.phone || '').replace(/\D/g, '').slice(-10);
           if (phone.length >= 10) {
             phoneMap.set(phone, row.order_count || 1);
           }
+          // Also build email-based lookup for cross-checking
+          const email = String(row.email || '').trim().toLowerCase();
+          if (email && email.includes('@')) {
+            emailMap.set(email, row.order_count || 1);
+          }
         }
       }
       setOrderHistory(phoneMap);
+      setEmailHistory(emailMap);
     } catch (e) {
       console.warn('Failed to load order history:', e);
     } finally {
@@ -554,6 +576,7 @@ export default function SubscriptionDashboard() {
     for (const sub of filtered) {
       const agent = String(sub.Agent || '').trim() || '(Unknown)';
       const phone = String(sub['Contact Number'] || '').replace(/\D/g, '').slice(-10);
+      const email = String(sub.Email || '').trim().toLowerCase();
 
       if (!statsMap.has(agent)) {
         statsMap.set(agent, {
@@ -567,12 +590,22 @@ export default function SubscriptionDashboard() {
       const stats = statsMap.get(agent)!;
       stats.total++;
 
-      if (phone.length < 10) {
-        stats.unknown++;
-        continue;
+      // Check for manual override first
+      const overrideKey = phone.length >= 10 ? phone : email;
+      const manualTier = manualTierOverrides.get(overrideKey);
+      
+      // Try phone first, then email for cross-checking
+      let orderCount: number | undefined;
+      if (manualTier !== undefined) {
+        orderCount = manualTier;
+      } else if (phone.length >= 10) {
+        orderCount = orderHistory.get(phone);
+      }
+      // If not found by phone, try email
+      if (orderCount === undefined && email && email.includes('@')) {
+        orderCount = emailHistory.get(email);
       }
 
-      const orderCount = orderHistory.get(phone);
       if (orderCount === undefined) {
         stats.unknown++;
       } else if (orderCount === 1) {
@@ -603,7 +636,7 @@ export default function SubscriptionDashboard() {
     }
 
     return Array.from(statsMap.values()).sort((a, b) => b.total - a.total);
-  }, [filtered, orderHistory]);
+  }, [filtered, orderHistory, emailHistory, manualTierOverrides]);
 
   // Drill-down: open modal with filtered subscriptions
   const openDrill = useCallback((agent: string, tier: string) => {
@@ -612,10 +645,19 @@ export default function SubscriptionDashboard() {
       if (agent !== 'all' && subAgent !== agent) return false;
 
       const phone = String(sub['Contact Number'] || '').replace(/\D/g, '').slice(-10);
-      const orderCount = phone.length >= 10 ? orderHistory.get(phone) : undefined;
+      const email = String(sub.Email || '').trim().toLowerCase();
+      
+      // Try phone first, then email for cross-checking
+      let orderCount: number | undefined;
+      if (phone.length >= 10) {
+        orderCount = orderHistory.get(phone);
+      }
+      if (orderCount === undefined && email && email.includes('@')) {
+        orderCount = emailHistory.get(email);
+      }
 
       if (tier === 'total') return true;
-      if (tier === 'unknown') return orderCount === undefined || phone.length < 10;
+      if (tier === 'unknown') return orderCount === undefined;
       if (tier === 't1') return orderCount === 1;
       if (tier === 't2') return orderCount === 2;
       if (tier === 't3') return orderCount === 3;
@@ -634,7 +676,7 @@ export default function SubscriptionDashboard() {
     setDrillAgent(agent);
     setDrillTier(tier);
     setDrillRows(matchingRows);
-  }, [filtered, orderHistory]);
+  }, [filtered, orderHistory, emailHistory]);
 
   const closeDrill = useCallback(() => {
     setDrillAgent('');
@@ -1853,40 +1895,98 @@ export default function SubscriptionDashboard() {
                     <th className="text-left px-3 py-3 font-semibold">Plan</th>
                     <th className="text-right px-3 py-3 font-semibold">Amount</th>
                     <th className="text-center px-3 py-3 font-semibold">Orders</th>
+                    <th className="text-center px-3 py-3 font-semibold">Move To</th>
                     <th className="text-left px-3 py-3 font-semibold">Date</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {drillRows.map((row) => {
                     const phone = String(row['Contact Number'] || '').replace(/\D/g, '').slice(-10);
-                    const orderCount = phone.length >= 10 ? orderHistory.get(phone) : undefined;
+                    const email = String(row.Email || '').trim().toLowerCase();
+                    const overrideKey = phone.length >= 10 ? phone : email;
+                    const manualTier = manualTierOverrides.get(overrideKey);
+                    let orderCount: number | undefined;
+                    if (manualTier !== undefined) {
+                      orderCount = manualTier;
+                    } else if (phone.length >= 10) {
+                      orderCount = orderHistory.get(phone);
+                    }
+                    if (orderCount === undefined && email && email.includes('@')) {
+                      orderCount = emailHistory.get(email);
+                    }
+                    const hasOverride = manualTier !== undefined;
                     return (
-                      <tr key={row.Id} className="hover:bg-slate-50 transition-colors cursor-pointer" onClick={() => { setDetailRow(row); closeDrill(); }}>
-                        <td className="px-4 py-3">
+                      <tr key={row.Id} className="hover:bg-slate-50 transition-colors">
+                        <td className="px-4 py-3 cursor-pointer" onClick={() => { setDetailRow(row); closeDrill(); }}>
                           <div className="font-medium text-gray-900">{row.Name || '—'}</div>
                           <div className="text-xs text-gray-500">{row.Agent || '—'}</div>
                         </td>
-                        <td className="px-3 py-3 text-gray-700">{row['Contact Number'] || '—'}</td>
-                        <td className="px-3 py-3 text-gray-700">{row.City || '—'}</td>
-                        <td className="px-3 py-3">
+                        <td className="px-3 py-3 text-gray-700 cursor-pointer" onClick={() => { setDetailRow(row); closeDrill(); }}>{row['Contact Number'] || '—'}</td>
+                        <td className="px-3 py-3 text-gray-700 cursor-pointer" onClick={() => { setDetailRow(row); closeDrill(); }}>{row.City || '—'}</td>
+                        <td className="px-3 py-3 cursor-pointer" onClick={() => { setDetailRow(row); closeDrill(); }}>
                           <span className="inline-block max-w-[150px] truncate text-gray-700" title={row['Selected subscription plan'] || ''}>
                             {row['Selected subscription plan'] || '—'}
                           </span>
                         </td>
-                        <td className="px-3 py-3 text-right font-medium text-gray-900">{formatCurrency(row['Amount collected'])}</td>
+                        <td className="px-3 py-3 text-right font-medium text-gray-900 cursor-pointer" onClick={() => { setDetailRow(row); closeDrill(); }}>{formatCurrency(row['Amount collected'])}</td>
                         <td className="px-3 py-3 text-center">
-                          <span className={clsx(
-                            'inline-flex items-center justify-center min-w-[28px] px-2 py-1 rounded-full text-xs font-bold',
-                            orderCount === undefined ? 'bg-slate-100 text-slate-600' :
-                            orderCount === 1 ? 'bg-blue-100 text-blue-700' :
-                            orderCount === 2 ? 'bg-emerald-100 text-emerald-700' :
-                            orderCount === 3 ? 'bg-amber-100 text-amber-700' :
-                            'bg-purple-100 text-purple-700'
-                          )}>
-                            {orderCount === undefined ? 'New' : orderCount}
-                          </span>
+                          <div className="flex items-center justify-center gap-1">
+                            <span className={clsx(
+                              'inline-flex items-center justify-center min-w-[28px] px-2 py-1 rounded-full text-xs font-bold',
+                              orderCount === undefined ? 'bg-slate-100 text-slate-600' :
+                              orderCount === 1 ? 'bg-blue-100 text-blue-700' :
+                              orderCount === 2 ? 'bg-emerald-100 text-emerald-700' :
+                              orderCount === 3 ? 'bg-amber-100 text-amber-700' :
+                              'bg-purple-100 text-purple-700'
+                            )}>
+                              {orderCount === undefined ? 'New' : orderCount}
+                            </span>
+                            {hasOverride && <span className="text-[10px] text-orange-600" title="Manual override">✓</span>}
+                          </div>
                         </td>
-                        <td className="px-3 py-3 text-gray-700 whitespace-nowrap">{row.Date || '—'}</td>
+                        <td className="px-3 py-3 text-center" onClick={(e) => e.stopPropagation()}>
+                          <select
+                            value={orderCount === undefined ? 'new' : orderCount >= 12 ? '12+' : String(orderCount)}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              const newOverrides = new Map(manualTierOverrides);
+                              if (val === 'auto') {
+                                newOverrides.delete(overrideKey);
+                              } else if (val === 'new') {
+                                newOverrides.delete(overrideKey);
+                              } else if (val === '12+') {
+                                newOverrides.set(overrideKey, 12);
+                              } else {
+                                newOverrides.set(overrideKey, Number(val));
+                              }
+                              setManualTierOverrides(newOverrides);
+                              try {
+                                const obj = Object.fromEntries(newOverrides.entries());
+                                localStorage.setItem('subscription_tier_overrides', JSON.stringify(obj));
+                              } catch (e) {
+                                console.warn('Failed to save tier overrides:', e);
+                              }
+                            }}
+                            className="text-xs border rounded px-2 py-1 bg-white hover:bg-gray-50 cursor-pointer"
+                            title="Manually set tier"
+                          >
+                            <option value="auto">Auto</option>
+                            <option value="new">New</option>
+                            <option value="1">1st</option>
+                            <option value="2">2nd</option>
+                            <option value="3">3rd</option>
+                            <option value="4">4th</option>
+                            <option value="5">5th</option>
+                            <option value="6">6th</option>
+                            <option value="7">7th</option>
+                            <option value="8">8th</option>
+                            <option value="9">9th</option>
+                            <option value="10">10th</option>
+                            <option value="11">11th</option>
+                            <option value="12+">12+</option>
+                          </select>
+                        </td>
+                        <td className="px-3 py-3 text-gray-700 whitespace-nowrap cursor-pointer" onClick={() => { setDetailRow(row); closeDrill(); }}>{row.Date || '—'}</td>
                       </tr>
                     );
                   })}
