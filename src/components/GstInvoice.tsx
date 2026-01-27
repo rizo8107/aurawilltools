@@ -446,9 +446,12 @@ const GstInvoiceGenerator = () => {
             {/* Bank Details */}
             <div className="mt-6 pt-4 border-t text-sm text-left">
               <h4 className="font-semibold mb-2 text-gray-700">Bank Details:</h4>
-              <p><span className="font-medium">Account Name:</span> TSMC CREATIONS INDIA PRIVATE LIMITED</p>
-              <p><span className="font-medium">Account No:</span> 10227415981</p>
-              <p><span className="font-medium">IFSC:</span> IDFB0080138</p>
+              <p><span className="font-medium">Account Name:</span> AURAWILL FOODS INDIA PRIVATE LIMITED</p>
+              <p><span className="font-medium">Account No:</span> 59994235003</p>
+              <p><span className="font-medium">IFSC:</span> IDFB0080547</p>
+              <p><span className="font-medium">SWIFT Code:</span> IDFBINBBMUM</p>
+              <p><span className="font-medium">Bank Name:</span> IDFC FIRST</p>
+              <p><span className="font-medium">Branch:</span> COIMBATORE - SINGANALLUR BRANCH</p>
             </div>
           </div>
         </div>
