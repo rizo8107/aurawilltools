@@ -286,11 +286,12 @@ const GstInvoiceGenerator = () => {
             <div className="flex justify-between items-start mb-6">
               <div className="w-2/3">
                 <img src="https://aurawill.in/cdn/shop/files/White-label.png?v=1741582343&width=200" alt="Aurawill Logo" className="w-36 mb-2" />
-                <p className="font-bold text-base">Aurawill (TSMC Creations India Private Limited)</p>
-                <p>286 Rajiv Gandhi Salai Nehru Nagar, Perungudi, 12th Floor,</p>
-                <p>Chennai, India - 600078</p>
+                <p className="font-bold text-base">AURAWILL FOODS INDIA PRIVATE LIMITED</p>
+                <p>Floor No.: 2,14/5, Sri Saara Towers,</p>
+                <p>Pappanaickenpalayam West, Coimbatore</p>
+                <p>Tamil Nadu, 641037</p>
                 <p>Email: support@aurawill.in</p>
-                <p>GSTIN: 33AAJCT3867G1Z4</p>
+                <p>GSTIN: 33ABECA0388H1ZU</p>
               </div>
               <div className="text-right">
                 <h1 className="text-2xl md:text-3xl font-bold text-gray-800 mb-2">TAX INVOICE</h1>
