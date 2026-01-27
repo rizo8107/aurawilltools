@@ -428,30 +428,37 @@ const GstInvoiceGenerator = () => {
             </div>
 
 
-            {/* Terms and Notes */}
+            {/* Combined Footer Section */}
             <div className="mt-6 pt-4 border-t">
-              <h4 className="font-semibold mb-1">Terms & Conditions</h4>
-              <p className="text-xs whitespace-pre-line">{terms}</p>
-            </div>
-            <div className="mt-4">
-              <h4 className="font-semibold mb-1">Notes</h4>
-              <p className="text-xs whitespace-pre-line">{notes}</p>
-            </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {/* Left Column: Terms & Notes */}
+                <div>
+                  <div className="mb-4">
+                    <h4 className="font-semibold mb-1">Terms & Conditions</h4>
+                    <p className="text-xs whitespace-pre-line">{terms}</p>
+                  </div>
+                  <div>
+                    <h4 className="font-semibold mb-1">Notes</h4>
+                    <p className="text-xs whitespace-pre-line">{notes}</p>
+                  </div>
+                </div>
 
-            {/* Footer Message */}
-            <div className="text-center text-gray-600">
-              <p>Thank you for your business!</p>
-            </div>
+                {/* Right Column: Bank Details */}
+                <div>
+                  <h4 className="font-semibold mb-2 text-gray-700">Bank Details:</h4>
+                  <p className="text-sm"><span className="font-medium">Account Name:</span> AURAWILL FOODS INDIA PRIVATE LIMITED</p>
+                  <p className="text-sm"><span className="font-medium">Account No:</span> 59994235003</p>
+                  <p className="text-sm"><span className="font-medium">IFSC:</span> IDFB0080547</p>
+                  <p className="text-sm"><span className="font-medium">SWIFT Code:</span> IDFBINBBMUM</p>
+                  <p className="text-sm"><span className="font-medium">Bank Name:</span> IDFC FIRST</p>
+                  <p className="text-sm"><span className="font-medium">Branch:</span> COIMBATORE - SINGANALLUR BRANCH</p>
+                </div>
+              </div>
 
-            {/* Bank Details */}
-            <div className="mt-6 pt-4 border-t text-sm text-left">
-              <h4 className="font-semibold mb-2 text-gray-700">Bank Details:</h4>
-              <p><span className="font-medium">Account Name:</span> AURAWILL FOODS INDIA PRIVATE LIMITED</p>
-              <p><span className="font-medium">Account No:</span> 59994235003</p>
-              <p><span className="font-medium">IFSC:</span> IDFB0080547</p>
-              <p><span className="font-medium">SWIFT Code:</span> IDFBINBBMUM</p>
-              <p><span className="font-medium">Bank Name:</span> IDFC FIRST</p>
-              <p><span className="font-medium">Branch:</span> COIMBATORE - SINGANALLUR BRANCH</p>
+              {/* Footer Message */}
+              <div className="text-center text-gray-600 mt-4">
+                <p>Thank you for your business!</p>
+              </div>
             </div>
           </div>
         </div>
